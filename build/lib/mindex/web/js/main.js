@@ -36,7 +36,7 @@ async function pollStatus(initial = false) {
     running = !!st.running;
     if (running) {
       banner.hidden = false;
-      banner.innerHTML = `<span class="dot"></span> ${esc(st.message || "Indexing…")}`;
+      banner.innerHTML = `<span class="dot"></span> ${esc(st.message || "Indexing...")}`;
       $("#reindexBtn").classList.add("spin");
     } else {
       banner.hidden = true;
@@ -204,7 +204,7 @@ function setup() {
   });
 
   $("#reindexBtn").addEventListener("click", async () => {
-    try { await api("/api/reindex", { method: "POST" }); toast("Re-scanning Copilot history…"); pollStatus(); }
+    try { await api("/api/reindex", { method: "POST" }); toast("Re-scanning Copilot history..."); pollStatus(); }
     catch (e) { toast(e.message, true); }
   });
 

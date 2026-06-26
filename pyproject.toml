@@ -46,7 +46,7 @@ dependencies = [
 semantic = ["fastembed>=0.3"]
 # Extract text from PDF uploads.
 pdf = ["pypdf>=4.0"]
-# Expose the archive to MCP clients (Copilot CLI, Cline, Claude Desktop, …).
+# Expose the archive to MCP clients (Copilot CLI, Cline, Claude Desktop, ...).
 mcp = ["mcp>=1.2"]
 all = ["fastembed>=0.3", "pypdf>=4.0", "mcp>=1.2"]
 # Test/dev tooling (TestClient needs httpx; ruff lints in CI and locally).

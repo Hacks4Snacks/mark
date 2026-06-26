@@ -39,7 +39,7 @@ export async function loadSnippets() {
   if (libState.q) params.set("q", libState.q);
   if (libState.commands) params.set("commands", "true");
   else if (libState.language) params.set("language", libState.language);
-  host.innerHTML = `<div class="lib-loading muted">Loading…</div>`;
+  host.innerHTML = `<div class="lib-loading muted">Loading...</div>`;
   try {
     const data = await api("/api/snippets?" + params);
     snippetData = data.snippets || [];

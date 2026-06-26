@@ -1,7 +1,7 @@
 """VS Code Copilot chat sessions.
 
 VS Code stores each chat under
-``…/workspaceStorage/<id>/chatSessions/<uuid>.json``. Each file holds an ordered
+``.../workspaceStorage/<id>/chatSessions/<uuid>.json``. Each file holds an ordered
 list of ``requests`` (turns); every turn has a user ``message`` and a list of
 ``response`` parts (markdown text, tool invocations, file edits, references).
 This adapter extracts clean, structured content and is defensive about schema
@@ -181,7 +181,7 @@ def _add_request(
 def _reconstruct_jsonl(text: str) -> dict[str, Any] | None:
     """Rebuild a session object from VS Code's append-only JSONL chat log.
 
-    Each line is ``{"kind": k, "v": …}``. ``kind 0`` is a full snapshot (often
+    Each line is ``{"kind": k, "v": ...}``. ``kind 0`` is a full snapshot (often
     written up front with an empty ``requests`` list). ``kind 2`` either appends
     finalized request objects (``requestId`` + ``message``) or streams a batch
     of response parts for the request currently in flight. ``kind 1`` carries

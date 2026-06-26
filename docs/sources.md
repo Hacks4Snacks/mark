@@ -13,7 +13,8 @@ consolidation of a design discussion and supersedes any ad-hoc notes.
 mark began as a Copilot-CLI indexer and grew, organically, to cover several
 kinds of agent conversation:
 
-- VS Code chat (`workspaceStorage/*/chatSessions/*.json`)
+- VS Code chat (`workspaceStorage/*/chatSessions/*.{json,jsonl}`, plus
+  empty-window chats under `globalStorage/emptyWindowChatSessions/`)
 - Copilot CLI / agent store (`~/.copilot/session-store.db` + `session-state/*/events.jsonl`)
 - Cline-family coding agents (Cline, Zoo Code, Roo, Kilo) under `globalStorage`
 
@@ -134,6 +135,16 @@ search / metrics / UI are 100% shared; only discovery differs.
 > watched source; raw `ollama run` has nothing to index). "Support Ollama" means
 > "support whichever Ollama client persists history."
 
+> Caveat — **Microsoft Scout** is *not* ingestible. Its desktop app stores data
+> at `~/Library/Application Support/Microsoft Scout`, which is a plain
+> Electron/Chromium profile: `Local Storage`/`Session Storage` LevelDB,
+> `SharedStorage`/`Cookies` SQLite, and GPU/HTTP caches — **no IndexedDB and no
+> transcript files**. The only local content is auth + UI state (the app loads
+> from the custom `msscout://app` scheme; `Local Storage` holds little beyond a
+> theme preference). Conversations live **server-side**, so there is nothing
+> local to watch or import without a Scout cloud/export API — out of scope for a
+> 100%-local tool. (Investigated 2026-06-26.)
+
 ### 4.3 Shared session-dict contract
 
 The single boundary between adapters and persistence. `_write_session` already
@@ -217,7 +228,7 @@ rows, not new columns.
 
 - **Back-compat:** existing env vars keep working by mapping onto the structure
   (`MARK_COPILOT_STORE` → `copilot_cli.roots[0]`, `MARK_VSCODE_STORAGE` →
-  `vscode.roots`, `MARK_VSCODE_GLOBAL_STORAGE` → `cline.roots`, …). Deprecated
+  `vscode.roots`, `MARK_VSCODE_GLOBAL_STORAGE` → `cline.roots`, ...). Deprecated
   gently; no breakage.
 - **Validation:** paths are `expanduser()`-ed and resolved; missing paths are
   skipped silently (current behavior); files are scanned **read-only**; the TOML

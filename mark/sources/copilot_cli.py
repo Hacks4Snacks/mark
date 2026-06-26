@@ -33,6 +33,7 @@ from .base import (
     _uri_to_path,
 )
 
+
 def _read_session_metrics(session_id: str, state_dir: Path) -> dict[str, Any] | None:
     """Real model/token/duration metrics from the CLI's per-session events.jsonl."""
     path = state_dir / session_id / "events.jsonl"
@@ -466,7 +467,7 @@ class CopilotCliSource(WatchedSource):
                 counts["added" if prior is None else "updated"] += 1
                 seen += 1
                 if progress and seen % 100 == 0:
-                    progress(f"Indexed {seen} Copilot CLI sessions…")
+                    progress(f"Indexed {seen} Copilot CLI sessions...")
         finally:
             ro.close()
             for suffix in ("", "-wal", "-shm"):

@@ -86,7 +86,7 @@ function renderDetail(s) {
   asideBlocks.push(`<div><h4>Topics</h4>
     <div class="chips topics-edit">${topicPills || '<span class="muted">none yet</span>'}</div>
     <form class="topic-add" id="topicAdd">
-      <input id="topicInput" placeholder="add a topic…" maxlength="40" autocomplete="off" spellcheck="false" />
+      <input id="topicInput" placeholder="add a topic..." maxlength="40" autocomplete="off" spellcheck="false" />
       <button class="btn btn-ghost" type="submit" title="Add topic">＋</button>
     </form>
   </div>`);

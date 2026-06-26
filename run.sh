@@ -7,7 +7,7 @@ PY="${PYTHON:-python3}"
 VENV=".venv"
 
 if [ ! -d "$VENV" ]; then
-  echo "mark: creating virtual environment…"
+  echo "mark: creating virtual environment..."
   "$PY" -m venv "$VENV"
 fi
 # shellcheck disable=SC1091

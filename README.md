@@ -101,7 +101,7 @@ All optional, via environment variables:
 | `MARK_DATA_DIR` | `./data` | Where the SQLite DB and uploads live |
 | `MARK_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | fastembed model |
 | `MARK_VSCODE_STORAGE` | auto-detected | Override VS Code `workspaceStorage` path(s) |
-| `MARK_VSCODE_GLOBAL_STORAGE` | auto-detected | Override `globalStorage` path(s) (Cline, Zoo Code, …) |
+| `MARK_VSCODE_GLOBAL_STORAGE` | auto-detected | Override `globalStorage` path(s) (Cline, Zoo Code, ...) |
 | `MARK_COPILOT_STORE` | `~/.copilot/session-store.db` | Copilot CLI / agent session store |
 | `MARK_SESSION_STATE` | `~/.copilot/session-state` | Per-session event logs (tokens, model, duration) |
 | `MARK_MAX_EMBED_CHUNKS_PER_SESSION` | `40` | Cap on *embedded* chunks per session (keyword/FTS indexes all chunks; bounds the in-memory semantic vector set) |

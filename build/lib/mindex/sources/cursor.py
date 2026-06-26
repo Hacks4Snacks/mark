@@ -1,7 +1,7 @@
 """Cursor editor chat / Composer history.
 
 Cursor (a VS Code fork) keeps its AI conversations in a SQLite key-value store at
-``…/Cursor/User/globalStorage/state.vscdb``. Two key shapes matter in its
+``.../Cursor/User/globalStorage/state.vscdb``. Two key shapes matter in its
 ``cursorDiskKV`` table:
 
 * ``composerData:<composerId>`` — one conversation: ``name`` (title),
@@ -12,7 +12,7 @@ Cursor (a VS Code fork) keeps its AI conversations in a SQLite key-value store a
   optional ``toolFormerData`` tool call (``name``/``rawArgs``/``result``) and
   ``codeBlocks``.
 
-Per-workspace ``…/Cursor/User/workspaceStorage/<id>/state.vscdb`` databases keep a
+Per-workspace ``.../Cursor/User/workspaceStorage/<id>/state.vscdb`` databases keep a
 ``composer.composerData`` list that maps each composer to its workspace folder,
 which is how a session gets its repository attribution.
 
@@ -188,7 +188,7 @@ def _composer_turns(bubbles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             return
         asst = "".join(cur_asst).strip()
         if len(asst) > config.MAX_AGENT_TURN_CHARS:
-            asst = asst[: config.MAX_AGENT_TURN_CHARS].rstrip() + " …[truncated]"
+            asst = asst[: config.MAX_AGENT_TURN_CHARS].rstrip() + " ...[truncated]"
         user = (cur_user or "").strip()
         if user or asst:
             code_blocks = [
@@ -346,7 +346,7 @@ def _build_session(
     name = (data.get("name") or "").strip()
     title = name or _derive_title(turns)
     if len(title) > 90:
-        title = title[:90].rstrip() + "…"
+        title = title[:90].rstrip() + "..."
     created = _epoch_ms_to_iso(data.get("createdAt"))
     updated = _epoch_ms_to_iso(data.get("lastUpdatedAt")) or created
     return {
@@ -463,7 +463,7 @@ class CursorSource(WatchedSource):
                     counts["added" if prior is None else "updated"] += 1
                     seen += 1
                     if progress and seen % 25 == 0:
-                        progress(f"Indexed {seen} Cursor conversations…")
+                        progress(f"Indexed {seen} Cursor conversations...")
             finally:
                 con.close()
         return counts

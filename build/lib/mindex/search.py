@@ -50,7 +50,7 @@ def _keyword_search(query: str, limit: int) -> list[dict[str, Any]]:
         return []
     sql = (
         "SELECT chunk_id, session_id, turn_index, "
-        "  snippet(search_index, 0, '\x02', '\x03', '…', 14) AS snip, "
+        "  snippet(search_index, 0, '\x02', '\x03', '...', 14) AS snip, "
         "  bm25(search_index) AS score "
         "FROM search_index WHERE search_index MATCH ? ORDER BY score LIMIT ?"
     )
@@ -133,7 +133,7 @@ def _make_snippet(content: str, query: str, width: int = 240) -> str:
         snippet = content[:width]
     else:
         start = max(0, pos - width // 3)
-        snippet = ("…" if start else "") + content[start : start + width]
+        snippet = ("..." if start else "") + content[start : start + width]
     out = html.escape(snippet)
     for t in sorted(set(tokens), key=len, reverse=True):
         out = re.sub(
@@ -142,7 +142,7 @@ def _make_snippet(content: str, query: str, width: int = 240) -> str:
             out,
             flags=re.IGNORECASE,
         )
-    return out + ("…" if len(content) > width else "")
+    return out + ("..." if len(content) > width else "")
 
 
 def _render_fts_snippet(raw: str) -> str:

@@ -1,7 +1,7 @@
 """VS Code Copilot chat sessions.
 
 VS Code stores each chat under
-``…/workspaceStorage/<id>/chatSessions/<uuid>.json``. Each file holds an ordered
+``.../workspaceStorage/<id>/chatSessions/<uuid>.json``. Each file holds an ordered
 list of ``requests`` (turns); every turn has a user ``message`` and a list of
 ``response`` parts (markdown text, tool invocations, file edits, references).
 This adapter extracts clean, structured content and is defensive about schema

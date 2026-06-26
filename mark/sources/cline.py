@@ -1,4 +1,4 @@
-"""Cline-family coding-agent task histories (Cline, Zoo Code, Roo, Kilo, …).
+"""Cline-family coding-agent task histories (Cline, Zoo Code, Roo, Kilo, ...).
 
 These VS Code extensions store each task under
 ``globalStorage/<ext-id>/tasks/<task-id>/`` with an
@@ -426,5 +426,5 @@ class ClineSource(WatchedSource):
             counts["added" if prior is None else "updated"] += 1
             seen += 1
             if progress and seen % 50 == 0:
-                progress(f"Indexed {seen} coding-agent tasks…")
+                progress(f"Indexed {seen} coding-agent tasks...")
         return counts

@@ -1,4 +1,4 @@
-"""Cline-family coding-agent task histories (Cline, Zoo Code, Roo, Kilo, …).
+"""Cline-family coding-agent task histories (Cline, Zoo Code, Roo, Kilo, ...).
 
 These VS Code extensions store each task under
 ``globalStorage/<ext-id>/tasks/<task-id>/`` with an
@@ -115,7 +115,7 @@ def _cline_turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if cur_user is not None or cur_asst:
             asst = "".join(cur_asst).strip()
             if len(asst) > config.MAX_AGENT_TURN_CHARS:
-                asst = asst[: config.MAX_AGENT_TURN_CHARS].rstrip() + " …[truncated]"
+                asst = asst[: config.MAX_AGENT_TURN_CHARS].rstrip() + " ...[truncated]"
             user = (cur_user or "").strip()
             if user or asst:
                 code_blocks = [
@@ -320,5 +320,5 @@ class ClineSource(WatchedSource):
             counts["added" if prior is None else "updated"] += 1
             seen += 1
             if progress and seen % 50 == 0:
-                progress(f"Indexed {seen} coding-agent tasks…")
+                progress(f"Indexed {seen} coding-agent tasks...")
         return counts

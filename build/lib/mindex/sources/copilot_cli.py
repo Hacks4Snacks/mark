@@ -494,7 +494,7 @@ class CopilotCliSource(WatchedSource):
                 counts["added" if prior is None else "updated"] += 1
                 seen += 1
                 if progress and seen % 100 == 0:
-                    progress(f"Indexed {seen} Copilot CLI sessions…")
+                    progress(f"Indexed {seen} Copilot CLI sessions...")
         finally:
             ro.close()
             for suffix in ("", "-wal", "-shm"):

@@ -76,7 +76,7 @@ class WatchedSource(ABC):
         rebuild: bool,
         progress: ProgressCb | None = None,
     ) -> dict[str, int]:
-        """Import new/changed sessions; return ``{added, updated, skipped, …}``."""
+        """Import new/changed sessions; return ``{added, updated, skipped, ...}``."""
 
 
 class ImportSource(ABC):
@@ -235,6 +235,8 @@ def _derive_title(turns: list[dict[str, Any]]) -> str:
                 first_line = line.strip().lstrip("#>*-• ").strip()
                 if first_line:
                     return (
-                        (first_line[:90] + "…") if len(first_line) > 90 else first_line
+                        (first_line[:90] + "...")
+                        if len(first_line) > 90
+                        else first_line
                     )
     return "Untitled session"

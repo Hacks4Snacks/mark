@@ -169,7 +169,7 @@ export function renderActiveFilters() {
   if (state.repo) chips.push({ type: "repo", val: state.repo, label: `📁 ${state.repo}` });
   [...state.tags].forEach((t) => chips.push({ type: "tag", val: t, label: `# ${t}` }));
   if (state.dateFrom || state.dateTo) {
-    chips.push({ type: "date", val: "", label: `🗓 ${state.dateFrom || "…"} → ${state.dateTo || "…"}` });
+    chips.push({ type: "date", val: "", label: `🗓 ${state.dateFrom || "..."} → ${state.dateTo || "..."}` });
   }
   if (state.includeAutomation) chips.push({ type: "auto", val: "", label: "⏱ automation runs" });
 

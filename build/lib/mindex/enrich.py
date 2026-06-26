@@ -216,7 +216,7 @@ def _summarize(turns: list[dict[str, Any]]) -> str:
         pieces.append(lead)
     pieces += [s for s in chosen_sents if s != lead]
     summary = " ".join(pieces)
-    return (summary[:380].rstrip() + "…") if len(summary) > 380 else summary
+    return (summary[:380].rstrip() + "...") if len(summary) > 380 else summary
 
 
 def _overlap(a: str, b: str) -> float:
@@ -308,7 +308,7 @@ def _summarize_fast(turns: list[dict[str, Any]]) -> str:
         p for p in (lead, body) if p and not (body and lead and body.startswith(lead))
     )
     summary = summary or lead
-    return (summary[:380].rstrip() + "…") if len(summary) > 380 else summary
+    return (summary[:380].rstrip() + "...") if len(summary) > 380 else summary
 
 
 def _keywords_freq(text: str, top_k: int = 6) -> list[tuple[str, float]]:

@@ -42,7 +42,7 @@ def _run_reindex(rebuild: bool) -> None:
         if _status["running"]:
             return
         _status.update(
-            running=True, message="Starting…", started_at=_now(), finished_at=None
+            running=True, message="Starting...", started_at=_now(), finished_at=None
         )
 
     def progress(msg: str) -> None:

@@ -49,7 +49,7 @@ def _embed_pending(progress: ProgressCb | None = None, batch: int = 256) -> int:
             )
             conn.commit()
             if progress:
-                progress(f"Embedding {min(i + batch, total)}/{total} chunks…")
+                progress(f"Embedding {min(i + batch, total)}/{total} chunks...")
     return total
 
 
@@ -110,7 +110,7 @@ def ingest_all(
                 # Non-destructive: keep already-indexed rows, just stop importing.
                 continue
             if progress:
-                progress(f"Reading {cfg.label or source.key}…")
+                progress(f"Reading {cfg.label or source.key}...")
             res = source.ingest(cur, existing, cfg, rebuild=rebuild, progress=progress)
             counts.update(res)
             conn.commit()
@@ -140,7 +140,7 @@ def import_export(
     do_embed: bool = True,
     progress: ProgressCb | None = None,
 ) -> dict[str, Any]:
-    """Import a user-supplied export file (ChatGPT, …) into mindex.
+    """Import a user-supplied export file (ChatGPT, ...) into mindex.
 
     Detects which :data:`IMPORT_SOURCES` adapter recognises the bytes, writes one
     session per conversation (dedup by content hash), then embeds new chunks.
@@ -171,7 +171,7 @@ def import_export(
             counts["added" if prior is None else "updated"] += 1
             n += 1
             if progress and n % 50 == 0:
-                progress(f"Imported {n} {src.key} conversations…")
+                progress(f"Imported {n} {src.key} conversations...")
         conn.commit()
 
     if do_embed:

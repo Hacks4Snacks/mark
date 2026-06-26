@@ -21,7 +21,7 @@ export async function showUsage(opts = {}) {
 
 export async function loadUsage() {
   const host = $("#usageBody");
-  host.innerHTML = `<div class="lib-loading muted">Loading…</div>`;
+  host.innerHTML = `<div class="lib-loading muted">Loading...</div>`;
   try {
     const data = await api("/api/usage");
     host.innerHTML = renderUsage(data);
