@@ -11,17 +11,17 @@ from typing import Any
 from .. import config
 from ..persist import write_session
 from .base import (
-    _FENCE_RE,
-    _URL_RE,
+    FENCE_RE,
+    URL_RE,
     ProgressCb,
     WatchedSource,
-    _compute_cost,
-    _derive_title,
-    _epoch_ms_to_iso,
-    _estimate_metrics,
-    _repo_from_cwd,
-    _ts_diff_seconds,
-    _uri_to_path,
+    compute_cost,
+    derive_title,
+    epoch_ms_to_iso,
+    estimate_metrics,
+    repo_from_cwd,
+    ts_diff_seconds,
+    uri_to_path,
 )
 
 
@@ -85,10 +85,10 @@ def _read_session_metrics(session_id: str, state_dir: Path) -> dict[str, Any] | 
     if not model and msg_models:
         model = Counter(msg_models).most_common(1)[0][0]
 
-    duration = _ts_diff_seconds(first_ts, last_ts)
+    duration = ts_diff_seconds(first_ts, last_ts)
     if duration is None and shutdown and shutdown.get("sessionStartTime") and last_ts:
-        duration = _ts_diff_seconds(
-            _epoch_ms_to_iso(shutdown["sessionStartTime"]), last_ts
+        duration = ts_diff_seconds(
+            epoch_ms_to_iso(shutdown["sessionStartTime"]), last_ts
         )
 
     return {
@@ -98,7 +98,7 @@ def _read_session_metrics(session_id: str, state_dir: Path) -> dict[str, Any] | 
         "output_tokens": outp,
         "premium_requests": premium,
         "aiu": aiu,
-        "est_cost_usd": _compute_cost(model, inp, outp, cread, cwrite),
+        "est_cost_usd": compute_cost(model, inp, outp, cread, cwrite),
         "tokens_estimated": 1 if (inp == 0 and outp == 0) else 0,
     }
 
@@ -144,10 +144,10 @@ def _cli_turns(ro: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
             continue
         code_blocks = [
             {"language": (lang or "").strip() or None, "content": code.strip()}
-            for lang, code in _FENCE_RE.findall(ar)
+            for lang, code in FENCE_RE.findall(ar)
         ]
         urls = list(
-            dict.fromkeys(u.rstrip(".,);") for u in _URL_RE.findall(f"{um} {ar}"))
+            dict.fromkeys(u.rstrip(".,);") for u in URL_RE.findall(f"{um} {ar}"))
         )
         turns.append(
             {
@@ -189,7 +189,7 @@ def _tool_file_path(name: str | None, args: Any) -> str | None:
     for key in _FILE_ARG_KEYS:
         val = args.get(key)
         if isinstance(val, str) and val.strip():
-            return _uri_to_path(val.strip()) or val.strip()
+            return uri_to_path(val.strip()) or val.strip()
     return None
 
 
@@ -207,10 +207,10 @@ def _finish_event_turn(turn: dict[str, Any]) -> dict[str, Any]:
     turn["thinking"] = (turn.get("thinking") or "").strip()
     turn["code_blocks"] = [
         {"language": (lang or "").strip() or None, "content": code.strip()}
-        for lang, code in _FENCE_RE.findall(ar)
+        for lang, code in FENCE_RE.findall(ar)
     ]
     turn["urls"] = list(
-        dict.fromkeys(u.rstrip(".,);") for u in _URL_RE.findall(f"{um} {ar}"))
+        dict.fromkeys(u.rstrip(".,);") for u in URL_RE.findall(f"{um} {ar}"))
     )
     return turn
 
@@ -424,11 +424,11 @@ class CopilotCliSource(WatchedSource):
                 if prior is not None and prior == content_hash and not rebuild:
                     counts["skipped"] += 1
                     continue
-                metrics = _read_session_metrics(sid, state_dir) or _estimate_metrics(
+                metrics = _read_session_metrics(sid, state_dir) or estimate_metrics(
                     turns
                 )
                 if metrics.get("duration_seconds") is None:
-                    metrics["duration_seconds"] = _ts_diff_seconds(
+                    metrics["duration_seconds"] = ts_diff_seconds(
                         s["created_at"], s["updated_at"]
                     )
                 # Agent-created/modified files become session attachments. The
@@ -448,9 +448,9 @@ class CopilotCliSource(WatchedSource):
                 session = {
                     "id": sid,
                     "source": "cli",
-                    "title": _derive_title(turns),
+                    "title": derive_title(turns),
                     "workspace_id": None,
-                    "repository": _repo_from_cwd(s["repository"], s["cwd"]),
+                    "repository": repo_from_cwd(s["repository"], s["cwd"]),
                     "repo_path": s["cwd"],
                     "requester": None,
                     "responder": "GitHub Copilot",

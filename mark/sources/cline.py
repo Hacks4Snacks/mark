@@ -12,16 +12,16 @@ from typing import Any
 from .. import config
 from ..persist import write_session
 from .base import (
-    _FENCE_RE,
-    _URL_RE,
+    FENCE_RE,
+    URL_RE,
     ProgressCb,
     WatchedSource,
-    _compute_cost,
-    _epoch_ms_to_iso,
-    _estimate_tokens,
-    _parse_iso,
-    _repo_from_cwd,
-    _ts_diff_seconds,
+    compute_cost,
+    epoch_ms_to_iso,
+    estimate_tokens,
+    parse_iso,
+    repo_from_cwd,
+    ts_diff_seconds,
 )
 
 _ENV_DETAILS_RE = re.compile(
@@ -112,11 +112,11 @@ def _cline_turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if user or asst:
                 code_blocks = [
                     {"language": (lang or "").strip() or None, "content": code.strip()}
-                    for lang, code in _FENCE_RE.findall(asst)
+                    for lang, code in FENCE_RE.findall(asst)
                 ]
                 urls = list(
                     dict.fromkeys(
-                        u.rstrip(".,);") for u in _URL_RE.findall(f"{user} {asst}")
+                        u.rstrip(".,);") for u in URL_RE.findall(f"{user} {asst}")
                     )
                 )
                 turns.append(
@@ -126,7 +126,7 @@ def _cline_turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         "assistant_response": asst,
                         "thinking": "",
                         "tools": [],
-                        "timestamp": _epoch_ms_to_iso(cur_ts),
+                        "timestamp": epoch_ms_to_iso(cur_ts),
                         "files": [],
                         "urls": urls,
                         "code_blocks": code_blocks,
@@ -281,10 +281,10 @@ def _parse_cline_task(task_dir: Path, source: str) -> dict[str, Any] | None:
                 cost = ui_cost
     estimated = tokens_in == 0 and tokens_out == 0
     if estimated:
-        tokens_in = sum(_estimate_tokens(t["user_message"]) for t in turns)
-        tokens_out = sum(_estimate_tokens(t["assistant_response"]) for t in turns)
+        tokens_in = sum(estimate_tokens(t["user_message"]) for t in turns)
+        tokens_out = sum(estimate_tokens(t["assistant_response"]) for t in turns)
     if not cost:
-        cost = _compute_cost(
+        cost = compute_cost(
             model, tokens_in, tokens_out, cache_r, cache_w, input_includes_cache=False
         )
 
@@ -305,12 +305,12 @@ def _parse_cline_task(task_dir: Path, source: str) -> dict[str, Any] | None:
         if isinstance(m, dict) and isinstance(m.get("ts"), (int, float))
     )
     for s in stamps:
-        dt = _parse_iso(s)
+        dt = parse_iso(s)
         if dt:
             epochs.append(int(dt.timestamp() * 1000))
     if epochs:
-        created = _epoch_ms_to_iso(min(epochs))
-        updated = _epoch_ms_to_iso(max(epochs))
+        created = epoch_ms_to_iso(min(epochs))
+        updated = epoch_ms_to_iso(max(epochs))
     else:
         created = stamps[0] if stamps else None
         updated = stamps[-1] if stamps else created
@@ -320,7 +320,7 @@ def _parse_cline_task(task_dir: Path, source: str) -> dict[str, Any] | None:
         "source": source,
         "title": title,
         "workspace_id": None,
-        "repository": _repo_from_cwd(None, workspace),
+        "repository": repo_from_cwd(None, workspace),
         "repo_path": workspace,
         "requester": None,
         "responder": source,
@@ -331,9 +331,9 @@ def _parse_cline_task(task_dir: Path, source: str) -> dict[str, Any] | None:
         "turns": turns,
         "metrics": {
             "duration_seconds": (
-                _ts_diff_seconds(stamps[0], stamps[-1])
+                ts_diff_seconds(stamps[0], stamps[-1])
                 if len(stamps) >= 2
-                else _ts_diff_seconds(created, updated)
+                else ts_diff_seconds(created, updated)
             ),
             "model": model,
             "input_tokens": tokens_in,

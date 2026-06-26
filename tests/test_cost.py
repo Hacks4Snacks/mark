@@ -1,5 +1,3 @@
-"""Pricing lookup and cost/metric estimation."""
-
 from __future__ import annotations
 
 from mark import config
@@ -21,7 +19,7 @@ def test_price_for_unknown_falls_back_to_default():
 def test_compute_cost_prices_cache_reads_separately():
     # gpt-5 = (in 1.25, out 10.0, cached 0.125) per 1M tokens.
     # input inclusive of cache: fresh = 1000 - 400 = 600.
-    cost = base._compute_cost(
+    cost = base.compute_cost(
         "gpt-5", 1000, 500, cache_read=400, input_includes_cache=True
     )
     # (600*1.25 + 400*0.125 + 500*10) / 1e6 = 5800 / 1e6
@@ -29,10 +27,10 @@ def test_compute_cost_prices_cache_reads_separately():
 
 
 def test_compute_cost_exclusive_input_is_higher_than_inclusive():
-    inclusive = base._compute_cost(
+    inclusive = base.compute_cost(
         "gpt-5", 1000, 0, cache_read=400, input_includes_cache=True
     )
-    exclusive = base._compute_cost(
+    exclusive = base.compute_cost(
         "gpt-5", 1000, 0, cache_read=400, input_includes_cache=False
     )
     # Exclusive treats all 1000 as fresh input; inclusive carves out the cache.
@@ -52,7 +50,7 @@ def test_estimate_metrics_counts_tokens_and_marks_estimated():
             "timestamp": "2026-01-01T00:01:00+00:00",
         },
     ]
-    m = base._estimate_metrics(turns)
+    m = base.estimate_metrics(turns)
     assert m["tokens_estimated"] == 1
     assert m["input_tokens"] == 20  # (40 + 40) // 4
     assert m["output_tokens"] == 20  # 80 // 4

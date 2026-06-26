@@ -1,5 +1,3 @@
-"""Queries backing the sidebar stats and the per-source overview counts."""
-
 from __future__ import annotations
 
 from typing import Any

@@ -3,22 +3,22 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
-from collections.abc import Iterable
 
 from .. import config
 from ..persist import write_session
 from .base import (
-    _FENCE_RE,
-    _URL_RE,
+    FENCE_RE,
+    URL_RE,
     ProgressCb,
     WatchedSource,
-    _derive_title,
-    _epoch_ms_to_iso,
-    _estimate_metrics,
-    _friendly_repo,
-    _uri_to_path,
+    derive_title,
+    epoch_ms_to_iso,
+    estimate_metrics,
+    friendly_repo,
+    uri_to_path,
 )
 
 
@@ -35,12 +35,12 @@ def load_workspace_map(
             except (OSError, json.JSONDecodeError):
                 continue
             folder = data.get("folder")
-            path = _uri_to_path(folder) if folder else None
+            path = uri_to_path(folder) if folder else None
             if not path and data.get("workspace"):
                 # Multi-root: resolve the .code-workspace and use its first folder.
-                wpath = _uri_to_path(data["workspace"])
+                wpath = uri_to_path(data["workspace"])
                 path = wpath
-            mapping[ws_id] = {"path": path, "name": _friendly_repo(path)}
+            mapping[ws_id] = {"path": path, "name": friendly_repo(path)}
     return mapping
 
 
@@ -62,7 +62,7 @@ def _resolve_md_links(text: str, uris: dict[str, Any] | None) -> str:
     def _repl(match: re.Match[str]) -> str:
         uri = match.group(1)
         ref = (uris or {}).get(uri) if uris else None
-        path = _uri_to_path(ref if ref is not None else uri)
+        path = uri_to_path(ref if ref is not None else uri)
         if path:
             return f"`{Path(path).name}`"
         return uri
@@ -87,7 +87,7 @@ def _inline_ref_text(ref: Any) -> str:
         return f"`{name.strip()}`"
     loc = ref.get("location")
     uri = loc.get("uri") if isinstance(loc, dict) else None
-    path = _uri_to_path(uri) if uri else _uri_to_path(ref)
+    path = uri_to_path(uri) if uri else uri_to_path(ref)
     if path:
         return f"`{Path(path).name}`"
     return ""
@@ -122,10 +122,10 @@ def _ref_path(ref: Any) -> str | None:
         return None
     loc = ref.get("location")
     if isinstance(loc, dict):
-        path = _uri_to_path(loc.get("uri"))
+        path = uri_to_path(loc.get("uri"))
         if path:
             return path
-    return _uri_to_path(ref)
+    return uri_to_path(ref)
 
 
 def _strip_trailing_fence_opener(segments: list[str]) -> None:
@@ -141,7 +141,7 @@ def _tool_message_paths(part: dict[str, Any]) -> list[str]:
         if not isinstance(msg, dict):
             continue
         for ref in (msg.get("uris") or {}).values():
-            path = _uri_to_path(ref)
+            path = uri_to_path(ref)
             if path:
                 paths.append(path)
     return paths
@@ -194,12 +194,12 @@ def _extract_response(parts: Any) -> dict[str, Any]:
             if path:
                 files.append(path)
         elif kind == "codeblockUri":
-            uri_path = _uri_to_path(p.get("uri"))
+            uri_path = uri_to_path(p.get("uri"))
             if uri_path:
                 files.append(uri_path)
             nxt = parts[i] if i < len(parts) else None
             if isinstance(nxt, dict) and nxt.get("kind") == "textEditGroup":
-                edit_path = _uri_to_path(nxt.get("uri")) or uri_path
+                edit_path = uri_to_path(nxt.get("uri")) or uri_path
                 if edit_path:
                     files.append(edit_path)
                 content = _text_edit_text(nxt)
@@ -212,7 +212,7 @@ def _extract_response(parts: Any) -> dict[str, Any]:
                     _strip_trailing_fence_opener(text_segments)
                 i += 1
         elif kind == "textEditGroup":
-            uri_path = _uri_to_path(p.get("uri"))
+            uri_path = uri_to_path(p.get("uri"))
             if uri_path:
                 files.append(uri_path)
             content = _text_edit_text(p)
@@ -237,7 +237,7 @@ def _extract_response(parts: Any) -> dict[str, Any]:
                 text_segments.append(f"\n{msg.strip()}\n")
 
     text = "".join(text_segments).strip()
-    for m in _URL_RE.findall(text):
+    for m in URL_RE.findall(text):
         urls.append(m.rstrip(".,);"))
     return {
         "text": text,
@@ -255,7 +255,7 @@ def _content_references(req: dict[str, Any]) -> tuple[list[str], list[str]]:
         if not isinstance(cr, dict):
             continue
         ref = cr.get("reference") or cr.get("value")
-        path = _uri_to_path(ref)
+        path = uri_to_path(ref)
         if path:
             (urls if path.startswith("http") else files).append(path)
     return files, urls
@@ -270,7 +270,7 @@ def _parse_turn(req: dict[str, Any], index: int) -> dict[str, Any]:
     assistant = resp["text"]
     code_blocks = [
         {"language": (lang or "").strip() or None, "content": code.strip()}
-        for lang, code in _FENCE_RE.findall(assistant)
+        for lang, code in FENCE_RE.findall(assistant)
     ]
 
     files = list(dict.fromkeys(resp["files"] + cr_files))
@@ -281,7 +281,7 @@ def _parse_turn(req: dict[str, Any], index: int) -> dict[str, Any]:
         "assistant_response": assistant,
         "thinking": resp.get("thinking", ""),
         "tools": list(dict.fromkeys(resp["tools"])),
-        "timestamp": _epoch_ms_to_iso(req.get("timestamp")),
+        "timestamp": epoch_ms_to_iso(req.get("timestamp")),
         "files": files,
         "urls": urls,
         "code_blocks": code_blocks,
@@ -420,19 +420,19 @@ def parse_session(
     return {
         "id": session_id,
         "source": "vscode",
-        "title": _derive_title(turns),
+        "title": derive_title(turns),
         "workspace_id": workspace_id,
         "repository": repo.get("name"),
         "repo_path": repo.get("path"),
         "requester": data.get("requesterUsername"),
         "responder": data.get("responderUsername"),
-        "created_at": _epoch_ms_to_iso(data.get("creationDate")),
-        "updated_at": _epoch_ms_to_iso(data.get("lastMessageDate"))
-        or _epoch_ms_to_iso(data.get("creationDate")),
+        "created_at": epoch_ms_to_iso(data.get("creationDate")),
+        "updated_at": epoch_ms_to_iso(data.get("lastMessageDate"))
+        or epoch_ms_to_iso(data.get("creationDate")),
         "source_path": str(path),
         "content_hash": hashlib.sha256(raw).hexdigest(),
         "turns": turns,
-        "metrics": _estimate_metrics(turns),
+        "metrics": estimate_metrics(turns),
     }
 
 

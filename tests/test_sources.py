@@ -1,5 +1,3 @@
-"""Source adapters: the ChatGPT importer end-to-end plus registry sanity."""
-
 from __future__ import annotations
 
 import json

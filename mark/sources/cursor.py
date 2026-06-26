@@ -3,24 +3,24 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
-from collections.abc import Iterable
 
 from .. import config
 from ..persist import write_session
 from .base import (
-    _FENCE_RE,
-    _URL_RE,
+    FENCE_RE,
+    URL_RE,
     ProgressCb,
     WatchedSource,
-    _compute_cost,
-    _derive_title,
-    _epoch_ms_to_iso,
-    _estimate_metrics,
-    _friendly_repo,
-    _turns_duration,
-    _uri_to_path,
+    compute_cost,
+    derive_title,
+    epoch_ms_to_iso,
+    estimate_metrics,
+    friendly_repo,
+    turns_duration,
+    uri_to_path,
 )
 
 _BUBBLE_USER = 1
@@ -61,8 +61,8 @@ def load_workspace_map(roots: list[Path]) -> dict[str, dict[str, str | None]]:
                     folder = json.loads(wsjson.read_text()).get("folder")
                 except (OSError, json.JSONDecodeError):
                     folder = None
-            path = _uri_to_path(folder) if folder else None
-            name = _friendly_repo(path)
+            path = uri_to_path(folder) if folder else None
+            name = friendly_repo(path)
 
             con = _ro_connect(wsdb)
             if con is None:
@@ -165,11 +165,11 @@ def _composer_turns(bubbles: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if user or asst:
             code_blocks = [
                 {"language": (lang or "").strip() or None, "content": code.strip()}
-                for lang, code in _FENCE_RE.findall(asst)
+                for lang, code in FENCE_RE.findall(asst)
             ]
             urls = list(
                 dict.fromkeys(
-                    u.rstrip(".,);") for u in _URL_RE.findall(f"{user} {asst}")
+                    u.rstrip(".,);") for u in URL_RE.findall(f"{user} {asst}")
                 )
             )
             turns.append(
@@ -256,13 +256,13 @@ def _cursor_metrics(
     model = _model_name(data)
     sum_in, sum_out, peak, requests = _token_totals(bubbles)
     if sum_in == 0 and sum_out == 0:
-        metrics = _estimate_metrics(turns)
+        metrics = estimate_metrics(turns)
         metrics["model"] = model
         return metrics
     # Agentic turns re-send the conversation each request, so the cumulative
     # inputTokens are almost entirely prompt-cache reads; only the single largest
     # context is billed as a fresh write. Output tokens are billed verbatim.
-    cost = _compute_cost(
+    cost = compute_cost(
         model,
         sum_in,
         sum_out,
@@ -271,7 +271,7 @@ def _cursor_metrics(
         input_includes_cache=True,
     )
     return {
-        "duration_seconds": _turns_duration(turns),
+        "duration_seconds": turns_duration(turns),
         "model": model,
         "input_tokens": sum_in,
         "output_tokens": sum_out,
@@ -316,11 +316,11 @@ def _build_session(
     db_path: Path,
 ) -> dict[str, Any]:
     name = (data.get("name") or "").strip()
-    title = name or _derive_title(turns)
+    title = name or derive_title(turns)
     if len(title) > 90:
         title = title[:90].rstrip() + "..."
-    created = _epoch_ms_to_iso(data.get("createdAt"))
-    updated = _epoch_ms_to_iso(data.get("lastUpdatedAt")) or created
+    created = epoch_ms_to_iso(data.get("createdAt"))
+    updated = epoch_ms_to_iso(data.get("lastUpdatedAt")) or created
     return {
         "id": f"cursor-{composer_id}",
         "source": "cursor",

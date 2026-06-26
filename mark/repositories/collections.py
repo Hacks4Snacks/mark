@@ -1,9 +1,3 @@
-"""Collection persistence: CRUD, membership rows, and member aggregates.
-
-Pure data-access — no rule evaluation or search. The :mod:`mark.collections`
-service composes these with the search layer to resolve effective membership.
-"""
-
 from __future__ import annotations
 
 from typing import Any

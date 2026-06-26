@@ -1,10 +1,3 @@
-"""Server-side Markdown rendering for assistant responses.
-
-Raw HTML in the source is disabled, so conversation content cannot inject
-markup into the page (XSS-safe). Fenced code blocks are highlighted with
-Pygments at render time.
-"""
-
 from __future__ import annotations
 
 import functools

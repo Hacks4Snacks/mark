@@ -1,5 +1,3 @@
-"""Collection membership math: (rule | includes) - excludes."""
-
 from __future__ import annotations
 
 from mark import collections as coll

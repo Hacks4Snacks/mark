@@ -1,21 +1,3 @@
-"""Mark MCP server — expose your AI-chat archive to MCP clients.
-
-Lets Copilot CLI, Cline, Claude Desktop, and other MCP-aware agents search and
-retrieve your past coding conversations as tools, so an agent can recall how you
-solved something before. Runs over stdio; everything stays local — no network,
-no API keys.
-
-Run:  ``mark-mcp``  (after ``pip install '.[mcp]'``)
-
-Register with an MCP client, e.g. Claude Desktop / Copilot CLI config::
-
-    {
-      "mcpServers": {
-        "mark": { "command": "mark-mcp" }
-      }
-    }
-"""
-
 from __future__ import annotations
 
 import html

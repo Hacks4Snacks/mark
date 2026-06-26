@@ -1,5 +1,3 @@
-"""Persistence round-trip and hybrid search behaviour."""
-
 from __future__ import annotations
 
 from mark import search, uploads

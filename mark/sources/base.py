@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable, Iterable
 from urllib.parse import unquote
 
 from .. import config
 
 ProgressCb = Callable[[str], None]
 
-_FENCE_RE = re.compile(r"```([\w+-]*)\n(.*?)```", re.DOTALL)
-_URL_RE = re.compile(r"https?://[^\s)>\]]+")
+FENCE_RE = re.compile(r"```([\w+-]*)\n(.*?)```", re.DOTALL)
+URL_RE = re.compile(r"https?://[^\s)>\]]+")
 
 
 class WatchedSource(ABC):
@@ -83,14 +83,14 @@ class ImportSource(ABC):
         """Yield canonical session dicts parsed from the export bytes."""
 
 
-def _epoch_ms_to_iso(ms: Any) -> str | None:
+def epoch_ms_to_iso(ms: Any) -> str | None:
     try:
         return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).isoformat()
     except (TypeError, ValueError, OSError):
         return None
 
 
-def _uri_to_path(obj: Any) -> str | None:
+def uri_to_path(obj: Any) -> str | None:
     """Best-effort conversion of the many VS Code URI shapes to a readable path."""
     if obj is None:
         return None
@@ -105,11 +105,11 @@ def _uri_to_path(obj: Any) -> str | None:
             if isinstance(val, str) and val:
                 return unquote(val)
         if "uri" in obj:
-            return _uri_to_path(obj["uri"])
+            return uri_to_path(obj["uri"])
     return None
 
 
-def _friendly_repo(path: str | None) -> str | None:
+def friendly_repo(path: str | None) -> str | None:
     if not path:
         return None
     p = path.rstrip("/")
@@ -118,7 +118,7 @@ def _friendly_repo(path: str | None) -> str | None:
     return name or None
 
 
-def _repo_from_cwd(repository: str | None, cwd: str | None) -> str | None:
+def repo_from_cwd(repository: str | None, cwd: str | None) -> str | None:
     if repository:
         return repository.rstrip("/").split("/")[-1] or None
     if not cwd or "/.paperclip/" in cwd:
@@ -134,11 +134,11 @@ def _repo_from_cwd(repository: str | None, cwd: str | None) -> str | None:
     return parts[-1] if parts else None
 
 
-def _estimate_tokens(text: str | None) -> int:
+def estimate_tokens(text: str | None) -> int:
     return max(0, len(text) // 4) if text else 0
 
 
-def _parse_iso(ts: str | None) -> datetime | None:
+def parse_iso(ts: str | None) -> datetime | None:
     if not ts:
         return None
     try:
@@ -147,19 +147,19 @@ def _parse_iso(ts: str | None) -> datetime | None:
         return None
 
 
-def _ts_diff_seconds(a: str | None, b: str | None) -> float | None:
-    da, db_ = _parse_iso(a), _parse_iso(b)
+def ts_diff_seconds(a: str | None, b: str | None) -> float | None:
+    da, db_ = parse_iso(a), parse_iso(b)
     if da and db_:
         return max(0.0, (db_ - da).total_seconds())
     return None
 
 
-def _turns_duration(turns: list[dict[str, Any]]) -> float | None:
+def turns_duration(turns: list[dict[str, Any]]) -> float | None:
     stamps = [t.get("timestamp") for t in turns if t.get("timestamp")]
-    return _ts_diff_seconds(stamps[0], stamps[-1]) if len(stamps) >= 2 else None
+    return ts_diff_seconds(stamps[0], stamps[-1]) if len(stamps) >= 2 else None
 
 
-def _compute_cost(
+def compute_cost(
     model,
     input_tokens,
     output_tokens,
@@ -185,22 +185,22 @@ def _compute_cost(
     return round(cost, 4)
 
 
-def _estimate_metrics(turns: list[dict[str, Any]]) -> dict[str, Any]:
-    inp = sum(_estimate_tokens(t.get("user_message")) for t in turns)
-    outp = sum(_estimate_tokens(t.get("assistant_response")) for t in turns)
+def estimate_metrics(turns: list[dict[str, Any]]) -> dict[str, Any]:
+    inp = sum(estimate_tokens(t.get("user_message")) for t in turns)
+    outp = sum(estimate_tokens(t.get("assistant_response")) for t in turns)
     return {
-        "duration_seconds": _turns_duration(turns),
+        "duration_seconds": turns_duration(turns),
         "model": None,
         "input_tokens": inp,
         "output_tokens": outp,
         "premium_requests": None,
         "aiu": None,
-        "est_cost_usd": _compute_cost(None, inp, outp),
+        "est_cost_usd": compute_cost(None, inp, outp),
         "tokens_estimated": 1,
     }
 
 
-def _derive_title(turns: list[dict[str, Any]]) -> str:
+def derive_title(turns: list[dict[str, Any]]) -> str:
     for t in turns:
         msg = (t["user_message"] or "").strip()
         if msg:

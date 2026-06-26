@@ -1,5 +1,3 @@
-"""End-to-end API smoke tests via the FastAPI TestClient."""
-
 from __future__ import annotations
 
 

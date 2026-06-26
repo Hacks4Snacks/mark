@@ -1,12 +1,3 @@
-"""Persistence boundary: turn a canonical session dict into database rows.
-
-Every source adapter converges here. ``write_session`` replaces any prior copy
-of the session (a ``DELETE`` cascades to child rows) and repopulates turns,
-file/url references, code blocks, attachments, search chunks, summary and tags.
-Keeping this in one place is what lets the search / embedding / UI layers stay
-completely source-agnostic.
-"""
-
 from __future__ import annotations
 
 import json

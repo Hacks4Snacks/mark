@@ -1,5 +1,3 @@
-"""Database schema bootstrap, migrations, and meta helpers."""
-
 from __future__ import annotations
 
 import sqlite3

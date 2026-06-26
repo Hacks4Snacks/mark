@@ -1,9 +1,3 @@
-"""Manual uploads — notes and files — folded into the same searchable store.
-
-An upload becomes a ``session`` row with ``source='upload'`` plus a ``documents``
-row, so it is searched, tagged and summarised exactly like a Copilot session.
-"""
-
 from __future__ import annotations
 
 import uuid

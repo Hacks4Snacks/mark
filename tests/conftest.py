@@ -1,10 +1,3 @@
-"""Shared pytest fixtures.
-
-Every test runs against a throwaway SQLite database in a temp dir and uses the
-always-available built-in hashing embedder, so the suite is fast, deterministic,
-and fully offline (no model downloads, no touching the user's real ~/.mark).
-"""
-
 from __future__ import annotations
 
 import hashlib

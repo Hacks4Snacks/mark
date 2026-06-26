@@ -1,5 +1,3 @@
-"""Queries backing the usage & spend dashboard."""
-
 from __future__ import annotations
 
 from typing import Any

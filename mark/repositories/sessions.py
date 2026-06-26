@@ -1,5 +1,3 @@
-"""Small session-scoped writes/lookups used by the API (tags, existence)."""
-
 from __future__ import annotations
 
 from .. import db

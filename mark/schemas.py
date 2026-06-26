@@ -1,18 +1,8 @@
-"""Pydantic request and response models for the HTTP API.
-
-Request models validate incoming JSON bodies. Response models document and
-lightly type the responses; nested collections are kept as ``dict``/``list``
-of dicts on purpose so that adding a field to a query result never silently
-drops it from the API payload.
-"""
-
 from __future__ import annotations
 
 from typing import Any
 
 from pydantic import BaseModel
-
-# --- request bodies ----------------------------------------------------------
 
 
 class AskIn(BaseModel):
@@ -59,9 +49,6 @@ class TagIn(BaseModel):
 class NoteIn(BaseModel):
     title: str = "Untitled note"
     text: str = ""
-
-
-# --- response bodies ---------------------------------------------------------
 
 
 class OkResponse(BaseModel):

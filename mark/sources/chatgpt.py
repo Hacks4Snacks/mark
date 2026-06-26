@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any
-from collections.abc import Iterable
 
 from .base import (
-    _FENCE_RE,
-    _URL_RE,
+    FENCE_RE,
+    URL_RE,
     ImportSource,
-    _derive_title,
-    _estimate_metrics,
+    derive_title,
+    estimate_metrics,
 )
 
 
@@ -112,10 +112,10 @@ def _turns(msgs: list[tuple[str, str, Any]]) -> list[dict[str, Any]]:
             continue
         code_blocks = [
             {"language": (lang or "").strip() or None, "content": code.strip()}
-            for lang, code in _FENCE_RE.findall(asst)
+            for lang, code in FENCE_RE.findall(asst)
         ]
         urls = list(
-            dict.fromkeys(u.rstrip(".,);") for u in _URL_RE.findall(f"{user} {asst}"))
+            dict.fromkeys(u.rstrip(".,);") for u in URL_RE.findall(f"{user} {asst}"))
         )
         turns.append(
             {
@@ -156,7 +156,7 @@ class ChatGptSource(ImportSource):
                 or convo.get("id")
                 or hashlib.sha256(raw).hexdigest()[:16]
             )
-            title = (convo.get("title") or _derive_title(turns)).strip()
+            title = (convo.get("title") or derive_title(turns)).strip()
             stamps = [t["timestamp"] for t in turns if t["timestamp"]]
             created = _iso(convo.get("create_time")) or (stamps[0] if stamps else None)
             updated = (
@@ -178,5 +178,5 @@ class ChatGptSource(ImportSource):
                 "source_path": None,
                 "content_hash": hashlib.sha256(raw).hexdigest(),
                 "turns": turns,
-                "metrics": _estimate_metrics(turns),
+                "metrics": estimate_metrics(turns),
             }

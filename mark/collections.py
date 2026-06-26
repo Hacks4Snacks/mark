@@ -1,11 +1,3 @@
-"""Collections service: rule evaluation + effective membership math.
-
-Persistence lives in :mod:`mark.repositories.collections`; this module composes
-those CRUD/query functions with the search layer to resolve a collection's
-effective members — ``(rule | manual includes) - manual excludes`` — and to
-shape the cards/overview the API returns.
-"""
-
 from __future__ import annotations
 
 import html

@@ -1,5 +1,3 @@
-"""End-to-end smoke test for the mark MCP server over stdio."""
-
 import asyncio
 
 from mcp import ClientSession, StdioServerParameters
