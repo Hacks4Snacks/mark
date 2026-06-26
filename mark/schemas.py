@@ -60,6 +60,11 @@ class OkCountResponse(BaseModel):
     count: int
 
 
+class HiddenResponse(BaseModel):
+    ok: bool = True
+    hidden: bool
+
+
 class IdResponse(BaseModel):
     id: str
 

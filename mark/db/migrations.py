@@ -20,11 +20,31 @@ def _add_turns_thinking_column(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE turns ADD COLUMN thinking TEXT")
 
 
+def _add_sessions_hidden_column(conn: sqlite3.Connection) -> None:
+    """Add ``sessions.hidden`` so existing archives gain the hide/unhide flag."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    if "hidden" not in cols:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"
+        )
+
+
+def _add_tombstones_table(conn: sqlite3.Connection) -> None:
+    """Add the ``tombstones`` table so permanently deleted sessions stay deleted."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS tombstones ("
+        "session_id TEXT PRIMARY KEY, source TEXT, content_hash TEXT, "
+        "deleted_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')))"
+    )
+
+
 # Ordered list of migrations. Append new ones; never reorder or delete.
 # The 1-based index of a migration is its schema version.
 MIGRATIONS: list[Migration] = [
     _add_tags_manual_column,
     _add_turns_thinking_column,
+    _add_sessions_hidden_column,
+    _add_tombstones_table,
 ]
 
 CURRENT_VERSION = len(MIGRATIONS)

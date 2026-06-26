@@ -66,6 +66,18 @@ def sources_fingerprint() -> str:
     return "|".join(parts)
 
 
+def _seed_tombstones(cur, existing: dict[str, str]) -> None:
+    """Make permanently deleted sessions look already-present-and-unchanged.
+
+    A purge leaves a tombstone but removes the row, so a re-scan would otherwise
+    re-parse the on-disk session and report a phantom "added". Seeding the
+    deletion-time hash lets the adapters skip it as unchanged; ``write_session``
+    still hard-blocks any that genuinely changed, so the deletion always sticks.
+    """
+    for row in cur.execute("SELECT session_id, content_hash FROM tombstones"):
+        existing.setdefault(row["session_id"], row["content_hash"])
+
+
 def ingest_all(
     *,
     rebuild: bool = False,
@@ -97,6 +109,7 @@ def ingest_all(
             row["id"]: row["content_hash"]
             for row in cur.execute("SELECT id, content_hash FROM sessions")
         }
+        _seed_tombstones(cur, existing)
         for source in WATCHED_SOURCES:
             cfg = config.resolve_source_config(source.default_config())
             if not cfg.enabled:
@@ -155,6 +168,7 @@ def import_export(
             row["id"]: row["content_hash"]
             for row in cur.execute("SELECT id, content_hash FROM sessions")
         }
+        _seed_tombstones(cur, existing)
         n = 0
         for session in src.parse_export(data):
             if not session or not session.get("turns"):

@@ -5,9 +5,9 @@
 
 import { api } from "../api.js";
 import { PAGE_SIZE, setLayoutWide, showOnly, state } from "../state.js";
-import { syncFilterUI } from "../sidebar.js";
+import { loadFacets, loadStats, syncFilterUI } from "../sidebar.js";
 import {
-  $, $$, debounce, esc, fmtCost, fmtDate, fmtDuration, normTitle, srcMeta, withTransition,
+  $, $$, debounce, esc, fmtCost, fmtDate, fmtDuration, normTitle, srcMeta, toast, withTransition,
 } from "../utils.js";
 import { icon } from "../icons.js";
 import { openSession, teardownReading } from "./detail.js";
@@ -28,6 +28,7 @@ export async function doSearch(reset = true, opts = {}) {
   if (state.tags.size) params.set("tags", [...state.tags].join(","));
   if (state.dateFrom) params.set("date_from", state.dateFrom);
   if (state.dateTo) params.set("date_to", state.dateTo);
+  if (state.showHidden) params.set("hidden", "1");
   params.set("limit", String(state.limit));
 
   renderActiveFilters();
@@ -54,7 +55,9 @@ function loadMore() {
 function renderResults(data, animate = true) {
   const results = data.results || [];
   const hasMore = results.length >= state.limit;
-  $("#listTitle").textContent = state.q ? `Results for “${state.q}”` : "Recent sessions";
+  $("#listTitle").textContent = state.showHidden
+    ? (state.q ? `Hidden \u00b7 \u201c${state.q}\u201d` : "Hidden sessions")
+    : (state.q ? `Results for \u201c${state.q}\u201d` : "Recent sessions");
   $("#listCount").textContent = results.length
     ? `${results.length}${hasMore ? "+" : ""} ${results.length === 1 ? "session" : "sessions"}`
     : "";
@@ -62,9 +65,13 @@ function renderResults(data, animate = true) {
   renderActiveFilters();
 
   if (!results.length) {
-    $("#results").innerHTML = `<div class="empty"><div class="big">${state.q ? icon("search", { size: 40 }) : icon("archive", { size: 40 })}</div>${
-      state.q ? "No conversations match. Try semantic mode or different words." : "Nothing here yet — re-scan or add a note."
-    }</div>`;
+    const emptyIcon = state.showHidden ? "eye-off" : state.q ? "search" : "archive";
+    const emptyMsg = state.showHidden
+      ? "No hidden sessions. Use Hide on a conversation to tuck it away here."
+      : state.q
+        ? "No conversations match. Try semantic mode or different words."
+        : "Nothing here yet \u2014 re-scan or add a note.";
+    $("#results").innerHTML = `<div class="empty"><div class="big">${icon(emptyIcon, { size: 40 })}</div>${emptyMsg}</div>`;
     return;
   }
 
@@ -101,6 +108,9 @@ export function cardHTML(r, gid = "", groupSize = 1) {
   const tags = (r.tags || []).slice(0, 4).map((t) => `<span class="t">${esc(t)}</span>`).join("");
   const dur = fmtDuration(r.duration_seconds);
   const cost = r.est_cost_usd ? fmtCost(r.est_cost_usd) : "";
+  const unhide = state.showHidden
+    ? `<button class="card-unhide" data-unhide="${esc(r.id)}" title="Unhide this conversation">${icon("eye", { size: 13 })} Unhide</button>`
+    : "";
   const dupe = groupSize > 1
     ? `<button class="dupe-badge" data-group="${gid}" title="Show ${groupSize - 1} more similar session${groupSize - 1 === 1 ? "" : "s"}">${icon("layers", { size: 13 })} ${groupSize}</button>`
     : "";
@@ -108,6 +118,7 @@ export function cardHTML(r, gid = "", groupSize = 1) {
     <div class="card" data-id="${esc(r.id)}"${gid ? ` data-group-rep="${gid}"` : ""}>
       <div class="card-top">
         <h3 class="card-title">${esc(r.title || "Untitled")}</h3>
+        ${unhide}
         ${dupe}
         ${score}
       </div>
@@ -127,12 +138,29 @@ function wireCards() {
   $$("#results .card").forEach((el) =>
     el.addEventListener("click", (e) => {
       if (e.target.closest(".dupe-badge")) return;
+      if (e.target.closest(".card-unhide")) return;
       openSession(el.dataset.id);
     })
   );
   $$("#results .dupe-badge").forEach((b) =>
     b.addEventListener("click", (e) => { e.stopPropagation(); toggleGroup(b); })
   );
+  $$("#results .card-unhide").forEach((b) =>
+    b.addEventListener("click", (e) => { e.stopPropagation(); unhideFromList(b.dataset.unhide); })
+  );
+}
+
+// Unhide straight from the hidden-sessions list, then refresh counts + list.
+async function unhideFromList(id) {
+  try {
+    await api(`/api/sessions/${encodeURIComponent(id)}/unhide`, { method: "POST" });
+    toast("Session unhidden");
+    loadStats();
+    loadFacets();
+    doSearch(true, { keepView: true });
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
 
 // Expand/collapse the near-duplicate sessions that sit behind a representative card.

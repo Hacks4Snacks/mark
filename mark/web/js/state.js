@@ -14,6 +14,9 @@ export const state = {
   dateFrom: "",
   dateTo: "",
   view: "list",
+  // When on, the list shows only manually hidden sessions so they can be
+  // reviewed and unhidden.
+  showHidden: false,
   currentId: null,
   currentCollectionId: null,
   limit: PAGE_SIZE,
@@ -43,5 +46,15 @@ export function showOnly(visibleId) {
 /** Hide the search sidebar and use a narrower content column (Collections views). */
 export function setLayoutWide(on) {
   const layout = $(".layout");
-  if (layout) layout.classList.toggle("layout--wide", on);
+  if (!layout) return;
+  layout.classList.toggle("layout--wide", on);
+  layout.classList.remove("layout--dash");
+}
+
+/** Hide the sidebar and use the full page width (the Usage dashboard). */
+export function setLayoutDash(on) {
+  const layout = $(".layout");
+  if (!layout) return;
+  layout.classList.toggle("layout--dash", on);
+  if (on) layout.classList.remove("layout--wide");
 }

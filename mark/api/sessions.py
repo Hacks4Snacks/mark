@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, Response
 
 from .. import exporting, render, search
 from ..repositories import sessions as sessions_repo
-from ..schemas import OkResponse, TagIn, TagResponse
+from ..schemas import HiddenResponse, OkResponse, TagIn, TagResponse
 
 router = APIRouter()
 
@@ -57,6 +57,30 @@ def api_session(session_id: str) -> dict[str, Any]:
 @router.get("/api/sessions/{session_id}/related")
 def api_related(session_id: str) -> list[dict[str, Any]]:
     return search.related_sessions(session_id)
+
+
+@router.post("/api/sessions/{session_id}/hide", response_model=HiddenResponse)
+def api_hide_session(session_id: str) -> dict[str, Any]:
+    """Hide a session from listings/aggregates without deleting it."""
+    if not sessions_repo.set_hidden(session_id, True):
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"ok": True, "hidden": True}
+
+
+@router.post("/api/sessions/{session_id}/unhide", response_model=HiddenResponse)
+def api_unhide_session(session_id: str) -> dict[str, Any]:
+    """Restore a previously hidden session."""
+    if not sessions_repo.set_hidden(session_id, False):
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"ok": True, "hidden": False}
+
+
+@router.delete("/api/sessions/{session_id}", response_model=OkResponse)
+def api_delete_session(session_id: str) -> dict[str, Any]:
+    """Permanently delete a session and tombstone it so a re-scan can't restore it."""
+    if not sessions_repo.purge(session_id):
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"ok": True}
 
 
 @router.get("/api/sessions/{session_id}/attachments/{doc_id}/download")

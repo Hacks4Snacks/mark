@@ -58,6 +58,10 @@ def test_migrations_backfill_pre_column_db(tmp_path):
     con.row_factory = sqlite3.Row
     try:
         con.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, "
+            "content_hash TEXT)"
+        )
+        con.execute(
             "CREATE TABLE tags (id INTEGER PRIMARY KEY, session_id TEXT, "
             "tag TEXT, score REAL DEFAULT 0)"
         )
@@ -70,12 +74,19 @@ def test_migrations_backfill_pre_column_db(tmp_path):
         con.commit()
         assert "manual" not in {r[1] for r in con.execute("PRAGMA table_info(tags)")}
         assert "thinking" not in {r[1] for r in con.execute("PRAGMA table_info(turns)")}
+        assert "hidden" not in {
+            r[1] for r in con.execute("PRAGMA table_info(sessions)")
+        }
 
         migrations.run_migrations(con)
         con.commit()
 
         assert "manual" in {r[1] for r in con.execute("PRAGMA table_info(tags)")}
         assert "thinking" in {r[1] for r in con.execute("PRAGMA table_info(turns)")}
+        assert "hidden" in {r[1] for r in con.execute("PRAGMA table_info(sessions)")}
+        assert con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tombstones'"
+        ).fetchone()
         version = con.execute("PRAGMA user_version").fetchone()[0]
         assert version == migrations.CURRENT_VERSION
     finally:

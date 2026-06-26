@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from . import search
+from . import search, visibility
 from .repositories import collections as repo
 
 
@@ -72,10 +72,14 @@ def _resolve_ids(
 
 
 def resolve_member_ids(coll: dict[str, Any]) -> set[str]:
-    """Effective member ids: (rule | includes) - excludes."""
+    """Effective member ids: (rule | includes) - excludes.
+
+    Hidden sessions and sessions from disabled sources are dropped so a
+    collection never resurfaces data the user has hidden everywhere else.
+    """
     rule = _parse_rule(coll.get("rule"))
     includes, excludes = _manual_members(coll["id"])
-    return _resolve_ids(rule, includes, excludes)
+    return visibility.filter_visible(_resolve_ids(rule, includes, excludes))
 
 
 def list_collections() -> list[dict[str, Any]]:

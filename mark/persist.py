@@ -37,10 +37,18 @@ def window_chunks(
 
 def write_session(cur, session: dict[str, Any]) -> None:
     sid = session["id"]
+    # A permanently deleted session is tombstoned; honor it here — the single
+    # chokepoint every source writes through — so a re-scan can't resurrect it.
+    if cur.execute("SELECT 1 FROM tombstones WHERE session_id = ?", (sid,)).fetchone():
+        return
     # Manual topics the user added survive re-ingest (which replaces the row).
     manual_tags = cur.execute(
         "SELECT tag, score FROM tags WHERE session_id = ? AND manual = 1", (sid,)
     ).fetchall()
+    # A user's hide choice is a preference, not session content, so it must also
+    # survive the row being replaced — otherwise a re-scan would unhide it.
+    prior = cur.execute("SELECT hidden FROM sessions WHERE id = ?", (sid,)).fetchone()
+    was_hidden = bool(prior["hidden"]) if prior else False
     # Replace any prior copy of this session (cascades to children).
     cur.execute("DELETE FROM sessions WHERE id = ?", (sid,))
     cur.execute("DELETE FROM search_index WHERE session_id = ?", (sid,))
@@ -79,6 +87,9 @@ def write_session(cur, session: dict[str, Any]) -> None:
             session["content_hash"],
         ),
     )
+    # Re-apply the preserved hide flag (the INSERT defaults it to visible).
+    if was_hidden:
+        cur.execute("UPDATE sessions SET hidden = 1 WHERE id = ?", (sid,))
 
     # User prompts carry the most search signal, so when a session exceeds the
     # per-session chunk cap we keep every turn's user text before spending the

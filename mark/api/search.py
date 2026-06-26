@@ -21,6 +21,7 @@ def api_search(
     date_to: str | None = None,
     sort: str = "recent",
     limit: int = 30,
+    hidden: bool = False,
 ) -> dict[str, Any]:
     tag_list = [t for t in (tags.split(",") if tags else []) if t]
     results = search.search(
@@ -33,6 +34,7 @@ def api_search(
         date_to=date_to,
         sort=sort,
         limit=max(1, min(limit, 500)),
+        only_hidden=hidden,
     )
     return {"query": q, "mode": mode, "count": len(results), "results": results}
 

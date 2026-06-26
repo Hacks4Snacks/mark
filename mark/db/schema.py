@@ -24,7 +24,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     tokens_estimated INTEGER DEFAULT 0,
     source_path   TEXT,
     content_hash  TEXT,
-    indexed_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    indexed_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    -- User-hidden sessions stay indexed but are filtered from listings and
+    -- aggregates until unhidden; never auto-deleted so re-scans can't fight it.
+    hidden        INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS turns (
@@ -125,6 +128,16 @@ CREATE TABLE IF NOT EXISTS collection_members (
     state         TEXT NOT NULL DEFAULT 'include',  -- 'include' | 'exclude'
     added_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     PRIMARY KEY (collection_id, session_id)
+);
+
+-- Permanently deleted sessions leave a tombstone so a background re-scan can't
+-- silently re-import them. Only the id (plus the hash/source at deletion time)
+-- is kept; everything else is reclaimed.
+CREATE TABLE IF NOT EXISTS tombstones (
+    session_id   TEXT PRIMARY KEY,
+    source       TEXT,
+    content_hash TEXT,
+    deleted_at   TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);

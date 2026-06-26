@@ -171,6 +171,11 @@ function setup() {
 
   $("#clearFilters").addEventListener("click", clearAllFilters);
 
+  $("#showHidden")?.addEventListener("change", (e) => {
+    state.showHidden = e.target.checked;
+    run();
+  });
+
   $("#activeFilters").addEventListener("click", (e) => {
     if (e.target.closest("#afClear")) { clearAllFilters(); return; }
     const chip = e.target.closest(".af-chip"); if (!chip) return;
@@ -188,11 +193,12 @@ function setup() {
   $("#brandHome").addEventListener("click", () => {
     state.q = ""; $("#search").value = "";
     state.source = null; state.repo = null; state.tags.clear();
+    state.showHidden = false; if ($("#showHidden")) $("#showHidden").checked = false;
     syncFilterUI(); showList(); run();
   });
 
   $("#reindexBtn").addEventListener("click", async () => {
-    try { await api("/api/reindex", { method: "POST" }); toast("Re-scanning Copilot history..."); pollStatus(); }
+    try { await api("/api/reindex", { method: "POST" }); toast("Re-scanning Session History"); pollStatus(); }
     catch (e) { toast(e.message, true); }
   });
 

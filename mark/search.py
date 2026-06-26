@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from . import db, embeddings
+from . import db, embeddings, visibility
 
 _RRF_K = 60
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
@@ -173,6 +173,7 @@ def search(
     sort: str = "recent",
     limit: int = 30,
     only_ids: set[str] | None = None,
+    only_hidden: bool = False,
 ) -> list[dict[str, Any]]:
     query = (query or "").strip()
     if not query:
@@ -185,6 +186,7 @@ def search(
             sort=sort,
             limit=limit,
             only_ids=only_ids,
+            only_hidden=only_hidden,
         )
 
     allowed = _allowed_sessions(repo, source, tags, date_from, date_to)
@@ -217,7 +219,7 @@ def search(
         return []
 
     sids = [sid for sid, _ in ordered]
-    sessions = _load_sessions(sids)
+    sessions = _load_sessions(sids, only_hidden=only_hidden)
     chunk_text = _load_chunk_text([cid for _, (_, cid) in ordered])
 
     results = []
@@ -267,6 +269,7 @@ def browse(
     sort: str = "recent",
     limit: int = 50,
     only_ids: set[str] | None = None,
+    only_hidden: bool = False,
 ) -> list[dict[str, Any]]:
     allowed = _allowed_sessions(repo, source, tags, date_from, date_to)
     if only_ids is not None:
@@ -279,14 +282,19 @@ def browse(
         "title": "title COLLATE NOCASE ASC",
     }.get(sort, "COALESCE(updated_at, created_at) DESC")
 
-    sql = "SELECT * FROM sessions"
+    clauses: list[str] = []
     params: list[Any] = []
     if allowed is not None:
         if not allowed:
             return []
         placeholders = ",".join("?" * len(allowed))
-        sql += f" WHERE id IN ({placeholders})"
-        params = list(allowed)
+        clauses.append(f"id IN ({placeholders})")
+        params.extend(allowed)
+    vclause, vparams = visibility.sql_where(only_hidden=only_hidden)
+    clauses.append(vclause)
+    params.extend(vparams)
+
+    sql = "SELECT * FROM sessions WHERE " + " AND ".join(clauses)
     sql += f" ORDER BY {order} LIMIT ?"
     params.append(limit)
 
@@ -299,16 +307,19 @@ def browse(
     return rows
 
 
-def _load_sessions(ids: list[str]) -> dict[str, dict[str, Any]]:
+def _load_sessions(
+    ids: list[str], *, only_hidden: bool = False
+) -> dict[str, dict[str, Any]]:
     if not ids:
         return {}
+    vclause, vparams = visibility.sql_where(only_hidden=only_hidden)
     with db.cursor() as cur:
         placeholders = ",".join("?" * len(ids))
         rows = [
             dict(r)
             for r in cur.execute(
-                f"SELECT * FROM sessions WHERE id IN ({placeholders})",
-                ids,
+                f"SELECT * FROM sessions WHERE id IN ({placeholders}) AND {vclause}",
+                [*ids, *vparams],
             ).fetchall()
         ]
     attach_tags(rows)
@@ -346,31 +357,40 @@ def _load_chunk_text(ids: list[int]) -> dict[int, str]:
 
 
 def facets() -> dict[str, Any]:
+    vclause, vparams = visibility.sql_where()
+    sclause, sparams = visibility.sql_where("s")
     with db.cursor() as cur:
         repos = [
             {"name": r["repository"], "count": r["n"]}
             for r in cur.execute(
                 "SELECT repository, COUNT(*) n FROM sessions "
-                "WHERE repository IS NOT NULL "
-                "GROUP BY repository ORDER BY n DESC"
+                f"WHERE repository IS NOT NULL AND {vclause} "
+                "GROUP BY repository ORDER BY n DESC",
+                vparams,
             ).fetchall()
         ]
         tags = [
             {"tag": r["tag"], "count": r["n"]}
             for r in cur.execute(
                 "SELECT t.tag, COUNT(*) n FROM tags t "
-                "JOIN sessions s ON s.id = t.session_id "
-                "GROUP BY t.tag ORDER BY n DESC LIMIT 40"
+                f"JOIN sessions s ON s.id = t.session_id AND {sclause} "
+                "GROUP BY t.tag ORDER BY n DESC LIMIT 40",
+                sparams,
             ).fetchall()
         ]
         sources = [
             {"source": r["source"], "count": r["n"]}
             for r in cur.execute(
-                "SELECT source, COUNT(*) n FROM sessions GROUP BY source"
+                f"SELECT source, COUNT(*) n FROM sessions WHERE {vclause} "
+                "GROUP BY source",
+                vparams,
             ).fetchall()
         ]
         rng = cur.execute(
-            "SELECT MIN(COALESCE(created_at, updated_at)) mn, MAX(COALESCE(updated_at, created_at)) mx FROM sessions"
+            "SELECT MIN(COALESCE(created_at, updated_at)) mn, "
+            "MAX(COALESCE(updated_at, created_at)) mx FROM sessions "
+            f"WHERE {vclause}",
+            vparams,
         ).fetchone()
     return {
         "repositories": repos,
@@ -472,13 +492,15 @@ def related_sessions(session_id: str, limit: int = 8) -> list[dict[str, Any]]:
     ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)[:limit]
     order = [sid for sid, _ in ranked]
 
+    vclause, vparams = visibility.sql_where()
     with db.cursor() as cur:
         rows = {
             r["id"]: r
             for r in cur.execute(
                 "SELECT id, title, source, repository, created_at, updated_at "
-                f"FROM sessions WHERE id IN ({','.join('?' * len(order))})",
-                order,
+                f"FROM sessions WHERE id IN ({','.join('?' * len(order))}) "
+                f"AND {vclause}",
+                [*order, *vparams],
             ).fetchall()
         }
     out: list[dict[str, Any]] = []

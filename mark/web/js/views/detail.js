@@ -5,12 +5,12 @@
 
 import { api } from "../api.js";
 import { showOnly, setLayoutWide, state } from "../state.js";
-import { loadFacets } from "../sidebar.js";
+import { loadFacets, loadStats } from "../sidebar.js";
 import {
   $, $$, esc, fmtBytes, fmtCost, fmtDate, fmtDuration, fmtTokens, srcMeta, toast, withTransition,
 } from "../utils.js";
 import { icon } from "../icons.js";
-import { showList } from "./list.js";
+import { doSearch, showList } from "./list.js";
 import { openCollMenu } from "./collections.js";
 
 let detailScrollHandler = null; // active reading-progress listener
@@ -33,6 +33,7 @@ function renderDetail(s) {
   const view = $("#detailView");
   window.scrollTo({ top: 0, behavior: "smooth" });
 
+  const isHidden = !!s.hidden;
   const manualSet = new Set(s.manual_tags || []);
   const meta = [
     `<span class="pill src-${s.source}">${srcMeta(s.source).icon} ${esc(srcMeta(s.source).label)}</span>`,
@@ -145,6 +146,8 @@ function renderDetail(s) {
           <button class="btn btn-ghost" id="addToColl" title="Add this conversation to a collection">${icon("plus")} Collection</button>
           <button class="btn btn-ghost" id="copyLink" title="Copy a link to this conversation">${icon("link")} Link</button>
           <a class="btn btn-ghost" id="exportMd" href="/api/sessions/${encodeURIComponent(s.id)}/export.md" download title="Download as Markdown">${icon("download")} Markdown</a>
+          <button class="btn btn-ghost${isHidden ? " is-hidden" : ""}" id="hideBtn" title="${isHidden ? "Unhide this conversation" : "Hide this conversation from listings"}">${icon(isHidden ? "eye" : "eye-off")} ${isHidden ? "Unhide" : "Hide"}</button>
+          <button class="btn btn-ghost detail-delete" id="deleteBtn" title="Permanently delete this conversation">${icon("trash")} Delete</button>
         </div>
       </div>
       <h1>${esc(s.title || "Untitled")}</h1>
@@ -169,6 +172,30 @@ function renderDetail(s) {
     const url = location.origin + location.pathname + "#/session/" + encodeURIComponent(s.id);
     try { await navigator.clipboard.writeText(url); toast("Link copied"); }
     catch (_) { toast("Copy failed", true); }
+  });
+  $("#hideBtn")?.addEventListener("click", async () => {
+    const willHide = !s.hidden;
+    try {
+      await api(`/api/sessions/${encodeURIComponent(s.id)}/${willHide ? "hide" : "unhide"}`, { method: "POST" });
+      s.hidden = willHide ? 1 : 0;
+      toast(willHide ? "Session hidden" : "Session unhidden");
+      // Hidden sessions stay reachable here, but counts/facets shift, so refresh.
+      loadStats();
+      loadFacets();
+      renderDetail(s);
+    } catch (e) { toast(e.message, true); }
+  });
+  $("#deleteBtn")?.addEventListener("click", async () => {
+    const name = s.title || "this conversation";
+    if (!window.confirm(`Permanently delete \u201C${name}\u201D? This removes it for good and keeps it from being re-imported on the next scan. This cannot be undone \u2014 use Hide if you only want it out of the way.`)) return;
+    try {
+      await api(`/api/sessions/${encodeURIComponent(s.id)}`, { method: "DELETE" });
+      toast("Session permanently deleted");
+      loadStats();
+      loadFacets();
+      showList();
+      doSearch(true, { keepView: true });
+    } catch (e) { toast(e.message, true); }
   });
   setupReading();
   $$("#detailView .copy-btn").forEach((b) =>

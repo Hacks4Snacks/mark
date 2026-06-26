@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import db
+from .. import db, visibility
 
 
 def source_counts() -> dict[str, int]:
-    """Number of sessions per ``source`` string."""
+    """Number of sessions per ``source`` string.
+
+    Intentionally unfiltered: the Sources page shows already-indexed counts even
+    for disabled sources so the user can see what re-enabling would bring back.
+    """
     with db.cursor() as cur:
         return {
             r["source"]: r["n"]
@@ -18,26 +22,42 @@ def source_counts() -> dict[str, int]:
 
 def overview() -> dict[str, Any]:
     """Headline counts and aggregates for the sidebar stat cards."""
+    vclause, vparams = visibility.sql_where()
+    visible_subq = f"(SELECT id FROM sessions WHERE {vclause})"
     with db.cursor() as cur:
         sources = {
             r["source"]: r["n"]
             for r in cur.execute(
-                "SELECT source, COUNT(*) n FROM sessions GROUP BY source"
+                f"SELECT source, COUNT(*) n FROM sessions WHERE {vclause} "
+                "GROUP BY source",
+                vparams,
             ).fetchall()
         }
-        visible = cur.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-        turns = cur.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
-        files = cur.execute(
-            "SELECT COUNT(DISTINCT file_path) FROM session_files"
+        visible = cur.execute(
+            f"SELECT COUNT(*) FROM sessions WHERE {vclause}", vparams
         ).fetchone()[0]
-        tags = cur.execute("SELECT COUNT(DISTINCT tag) FROM tags").fetchone()[0]
+        turns = cur.execute(
+            f"SELECT COUNT(*) FROM turns WHERE session_id IN {visible_subq}", vparams
+        ).fetchone()[0]
+        files = cur.execute(
+            "SELECT COUNT(DISTINCT file_path) FROM session_files "
+            f"WHERE session_id IN {visible_subq}",
+            vparams,
+        ).fetchone()[0]
+        tags = cur.execute(
+            f"SELECT COUNT(DISTINCT tag) FROM tags WHERE session_id IN {visible_subq}",
+            vparams,
+        ).fetchone()[0]
         agg = cur.execute(
             "SELECT COALESCE(SUM(est_cost_usd),0) c, COALESCE(SUM(premium_requests),0) p, "
-            "COALESCE(SUM(duration_seconds),0) d FROM sessions"
+            f"COALESCE(SUM(duration_seconds),0) d FROM sessions WHERE {vclause}",
+            vparams,
         ).fetchone()
         rng = cur.execute(
             "SELECT MIN(COALESCE(created_at, updated_at)) mn, "
-            "MAX(COALESCE(updated_at, created_at)) mx FROM sessions"
+            "MAX(COALESCE(updated_at, created_at)) mx FROM sessions "
+            f"WHERE {vclause}",
+            vparams,
         ).fetchone()
     return {
         "sessions": visible,
