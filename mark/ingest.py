@@ -124,11 +124,19 @@ def ingest_all(
     result = {"added": 0, "updated": 0, "skipped": 0}
     result.update(counts)
 
-    if result.get("added") or result.get("updated"):
+    changed = bool(result.get("added") or result.get("updated"))
+    if changed:
         db.set_meta("last_ingest", datetime.now(timezone.utc).isoformat())
 
     if do_embed:
-        _embed_pending(progress)
+        # Only scan for chunks needing vectors when something actually changed
+        # (or a rebuild/model switch invalidated them, or a prior embed pass was
+        # interrupted). Otherwise every idle sync would run a full window-function
+        # scan of the chunks table just to discover there is nothing to do.
+        if changed or rebuild or model_changed or db.get_meta("embed_pending") == "1":
+            db.set_meta("embed_pending", "1")
+            _embed_pending(progress)
+            db.set_meta("embed_pending", "0")
         db.set_meta("embed_model", current_model)
     if rebuild:
         # A full rebuild deletes many rows; reclaim the freed pages.
@@ -184,8 +192,14 @@ def import_export(
                 progress(f"Imported {n} {src.key} conversations...")
         conn.commit()
 
-    if do_embed:
+    # Embed only when this import actually wrote something (or a prior pass was
+    # interrupted), so re-importing an unchanged export doesn't rescan chunks.
+    if do_embed and (
+        counts["added"] or counts["updated"] or db.get_meta("embed_pending") == "1"
+    ):
+        db.set_meta("embed_pending", "1")
         _embed_pending(progress)
+        db.set_meta("embed_pending", "0")
         db.set_meta("embed_model", embeddings.get_embedder().name)
     db.set_meta("last_ingest", datetime.now(timezone.utc).isoformat())
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
-from ..persist import write_session
+from ..persist import load_file_signatures, record_file_signature, write_session
 from .base import (
     FENCE_RE,
     URL_RE,
@@ -404,9 +404,22 @@ class ClineSource(WatchedSource):
             **(cfg.options.get("extensions") or {}),
         }
         counts = {"added": 0, "updated": 0, "skipped": 0}
+        sigs = load_file_signatures(cur)
         seen = 0
         for task_dir, source in _iter_cline_task_dirs(cfg.roots, ext_map):
+            sp = str(task_dir)
+            try:
+                st = (task_dir / "api_conversation_history.json").stat()
+            except OSError:
+                continue
+            sig = f"{st.st_mtime_ns}:{st.st_size}"
+            # The content hash is derived solely from api_conversation_history.json,
+            # so an unchanged file can't yield a changed session — skip the parse.
+            if not rebuild and sigs.get(sp) == sig:
+                counts["skipped"] += 1
+                continue
             session = _parse_cline_task(task_dir, source)
+            record_file_signature(cur, sp, sig)
             if not session:
                 continue
             prior = existing.get(session["id"])

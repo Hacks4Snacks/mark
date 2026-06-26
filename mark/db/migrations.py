@@ -38,6 +38,14 @@ def _add_tombstones_table(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_source_file_stat_table(conn: sqlite3.Connection) -> None:
+    """Add ``source_file_stat`` so incremental re-scans can skip unchanged files."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS source_file_stat ("
+        "path TEXT PRIMARY KEY, signature TEXT NOT NULL)"
+    )
+
+
 # Ordered list of migrations. Append new ones; never reorder or delete.
 # The 1-based index of a migration is its schema version.
 MIGRATIONS: list[Migration] = [
@@ -45,6 +53,7 @@ MIGRATIONS: list[Migration] = [
     _add_turns_thinking_column,
     _add_sessions_hidden_column,
     _add_tombstones_table,
+    _add_source_file_stat_table,
 ]
 
 CURRENT_VERSION = len(MIGRATIONS)

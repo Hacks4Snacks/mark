@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
-from ..persist import write_session
+from ..persist import load_file_signatures, record_file_signature, write_session
 from .base import (
     FENCE_RE,
     URL_RE,
@@ -485,9 +485,22 @@ class VSCodeSource(WatchedSource):
         progress: ProgressCb | None = None,
     ) -> dict[str, int]:
         wsmap = load_workspace_map(cfg.roots)
+        sigs = load_file_signatures(cur)
         added = updated = skipped = 0
         for path in iter_session_paths(cfg.roots):
+            sp = str(path)
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            sig = f"{st.st_mtime_ns}:{st.st_size}"
+            # An unchanged file was already parsed and indexed on a prior run, so
+            # skip re-reading and re-hashing it (the expensive part of a re-scan).
+            if not rebuild and sigs.get(sp) == sig:
+                skipped += 1
+                continue
             session = parse_session(path, wsmap)
+            record_file_signature(cur, sp, sig)  # remember this version either way
             if not session:
                 continue
             prior = existing.get(session["id"])

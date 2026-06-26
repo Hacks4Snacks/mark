@@ -65,11 +65,14 @@ def start_reindex(rebuild: bool = False) -> bool:
 
 
 def _sync_loop() -> None:
-    """Import on startup, then re-import whenever a session changes or ends.
+    """Import on startup, then re-import once a source change settles.
 
-    Cheap source fingerprints are compared every ``SYNC_INTERVAL`` seconds; a
-    real (incremental) import only runs when something actually changed, so an
-    idle machine does almost no work.
+    Cheap source fingerprints are compared every ``SYNC_INTERVAL`` seconds, but a
+    real (incremental) import only runs after a change has *stabilised* for a
+    full interval. A session that is actively being written churns its SQLite
+    write-ahead log (and so its fingerprint) on every tick; debouncing on
+    stability means we sync it once it pauses or ends rather than re-indexing
+    continuously while it is in use — which is what spiked CPU before.
     """
     try:
         last_fp = ingest.sources_fingerprint()
@@ -77,14 +80,23 @@ def _sync_loop() -> None:
         last_fp = ""
     start_reindex(rebuild=False)  # pick up anything new since last launch
 
+    pending_fp: str | None = None
     while not _sync_stop.wait(config.SYNC_INTERVAL):
         try:
             fp = ingest.sources_fingerprint()
         except Exception:
             continue
-        if fp and fp != last_fp:
+        if not fp or fp == last_fp:
+            pending_fp = None  # nothing new (or settled back to the synced state)
+            continue
+        if fp == pending_fp:
+            # Changed, then held steady for a full interval: the source has
+            # paused or ended, so an incremental import is now worthwhile.
             last_fp = fp
+            pending_fp = None
             start_reindex(rebuild=False)
+        else:
+            pending_fp = fp  # newly changed (or still changing) — let it settle
 
 
 def start() -> None:

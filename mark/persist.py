@@ -35,6 +35,30 @@ def window_chunks(
     return chunks
 
 
+def load_file_signatures(cur, prefix: str = "") -> dict[str, str]:
+    """Cached change signatures keyed by source-file path.
+
+    Lets a source's incremental ``ingest`` decide a file is unchanged from a
+    cheap ``stat`` alone and skip re-reading/re-hashing it. Pass ``prefix`` to
+    keep only synthetic keys for one source (e.g. ``"cli:"``); the table is small
+    (one row per source file), so it is read in full and filtered in memory.
+    """
+    rows = cur.execute("SELECT path, signature FROM source_file_stat").fetchall()
+    sigs = {r["path"]: r["signature"] for r in rows}
+    if prefix:
+        return {k: v for k, v in sigs.items() if k.startswith(prefix)}
+    return sigs
+
+
+def record_file_signature(cur, path: str, signature: str) -> None:
+    """Remember a file's cheap change signature for the next incremental scan."""
+    cur.execute(
+        "INSERT INTO source_file_stat(path, signature) VALUES(?, ?) "
+        "ON CONFLICT(path) DO UPDATE SET signature = excluded.signature",
+        (path, signature),
+    )
+
+
 def write_session(cur, session: dict[str, Any]) -> None:
     sid = session["id"]
     # A permanently deleted session is tombstoned; honor it here — the single

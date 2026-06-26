@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
-from ..persist import write_session
+from ..persist import load_file_signatures, record_file_signature, write_session
 from .base import (
     FENCE_RE,
     URL_RE,
@@ -110,6 +110,47 @@ def _hash_cli_session(updated_at: str | None, turns: list[dict[str, Any]]) -> st
         h.update((t["user_message"] or "").encode("utf-8", "ignore"))
         h.update((t["assistant_response"] or "").encode("utf-8", "ignore"))
     return h.hexdigest()
+
+
+def _cli_session_signature(sid: str, updated_at: str | None, state_dir: Path) -> str:
+    """A cheap per-session change signature.
+
+    Combines the store's ``updated_at`` with the size/mtime of the authoritative
+    ``events.jsonl`` the CLI appends to as a session runs. It changes whenever a
+    turn is added (to the store or the event log), so an unchanged signature
+    means an unchanged session that need not be re-parsed.
+    """
+    ev = state_dir / sid / "events.jsonl"
+    try:
+        st = ev.stat()
+        ev_part = f"{st.st_mtime_ns}:{st.st_size}"
+    except OSError:
+        ev_part = "0:0"
+    return f"{updated_at or ''}|{ev_part}"
+
+
+def _live_session_signatures(src: Path, state_dir: Path) -> dict[str, str] | None:
+    """Per-session signatures read straight from the (possibly live) store.
+
+    Reads only session ids + ``updated_at`` over a read-only connection (no
+    whole-store backup) and pairs each with its events.jsonl stat. Returns
+    ``None`` if the store can't be opened, so the caller falls back to a full pass.
+    """
+    try:
+        ro = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+        ro.row_factory = sqlite3.Row
+    except sqlite3.Error:
+        return None
+    try:
+        rows = ro.execute("SELECT id, updated_at FROM sessions").fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        ro.close()
+    return {
+        r["id"]: _cli_session_signature(r["id"], r["updated_at"], state_dir)
+        for r in rows
+    }
 
 
 def _snapshot_store(src: Path) -> Path:
@@ -390,6 +431,19 @@ class CopilotCliSource(WatchedSource):
             return counts
         state_dir = Path(cfg.options.get("state_dir") or config.SESSION_STATE_DIR)
 
+        sigs = load_file_signatures(cur, prefix="cli:")
+        # Cheap pre-check on the live store (read-only, no backup): if no session's
+        # signature changed since the last successful ingest, there is nothing to
+        # do — so skip the expensive whole-store SQLite backup entirely.
+        live_sigs = _live_session_signatures(src, state_dir)
+        if (
+            live_sigs is not None
+            and not rebuild
+            and all(sigs.get(f"cli:{sid}") == sig for sid, sig in live_sigs.items())
+        ):
+            counts["skipped"] = len(live_sigs)
+            return counts
+
         snapshot = _snapshot_store(src)
         ro = sqlite3.connect(snapshot)
         ro.row_factory = sqlite3.Row
@@ -411,6 +465,16 @@ class CopilotCliSource(WatchedSource):
             seen = 0
             for s in sessions:
                 sid = s["id"]
+                sig = _cli_session_signature(sid, s["updated_at"], state_dir)
+                # Skip the events.jsonl re-parse + re-hash for an already-indexed
+                # session whose cheap signature is unchanged.
+                if (
+                    not rebuild
+                    and existing.get(sid) is not None
+                    and sigs.get(f"cli:{sid}") == sig
+                ):
+                    counts["skipped"] += 1
+                    continue
                 events = _events_to_turns(sid, state_dir)
                 if events and events[0]:
                     turns, files_modified = events
@@ -422,6 +486,7 @@ class CopilotCliSource(WatchedSource):
                 content_hash = _hash_cli_session(s["updated_at"], turns)
                 prior = existing.get(sid)
                 if prior is not None and prior == content_hash and not rebuild:
+                    record_file_signature(cur, f"cli:{sid}", sig)
                     counts["skipped"] += 1
                     continue
                 metrics = _read_session_metrics(sid, state_dir) or estimate_metrics(
@@ -464,6 +529,7 @@ class CopilotCliSource(WatchedSource):
                     "attachments": attachments,
                 }
                 write_session(cur, session)
+                record_file_signature(cur, f"cli:{sid}", sig)
                 counts["added" if prior is None else "updated"] += 1
                 seen += 1
                 if progress and seen % 100 == 0:

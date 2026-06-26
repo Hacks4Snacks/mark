@@ -140,6 +140,15 @@ CREATE TABLE IF NOT EXISTS tombstones (
     deleted_at   TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- Cheap per-file change signatures so an incremental re-scan can skip files
+-- whose contents are unchanged without re-reading and re-hashing them. ``path``
+-- is a real source-file path or a synthetic key (e.g. ``cli:<session_id>``);
+-- ``signature`` is an opaque stat-derived string compared verbatim.
+CREATE TABLE IF NOT EXISTS source_file_stat (
+    path       TEXT PRIMARY KEY,
+    signature  TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks(session_id);
 CREATE INDEX IF NOT EXISTS idx_files_session ON session_files(session_id);

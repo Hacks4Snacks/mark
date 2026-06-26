@@ -467,3 +467,93 @@ def test_cursor_indexes_composer_from_vscdb(tmp_path):
     assert s["turns"][0]["user_message"].startswith("how do I fix")
     assert "refresh token" in s["turns"][0]["assistant_response"]
     assert "curl /refresh" in s["turns"][0]["assistant_response"]
+
+
+def test_vscode_reingest_skips_unchanged_via_stat_cache(tmp_path):
+    """A second scan of an unchanged file is skipped from its cheap stat alone,
+    without re-parsing — and the signature is cached for next time."""
+    from mark import config, db
+    from mark.sources.vscode import VSCodeSource
+
+    root = tmp_path / "workspaceStorage"
+    path = root / "ws1" / "chatSessions" / "s.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "sessionId": "vs-1",
+                "creationDate": 1,
+                "requests": [
+                    {"message": {"text": "hello"}, "response": [{"value": "hi"}]}
+                ],
+            }
+        )
+    )
+    cfg = config.SourceConfig(key="vscode", roots=[root])
+    src = VSCodeSource()
+    with db.connect() as conn:
+        cur = conn.cursor()
+        first = src.ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        second = src.ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        cached = cur.execute(
+            "SELECT signature FROM source_file_stat WHERE path = ?", (str(path),)
+        ).fetchone()
+    assert first == {"added": 1, "updated": 0, "skipped": 0}
+    assert second == {"added": 0, "updated": 0, "skipped": 1}
+    assert cached is not None
+
+
+def test_copilot_cli_reingest_skips_snapshot_when_unchanged(tmp_path):
+    """With no store change, a re-scan skips the whole-store backup + parse and
+    reports the session as skipped via the read-only pre-check."""
+    from mark import config, db
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    store = tmp_path / "session-store.db"
+    con = sqlite3.connect(store)
+    con.execute(
+        "CREATE TABLE sessions (id TEXT, cwd TEXT, repository TEXT, summary TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    con.execute(
+        "CREATE TABLE turns (session_id TEXT, turn_index INTEGER, user_message TEXT, "
+        "assistant_response TEXT, timestamp TEXT)"
+    )
+    con.execute(
+        "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+        (
+            "sess1",
+            "/repo",
+            None,
+            None,
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-02T00:00:00+00:00",
+        ),
+    )
+    con.execute(
+        "INSERT INTO turns VALUES (?,?,?,?,?)",
+        ("sess1", 0, "hello", _ASSISTANT_REPLY, "2026-01-01T00:00:00+00:00"),
+    )
+    con.commit()
+    con.close()
+
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(tmp_path / "no-state")},
+    )
+    src = CopilotCliSource()
+    with db.connect() as conn:
+        cur = conn.cursor()
+        first = src.ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        existing = {
+            r["id"]: r["content_hash"]
+            for r in cur.execute("SELECT id, content_hash FROM sessions")
+        }
+        second = src.ingest(cur, existing, cfg, rebuild=False)
+        conn.commit()
+    assert first["added"] == 1
+    assert second == {"added": 0, "updated": 0, "skipped": 1}
