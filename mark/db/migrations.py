@@ -12,7 +12,7 @@ version, so a fresh database fast-forwards to the latest version with no work.
 from __future__ import annotations
 
 import sqlite3
-from typing import Callable
+from collections.abc import Callable
 
 Migration = Callable[[sqlite3.Connection], None]
 

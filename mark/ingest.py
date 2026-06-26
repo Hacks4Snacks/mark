@@ -8,7 +8,7 @@ from . import config, db, embeddings, persist
 from .sources import IMPORT_SOURCES, WATCHED_SOURCES
 from .sources.base import ProgressCb
 
-__all__ = ["ingest_all", "sources_fingerprint", "import_export"]
+__all__ = ["import_export", "ingest_all", "sources_fingerprint"]
 
 
 def _embed_pending(progress: ProgressCb | None = None, batch: int = 256) -> int:

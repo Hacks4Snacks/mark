@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 from mark.sources import IMPORT_SOURCES, WATCHED_SOURCES, vscode
 from mark.sources.chatgpt import ChatGptSource
@@ -176,6 +177,152 @@ def test_vscode_legacy_json_still_parses(tmp_path):
     assert s["turns"][0]["assistant_response"] == "hi there"
 
 
+def test_vscode_inline_reference_parts_are_spliced(tmp_path):
+    """Agent turns interleave prose and inlineReference parts for symbol links."""
+    path = tmp_path / "workspaceStorage" / "ws1" / "chatSessions" / "agent.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {
+                "kind": 0,
+                "v": {"sessionId": "agent-inline", "creationDate": 1, "requests": []},
+            },
+            {
+                "kind": 2,
+                "v": [
+                    {
+                        "requestId": "r1",
+                        "message": {"text": "fix it"},
+                        "response": [
+                            {"value": "The status payload now carries "},
+                            {
+                                "kind": "inlineReference",
+                                "inlineReference": {
+                                    "name": "resume_cmd",
+                                    "location": {
+                                        "uri": {
+                                            "path": "/repo/mark/schemas.py",
+                                            "scheme": "file",
+                                        }
+                                    },
+                                },
+                            },
+                            {"value": " in the response."},
+                        ],
+                    }
+                ],
+            },
+        ],
+    )
+    turn = vscode.parse_session(path, {})["turns"][0]
+    assert turn["assistant_response"] == (
+        "The status payload now carries `resume_cmd` in the response."
+    )
+    assert "/repo/mark/schemas.py" in turn["files"]
+
+
+def test_vscode_tool_invocation_messages_are_captured(tmp_path):
+    path = tmp_path / "workspaceStorage" / "ws1" / "chatSessions" / "tools.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {
+                "kind": 0,
+                "v": {"sessionId": "agent-tools", "creationDate": 1, "requests": []},
+            },
+            {
+                "kind": 2,
+                "v": [
+                    {
+                        "requestId": "r1",
+                        "message": {"text": "read the file"},
+                        "response": [
+                            {"value": "I'll inspect the module."},
+                            {
+                                "kind": "toolInvocationSerialized",
+                                "toolId": "copilot_readFile",
+                                "isComplete": True,
+                                "invocationMessage": {
+                                    "value": "Reading [](file:///repo/mark/persist.py)",
+                                    "uris": {
+                                        "file:///repo/mark/persist.py": {
+                                            "path": "/repo/mark/persist.py",
+                                            "scheme": "file",
+                                        }
+                                    },
+                                },
+                                "pastTenseMessage": {
+                                    "value": "Read [](file:///repo/mark/persist.py)",
+                                    "uris": {
+                                        "file:///repo/mark/persist.py": {
+                                            "path": "/repo/mark/persist.py",
+                                            "scheme": "file",
+                                        }
+                                    },
+                                },
+                            },
+                        ],
+                    }
+                ],
+            },
+        ],
+    )
+    turn = vscode.parse_session(path, {})["turns"][0]
+    assert "I'll inspect the module." in turn["assistant_response"]
+    assert "Read `persist.py`" in turn["assistant_response"]
+    assert turn["tools"] == ["copilot_readFile"]
+    assert "/repo/mark/persist.py" in turn["files"]
+
+
+def test_vscode_text_edit_groups_become_code_fences(tmp_path):
+    path = tmp_path / "workspaceStorage" / "ws1" / "chatSessions" / "edits.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {
+                "kind": 0,
+                "v": {"sessionId": "agent-edits", "creationDate": 1, "requests": []},
+            },
+            {
+                "kind": 2,
+                "v": [
+                    {
+                        "requestId": "r1",
+                        "message": {"text": "apply fix"},
+                        "response": [
+                            {"value": "Applying the change."},
+                            {"value": "\n```\n\n```\n"},
+                            {
+                                "kind": "codeblockUri",
+                                "uri": {
+                                    "path": "/repo/mark/persist.py",
+                                    "scheme": "file",
+                                },
+                            },
+                            {
+                                "kind": "textEditGroup",
+                                "uri": {
+                                    "path": "/repo/mark/persist.py",
+                                    "scheme": "file",
+                                },
+                                "edits": [[{"text": "def write_session():\n    pass\n"}]],
+                            },
+                            {"value": "\n```\n\n```\n"},
+                        ],
+                    }
+                ],
+            },
+        ],
+    )
+    turn = vscode.parse_session(path, {})["turns"][0]
+    assert "Applying the change." in turn["assistant_response"]
+    assert "```py\ndef write_session():\n    pass\n```" in turn["assistant_response"]
+    assert "```\n\n```" not in turn["assistant_response"]
+    assert turn["code_blocks"] == [
+        {"language": "py", "content": "def write_session():\n    pass"}
+    ]
+
+
 def test_vscode_discovers_jsonl_and_empty_window(tmp_path):
     """Discovery must find ``.json``/``.jsonl`` workspace chats and empty-window chats."""
     ws = tmp_path / "workspaceStorage"
@@ -187,3 +334,136 @@ def test_vscode_discovers_jsonl_and_empty_window(tmp_path):
     (ew / "c.jsonl").write_text("{}")
     found = {p.name for p in vscode.iter_session_paths([ws])}
     assert {"a.json", "b.jsonl", "c.jsonl"} <= found
+
+
+_ASSISTANT_REPLY = "Use a refresh token.\n```bash\ncurl /refresh\n```"
+
+
+def test_cline_parses_task_history(tmp_path):
+    """A Cline task dir (api_conversation_history.json) parses to one costed turn."""
+    from mark.sources.cline import _parse_cline_task
+
+    task_dir = tmp_path / "1700000000000"  # digit name => recoverable timestamp
+    task_dir.mkdir()
+    messages = [
+        {
+            "role": "user",
+            "content": "how do I fix the auth token timeout",
+            "ts": 1700000000000,
+        },
+        {"role": "assistant", "content": _ASSISTANT_REPLY, "ts": 1700000001000},
+    ]
+    (task_dir / "api_conversation_history.json").write_text(json.dumps(messages))
+
+    s = _parse_cline_task(task_dir, "cline")
+    assert s is not None
+    assert s["id"] == "cline-1700000000000"
+    assert s["source"] == "cline"
+    assert len(s["turns"]) == 1
+    turn = s["turns"][0]
+    assert turn["user_message"].startswith("how do I fix")
+    assert "refresh token" in turn["assistant_response"]
+    assert turn["code_blocks"] == [{"language": "bash", "content": "curl /refresh"}]
+    assert turn["thinking"] == ""  # all adapters emit the thinking key
+    assert s["metrics"]["tokens_estimated"] == 1
+    assert s["created_at"] <= s["updated_at"]
+
+
+def test_copilot_cli_indexes_store_sessions(tmp_path):
+    """The Copilot CLI store (sessions+turns tables) is snapshotted and indexed."""
+    from mark import config, db, search
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    store = tmp_path / "session-store.db"
+    con = sqlite3.connect(store)
+    con.execute(
+        "CREATE TABLE sessions (id TEXT, cwd TEXT, repository TEXT, summary TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    con.execute(
+        "CREATE TABLE turns (session_id TEXT, turn_index INTEGER, user_message TEXT, "
+        "assistant_response TEXT, timestamp TEXT)"
+    )
+    con.execute(
+        "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+        (
+            "sess1",
+            "/Users/m/microsoft/myrepo",
+            None,
+            None,
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-02T00:00:00+00:00",
+        ),
+    )
+    con.execute(
+        "INSERT INTO turns VALUES (?,?,?,?,?)",
+        (
+            "sess1",
+            0,
+            "how do I fix the auth token timeout",
+            _ASSISTANT_REPLY,
+            "2026-01-01T00:00:00+00:00",
+        ),
+    )
+    con.commit()
+    con.close()
+
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(tmp_path / "no-state")},  # no events.jsonl
+    )
+    with db.connect() as conn:
+        cur = conn.cursor()
+        counts = CopilotCliSource().ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+
+    assert counts == {"added": 1, "updated": 0, "skipped": 0}
+    s = search.get_session("sess1")
+    assert s is not None
+    assert s["repository"] == "myrepo"  # derived from the cwd
+    assert s["turns"][0]["user_message"].startswith("how do I fix")
+    assert "curl /refresh" in s["turns"][0]["assistant_response"]
+
+
+def test_cursor_indexes_composer_from_vscdb(tmp_path):
+    """A Cursor composer (inline conversation in state.vscdb) is parsed + indexed."""
+    from mark import config, db, search
+    from mark.sources.cursor import CursorSource
+
+    store = tmp_path / "state.vscdb"
+    con = sqlite3.connect(store)
+    con.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    data = {
+        "composerId": "abc",
+        "name": "Auth help",
+        "createdAt": 1700000000000,
+        "lastUpdatedAt": 1700000100000,
+        "conversation": [
+            {"type": 1, "text": "how do I fix the auth token timeout"},
+            {"type": 2, "text": _ASSISTANT_REPLY},
+        ],
+    }
+    con.execute(
+        "INSERT INTO cursorDiskKV VALUES (?,?)", ("composerData:abc", json.dumps(data))
+    )
+    con.commit()
+    con.close()
+
+    cfg = config.SourceConfig(
+        key="cursor",
+        roots=[store],
+        options={"workspace_roots": [str(tmp_path / "ws")]},  # empty => no repo map
+    )
+    with db.connect() as conn:
+        cur = conn.cursor()
+        counts = CursorSource().ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+
+    assert counts["added"] == 1
+    s = search.get_session("cursor-abc")
+    assert s is not None
+    assert s["title"] == "Auth help"
+    assert s["turns"][0]["user_message"].startswith("how do I fix")
+    assert "refresh token" in s["turns"][0]["assistant_response"]
+    assert "curl /refresh" in s["turns"][0]["assistant_response"]

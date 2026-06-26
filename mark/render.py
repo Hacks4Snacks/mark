@@ -4,6 +4,7 @@ Raw HTML in the source is disabled, so conversation content cannot inject
 markup into the page (XSS-safe). Fenced code blocks are highlighted with
 Pygments at render time.
 """
+
 from __future__ import annotations
 
 import functools
@@ -30,7 +31,9 @@ def _highlight(code: str, lang: str | None, _attrs) -> str:
 
 @functools.lru_cache(maxsize=1)
 def _md() -> MarkdownIt:
-    md = MarkdownIt("commonmark", {"html": False, "linkify": False, "highlight": _highlight})
+    md = MarkdownIt(
+        "commonmark", {"html": False, "linkify": False, "highlight": _highlight}
+    )
     md.enable(["table", "strikethrough"])
     return md
 

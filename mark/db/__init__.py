@@ -20,13 +20,13 @@ from .migrations import run_migrations
 from .schema import SCHEMA
 
 __all__ = [
+    "SCHEMA",
     "connect",
     "cursor",
-    "transaction",
     "get_meta",
-    "set_meta",
     "init_db",
-    "SCHEMA",
+    "set_meta",
+    "transaction",
 ]
 
 

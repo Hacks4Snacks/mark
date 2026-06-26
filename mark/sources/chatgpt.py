@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 from .base import (
     _FENCE_RE,

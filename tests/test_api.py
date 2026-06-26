@@ -27,7 +27,9 @@ def test_render_endpoint():
 
 
 def test_note_create_then_searchable(client):
-    r = client.post("/api/notes", json={"title": "Note", "text": "hello searchable world"})
+    r = client.post(
+        "/api/notes", json={"title": "Note", "text": "hello searchable world"}
+    )
     assert r.status_code == 200
     sid = r.json()["id"]
 
@@ -78,7 +80,9 @@ def test_collection_crud_and_membership(client):
 
 
 def test_add_and_remove_tag(client):
-    sid = client.post("/api/notes", json={"title": "Tagged", "text": "content"}).json()["id"]
+    sid = client.post("/api/notes", json={"title": "Tagged", "text": "content"}).json()[
+        "id"
+    ]
 
     r = client.post(f"/api/sessions/{sid}/tags", json={"tag": "My Topic"})
     assert r.status_code == 200

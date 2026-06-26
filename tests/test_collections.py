@@ -20,7 +20,9 @@ def test_manual_only_membership(make_session, persist_session):
 def test_rule_membership(make_session, persist_session):
     persist_session(make_session(sid="a", user="how do I fix the auth token timeout"))
     persist_session(
-        make_session(sid="b", title="Pandas", user="group a dataframe", asst="use groupby")
+        make_session(
+            sid="b", title="Pandas", user="group a dataframe", asst="use groupby"
+        )
     )
     cid = coll.create("Auth", rule={"q": "auth token"})
     ids = coll.resolve_member_ids(coll.get_collection(cid))

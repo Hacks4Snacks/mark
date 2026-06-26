@@ -4,7 +4,8 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 from .. import config
 from ..persist import write_session

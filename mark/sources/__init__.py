@@ -28,14 +28,14 @@ IMPORT_SOURCES: list[ImportSource] = [
 ]
 
 __all__ = [
-    "WATCHED_SOURCES",
     "IMPORT_SOURCES",
-    "WatchedSource",
+    "WATCHED_SOURCES",
+    "ChatGptSource",
+    "ClineSource",
+    "CopilotCliSource",
+    "CursorSource",
     "ImportSource",
     "ProgressCb",
     "VSCodeSource",
-    "CopilotCliSource",
-    "ClineSource",
-    "CursorSource",
-    "ChatGptSource",
+    "WatchedSource",
 ]

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 from .. import config
 from ..persist import write_session
@@ -51,6 +53,110 @@ def _part_text(val: Any) -> str:
     return ""
 
 
+_MD_LINK_RE = re.compile(r"\[\]\(([^)]+)\)")
+
+
+def _resolve_md_links(text: str, uris: dict[str, Any] | None) -> str:
+    """Expand VS Code ``[](uri)`` placeholders using the part's ``uris`` map."""
+
+    def _repl(match: re.Match[str]) -> str:
+        uri = match.group(1)
+        ref = (uris or {}).get(uri) if uris else None
+        path = _uri_to_path(ref if ref is not None else uri)
+        if path:
+            return f"`{Path(path).name}`"
+        return uri
+
+    return _MD_LINK_RE.sub(_repl, text)
+
+
+def _message_part_text(msg: Any) -> str:
+    if not isinstance(msg, dict):
+        return ""
+    val = msg.get("value")
+    if not isinstance(val, str):
+        return ""
+    return _resolve_md_links(val, msg.get("uris"))
+
+
+def _inline_ref_text(ref: Any) -> str:
+    if not isinstance(ref, dict):
+        return ""
+    name = ref.get("name")
+    if isinstance(name, str) and name.strip():
+        return f"`{name.strip()}`"
+    loc = ref.get("location")
+    uri = loc.get("uri") if isinstance(loc, dict) else None
+    path = _uri_to_path(uri) if uri else _uri_to_path(ref)
+    if path:
+        return f"`{Path(path).name}`"
+    return ""
+
+
+def _text_edit_text(part: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    for edit_group in part.get("edits") or []:
+        if not isinstance(edit_group, list):
+            continue
+        for edit in edit_group:
+            if isinstance(edit, dict):
+                text = edit.get("text")
+                if isinstance(text, str):
+                    chunks.append(text)
+    return "".join(chunks)
+
+
+def _fence_lang(path: str | None) -> str:
+    if not path:
+        return ""
+    return Path(path).suffix.lstrip(".").lower()
+
+
+def _is_fence_only(text: str) -> bool:
+    """True when a value part is only empty markdown code-fence markers."""
+    return not text.replace("`", "").strip()
+
+
+def _ref_path(ref: Any) -> str | None:
+    if not isinstance(ref, dict):
+        return None
+    loc = ref.get("location")
+    if isinstance(loc, dict):
+        path = _uri_to_path(loc.get("uri"))
+        if path:
+            return path
+    return _uri_to_path(ref)
+
+
+def _strip_trailing_fence_opener(segments: list[str]) -> None:
+    if not segments:
+        return
+    segments[-1] = re.sub(r"\n```\s*$", "", segments[-1])
+
+
+def _tool_message_paths(part: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    for key in ("pastTenseMessage", "invocationMessage"):
+        msg = part.get(key)
+        if not isinstance(msg, dict):
+            continue
+        for ref in (msg.get("uris") or {}).values():
+            path = _uri_to_path(ref)
+            if path:
+                paths.append(path)
+    return paths
+
+
+def _append_code_fence(
+    segments: list[str], uri_path: str | None, content: str
+) -> None:
+    body = content.rstrip()
+    if not body:
+        return
+    lang = _fence_lang(uri_path)
+    segments.append(f"\n```{lang}\n{body}\n```\n")
+
+
 def _extract_response(parts: Any) -> dict[str, Any]:
     """Pull text, thinking, tools, touched files, urls and code blocks from parts."""
     text_segments: list[str] = []
@@ -62,7 +168,10 @@ def _extract_response(parts: Any) -> dict[str, Any]:
     if not isinstance(parts, list):
         return {"text": "", "thinking": "", "tools": [], "files": [], "urls": []}
 
-    for p in parts:
+    i = 0
+    while i < len(parts):
+        p = parts[i]
+        i += 1
         if not isinstance(p, dict):
             if isinstance(p, str):
                 text_segments.append(p)
@@ -70,29 +179,64 @@ def _extract_response(parts: Any) -> dict[str, Any]:
         kind = p.get("kind")
         if kind is None and "value" in p:  # markdown string part
             val = p["value"]
-            text_segments.append(
-                val if isinstance(val, str) else str(val.get("value", ""))
-            )
+            text = val if isinstance(val, str) else str(val.get("value", ""))
+            text = _resolve_md_links(text, p.get("uris"))
+            if not _is_fence_only(text):
+                text_segments.append(text)
         elif kind == "thinking":  # model reasoning, kept for auditable records
             seg = _part_text(p.get("value") if "value" in p else p.get("text"))
             if seg.strip():
                 think_segments.append(seg.strip())
         elif kind == "inlineReference":
-            path = _uri_to_path(p.get("inlineReference") or p.get("reference"))
+            ref = p.get("inlineReference") or p.get("reference")
+            label = _inline_ref_text(ref)
+            if label:
+                text_segments.append(label)
+            path = _ref_path(ref)
             if path:
                 files.append(path)
         elif kind == "codeblockUri":
-            path = _uri_to_path(p.get("uri"))
-            if path:
-                files.append(path)
+            uri_path = _uri_to_path(p.get("uri"))
+            if uri_path:
+                files.append(uri_path)
+            nxt = parts[i] if i < len(parts) else None
+            if isinstance(nxt, dict) and nxt.get("kind") == "textEditGroup":
+                edit_path = _uri_to_path(nxt.get("uri")) or uri_path
+                if edit_path:
+                    files.append(edit_path)
+                content = _text_edit_text(nxt)
+                if content.strip():
+                    _strip_trailing_fence_opener(text_segments)
+                    _append_code_fence(text_segments, edit_path or uri_path, content)
+                else:
+                    # VS Code emits empty edit groups as UI placeholders; drop
+                    # any trailing fence opener from the preceding prose part.
+                    _strip_trailing_fence_opener(text_segments)
+                i += 1
         elif kind == "textEditGroup":
-            path = _uri_to_path(p.get("uri"))
-            if path:
-                files.append(path)
+            uri_path = _uri_to_path(p.get("uri"))
+            if uri_path:
+                files.append(uri_path)
+            content = _text_edit_text(p)
+            if content.strip():
+                _strip_trailing_fence_opener(text_segments)
+                _append_code_fence(text_segments, uri_path, content)
         elif kind == "toolInvocationSerialized":
             tool = p.get("toolId") or p.get("toolName")
             if isinstance(tool, str):
                 tools.append(tool)
+            files.extend(_tool_message_paths(p))
+            msg = (
+                _message_part_text(p.get("pastTenseMessage"))
+                if p.get("isComplete")
+                else _message_part_text(p.get("invocationMessage"))
+            )
+            if not msg.strip():
+                msg = _message_part_text(p.get("pastTenseMessage")) or _message_part_text(
+                    p.get("invocationMessage")
+                )
+            if msg.strip():
+                text_segments.append(f"\n{msg.strip()}\n")
 
     text = "".join(text_segments).strip()
     for m in _URL_RE.findall(text):

@@ -3,14 +3,14 @@ from __future__ import annotations
 import hashlib
 import re
 import threading
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 
 from . import config
 
 _lock = threading.Lock()
-_embedder: "Embedder | None" = None
+_embedder: Embedder | None = None
 
 _WORD_RE = re.compile(r"[A-Za-z0-9_]+")
 _STOP = {
@@ -144,7 +144,8 @@ class _HashEmbed(Embedder):
         joined = " ".join(words)
         for n in (3, 4, 5):
             toks += [
-                f"#{joined[i:i + n]}" for i in range(0, max(0, len(joined) - n + 1), 2)
+                f"#{joined[i : i + n]}"
+                for i in range(0, max(0, len(joined) - n + 1), 2)
             ]
         return toks
 

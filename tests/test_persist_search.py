@@ -26,7 +26,11 @@ def test_browse_lists_persisted_session(make_session, persist_session):
 
 def test_keyword_search_finds_session(make_session, persist_session):
     persist_session(make_session(sid="a", user="how do I fix the auth token timeout"))
-    persist_session(make_session(sid="b", title="Pandas", user="group a dataframe", asst="use groupby"))
+    persist_session(
+        make_session(
+            sid="b", title="Pandas", user="group a dataframe", asst="use groupby"
+        )
+    )
     res = search.search("auth token", mode="keyword")
     found = {r["id"] for r in res}
     assert "a" in found

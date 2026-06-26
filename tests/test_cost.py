@@ -29,8 +29,12 @@ def test_compute_cost_prices_cache_reads_separately():
 
 
 def test_compute_cost_exclusive_input_is_higher_than_inclusive():
-    inclusive = base._compute_cost("gpt-5", 1000, 0, cache_read=400, input_includes_cache=True)
-    exclusive = base._compute_cost("gpt-5", 1000, 0, cache_read=400, input_includes_cache=False)
+    inclusive = base._compute_cost(
+        "gpt-5", 1000, 0, cache_read=400, input_includes_cache=True
+    )
+    exclusive = base._compute_cost(
+        "gpt-5", 1000, 0, cache_read=400, input_includes_cache=False
+    )
     # Exclusive treats all 1000 as fresh input; inclusive carves out the cache.
     assert exclusive > inclusive
 
