@@ -36,6 +36,10 @@ def _chunk_turn(turn: dict[str, Any]) -> list[str]:
 
 def write_session(cur, session: dict[str, Any], *, light: bool = True) -> None:
     sid = session["id"]
+    # Manual topics the user added survive re-ingest (which replaces the row).
+    manual_tags = cur.execute(
+        "SELECT tag, score FROM tags WHERE session_id = ? AND manual = 1", (sid,)
+    ).fetchall()
     # Replace any prior copy of this session (cascades to children).
     cur.execute("DELETE FROM sessions WHERE id = ?", (sid,))
     cur.execute("DELETE FROM search_index WHERE session_id = ?", (sid,))
@@ -142,6 +146,12 @@ def write_session(cur, session: dict[str, Any], *, light: bool = True) -> None:
     summary, tags = enrich.enrich_session(session["title"], turns, light=light)
     if summary:
         cur.execute("UPDATE sessions SET summary = ? WHERE id = ?", (summary, sid))
+    # Restore user topics first so they win over any auto tag of the same name.
+    for mt in manual_tags:
+        cur.execute(
+            "INSERT OR IGNORE INTO tags(session_id, tag, score, manual) VALUES (?,?,?,1)",
+            (sid, mt["tag"], mt["score"]),
+        )
     for tag, score in tags:
         cur.execute(
             "INSERT OR IGNORE INTO tags(session_id, tag, score) VALUES (?,?,?)",

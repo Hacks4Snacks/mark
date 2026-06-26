@@ -297,6 +297,38 @@ def api_session(session_id: str) -> dict[str, Any]:
     return session
 
 
+class TagIn(BaseModel):
+    tag: str
+
+
+@app.post("/api/sessions/{session_id}/tags")
+def api_add_tag(session_id: str, body: TagIn) -> dict[str, Any]:
+    tag = " ".join(body.tag.strip().lower().split())[:40]
+    if not tag:
+        raise HTTPException(status_code=400, detail="empty topic")
+    with db.cursor() as cur:
+        if not cur.execute(
+            "SELECT 1 FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone():
+            raise HTTPException(status_code=404, detail="session not found")
+        cur.execute(
+            "INSERT INTO tags(session_id, tag, score, manual) VALUES (?,?,?,1) "
+            "ON CONFLICT(session_id, tag) DO UPDATE SET manual = 1",
+            (session_id, tag, 100.0),
+        )
+    return {"tag": tag}
+
+
+@app.delete("/api/sessions/{session_id}/tags/{tag}")
+def api_remove_tag(session_id: str, tag: str) -> dict[str, Any]:
+    with db.cursor() as cur:
+        cur.execute(
+            "DELETE FROM tags WHERE session_id = ? AND tag = ?",
+            (session_id, tag.strip().lower()),
+        )
+    return {"ok": True}
+
+
 class NoteIn(BaseModel):
     title: str = "Untitled note"
     text: str = ""

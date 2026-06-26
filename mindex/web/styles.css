@@ -299,6 +299,17 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .src-row.off .src-name::after { content: " · off"; color: var(--faint); }
 .src-count { color: var(--faint); font-size: 12px; background: var(--chip); padding: 1px 7px; border-radius: 999px; }
 
+/* topic editor (session detail) */
+.topics-edit { gap: 5px; }
+.pill.topic { display: inline-flex; align-items: center; gap: 4px; }
+.pill.topic.manual { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--text); }
+.topic-x { background: none; border: 0; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; opacity: .65; }
+.topic-x:hover { opacity: 1; color: #e5534b; }
+.topic-add { display: flex; gap: 6px; margin-top: 8px; }
+.topic-add input { flex: 1; min-width: 0; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 12.5px; }
+.topic-add input:focus { outline: none; border-color: var(--accent); }
+.topic-add .btn { padding: 4px 11px; }
+
 /* session id + resume + usage in detail aside */
 .resume-hint { font-size: 11px; color: var(--faint); margin-bottom: 6px; }
 .copy-row { display: flex; align-items: center; gap: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }

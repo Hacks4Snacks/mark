@@ -267,7 +267,7 @@ function renderDetail(s) {
   view.hidden = false;
   window.scrollTo({ top: 0, behavior: "smooth" });
 
-  const tags = (s.tags || []).map((t) => `<span class="pill">${esc(t)}</span>`).join("");
+  const manualSet = new Set(s.manual_tags || []);
   const meta = [
     `<span class="pill src-${s.source}">${srcMeta(s.source).icon} ${esc(srcMeta(s.source).label)}</span>`,
     s.repository ? `<span class="pill">📁 ${esc(s.repository)}</span>` : "",
@@ -315,7 +315,17 @@ function renderDetail(s) {
       refs.slice(0, 25).map((r) => `<a class="aside-file" href="${esc(r.ref_value)}" target="_blank" rel="noopener" style="direction:ltr">${esc(r.ref_value)}</a>`).join("")
     }</div></div>`);
   }
-  if (s.tags?.length) asideBlocks.push(`<div><h4>Topics</h4><div class="chips">${tags}</div></div>`);
+  const topicPills = (s.tags || []).map((t) => {
+    const m = manualSet.has(t);
+    return `<span class="pill topic${m ? " manual" : ""}" data-tag="${esc(t)}">${esc(t)}${m ? `<button class="topic-x" data-del="${esc(t)}" title="Remove topic">×</button>` : ""}</span>`;
+  }).join("");
+  asideBlocks.push(`<div><h4>Topics</h4>
+    <div class="chips topics-edit">${topicPills || '<span class="muted">none yet</span>'}</div>
+    <form class="topic-add" id="topicAdd">
+      <input id="topicInput" placeholder="add a topic…" maxlength="40" autocomplete="off" spellcheck="false" />
+      <button class="btn btn-ghost" type="submit" title="Add topic">＋</button>
+    </form>
+  </div>`);
 
   const attachments = (s.attachments || []);
   if (attachments.length) {
@@ -360,6 +370,31 @@ function renderDetail(s) {
     b.addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(b.dataset.copy); toast("Copied"); }
       catch (_) { toast("Copy failed", true); }
+    })
+  );
+  $("#topicAdd")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const tag = $("#topicInput").value.trim();
+    if (!tag) return;
+    try {
+      await api(`/api/sessions/${encodeURIComponent(s.id)}/tags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tag }),
+      });
+      renderDetail(await api("/api/sessions/" + encodeURIComponent(s.id)));
+      loadFacets();
+      toast("Topic added");
+    } catch (err) { toast(err.message, true); }
+  });
+  $$("#detailView .topic-x").forEach((b) =>
+    b.addEventListener("click", async () => {
+      try {
+        await api(`/api/sessions/${encodeURIComponent(s.id)}/tags/${encodeURIComponent(b.dataset.del)}`, { method: "DELETE" });
+        renderDetail(await api("/api/sessions/" + encodeURIComponent(s.id)));
+        loadFacets();
+        toast("Topic removed");
+      } catch (err) { toast(err.message, true); }
     })
   );
 }

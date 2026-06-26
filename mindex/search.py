@@ -414,13 +414,13 @@ def get_session(session_id: str) -> dict[str, Any] | None:
                 (session_id,),
             ).fetchall()
         ]
-        tags = [
-            r["tag"]
-            for r in cur.execute(
-                "SELECT tag FROM tags WHERE session_id = ? ORDER BY score DESC",
-                (session_id,),
-            ).fetchall()
-        ]
+        tag_rows = cur.execute(
+            "SELECT tag, manual FROM tags WHERE session_id = ? "
+            "ORDER BY manual DESC, score DESC",
+            (session_id,),
+        ).fetchall()
+        tags = [r["tag"] for r in tag_rows]
+        manual_tags = [r["tag"] for r in tag_rows if r["manual"]]
         doc = cur.execute(
             "SELECT kind, filename, mime, size_bytes, content FROM documents "
             "WHERE session_id = ? AND kind != 'attachment'",
@@ -438,6 +438,7 @@ def get_session(session_id: str) -> dict[str, Any] | None:
     session["files"] = files
     session["refs"] = refs
     session["tags"] = tags
+    session["manual_tags"] = manual_tags
     session["document"] = dict(doc) if doc else None
     session["attachments"] = attachments
     return session

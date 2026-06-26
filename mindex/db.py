@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS tags (
     session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     tag         TEXT NOT NULL,
     score       REAL DEFAULT 0,
+    manual      INTEGER NOT NULL DEFAULT 0,
     UNIQUE(session_id, tag)
 );
 
@@ -154,7 +155,15 @@ def connect() -> sqlite3.Connection:
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Lightweight, idempotent column additions for existing databases."""
+    tag_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tags)")}
+    if "manual" not in tag_cols:
+        conn.execute("ALTER TABLE tags ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
 
 
 @contextmanager
