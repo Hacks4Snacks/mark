@@ -1,12 +1,3 @@
-"""Copilot CLI / agent session store.
-
-The CLI keeps a live SQLite store at ``~/.copilot/session-store.db`` plus a
-per-session event log at ``~/.copilot/session-state/<id>/events.jsonl``. The
-event log is authoritative for turns (the store's ``assistant_response`` is empty
-for recent interactive sessions) and for real token/cost metrics and the list of
-files the agent created or modified.
-"""
-
 from __future__ import annotations
 
 import hashlib

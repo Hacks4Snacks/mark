@@ -14,6 +14,9 @@ COPY mark ./mark
 RUN pip install ".[semantic,pdf]"
 
 RUN useradd -m -u 1000 mark && mkdir -p /app/data && chown -R mark:mark /app
+# Pin HOME so Path.home() is deterministic (/home/mark). Source auto-detection
+# resolves the read-only mounts the compose file lands under the app user's home.
+ENV HOME=/home/mark
 USER mark
 
 VOLUME ["/app/data"]

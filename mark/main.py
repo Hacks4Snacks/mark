@@ -17,7 +17,7 @@ def main() -> None:
     import uvicorn
 
     config.ensure_dirs()
-    print(f"Mark → http://{config.HOST}:{config.PORT}")
+    print(f"Mark - http://{config.HOST}:{config.PORT}")
     uvicorn.run(app, host=config.HOST, port=config.PORT)
 
 

@@ -1,9 +1,3 @@
-"""Plain-text / Markdown rendering of a session dict (from ``search.get_session``).
-
-Shared by the web export endpoint and the MCP server so a conversation is
-rendered identically wherever it is pulled out of the archive.
-"""
-
 from __future__ import annotations
 
 import json

@@ -1,16 +1,19 @@
 # mark — container orchestration.
 #
-# Mounts your local conversation stores READ-ONLY and points mark at them.
+# Mounts your local conversation stores READ-ONLY onto the very paths mark
+# auto-detects inside the container, so NO MARK_* path variables are needed —
+# the same "no config = discover everything" behavior you get locally.
 # The derived index (mark.db) lives in the named volume `mark-data`.
 #
-# Start:   docker compose up --build -d   →  http://127.0.0.1:8765
+# Start:   docker compose up --build -d     http://127.0.0.1:8765
 # Reindex: open the UI and click ⟳ (or `docker compose restart`)
 #
-# The paths below are for macOS + VS Code (stable). For other setups, edit the
-# three host paths under `volumes` (see the table in README.md):
-#   • VS Code Insiders → "Code - Insiders" instead of "Code"
-#   • Linux            → ${HOME}/.config/Code/User/...
-#   • Windows          → %APPDATA%/Code/User/... (use WSL paths under Docker)
+# Only the HOST (left) side of each mount is macOS + VS Code (stable). Keep the
+# CONTAINER (right) side as /home/mark/... — that is where mark looks. For other
+# setups edit just the host side:
+#   • VS Code Insiders  "Code - Insiders" instead of "Code"
+#   • Linux             ${HOME}/.config/Code/User/...
+#   • Windows           %APPDATA%/Code/User/... (use WSL paths under Docker)
 
 services:
   mark:
@@ -20,19 +23,25 @@ services:
     # Bind to localhost on the host only — this is a personal app.
     ports:
       - "127.0.0.1:8765:8765"
-    environment:
-      MARK_VSCODE_STORAGE: /sources/vscode/workspaceStorage
-      MARK_VSCODE_GLOBAL_STORAGE: /sources/vscode/globalStorage
-      MARK_COPILOT_STORE: /sources/copilot/session-store.db
-      MARK_SESSION_STATE: /sources/copilot/session-state
-      # Cap on embedded chunks per session (keyword/FTS indexes all chunks).
-      # MARK_MAX_EMBED_CHUNKS_PER_SESSION: "40"
+    # No source paths to configure: the read-only mounts below land exactly
+    # where mark auto-detects them. Uncomment only for optional tuning.
+    # environment:
+    #   # Cap on embedded chunks per session (keyword/FTS indexes all chunks).
+    #   MARK_MAX_EMBED_CHUNKS_PER_SESSION: "40"
     volumes:
       - mark-data:/app/data
-      # --- your conversation sources, mounted READ-ONLY ---
-      - "${HOME}/Library/Application Support/Code/User/workspaceStorage:/sources/vscode/workspaceStorage:ro"
-      - "${HOME}/Library/Application Support/Code/User/globalStorage:/sources/vscode/globalStorage:ro"
-      - "${HOME}/.copilot:/sources/copilot:ro"
+      # --- your conversation sources, mounted READ-ONLY onto the in-container
+      #     locations mark probes by default (/home/mark = the app user's home) ---
+      - "${HOME}/Library/Application Support/Code/User/workspaceStorage:/home/mark/.config/Code/User/workspaceStorage:ro"
+      - "${HOME}/Library/Application Support/Code/User/globalStorage:/home/mark/.config/Code/User/globalStorage:ro"
+      - "${HOME}/.copilot:/home/mark/.copilot:ro"
+      # --- Cursor (optional): composer/chat history + repo mapping ---
+      # - "${HOME}/Library/Application Support/Cursor/User/globalStorage:/home/mark/.config/Cursor/User/globalStorage:ro"
+      # - "${HOME}/Library/Application Support/Cursor/User/workspaceStorage:/home/mark/.config/Cursor/User/workspaceStorage:ro"
+      # --- Advanced config (optional): enable/disable sources, label overrides,
+      #     extra roots. Same format as a local ~/.mark/sources.toml; see
+      #     sources.example.toml. Use in-container paths for any `roots` you set. ---
+      # - "./sources.toml:/app/data/sources.toml:ro"
     restart: unless-stopped
 
 volumes:

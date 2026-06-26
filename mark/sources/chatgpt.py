@@ -1,12 +1,3 @@
-"""ChatGPT data-export importer.
-
-ChatGPT's "Export data" produces a ``conversations.json`` — a JSON array of
-conversation objects. Each conversation has a ``mapping`` of message nodes
-forming a tree; the active thread is the chain from ``current_node`` up to the
-root. We walk that chain, keep the visible user/assistant messages, pair them
-into turns, and emit one canonical session dict per conversation.
-"""
-
 from __future__ import annotations
 
 import hashlib

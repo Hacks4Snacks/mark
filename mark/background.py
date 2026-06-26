@@ -1,12 +1,3 @@
-"""Background indexing: manual reindex + continuous auto-sync.
-
-The web app kicks off imports off the request path. A single shared status
-record (guarded by a lock) is surfaced through ``/api/status`` so the UI can
-show progress, and an optional auto-sync loop cheaply fingerprints the on-disk
-sources every few seconds and only triggers a real (incremental) import when
-something actually changed.
-"""
-
 from __future__ import annotations
 
 import threading

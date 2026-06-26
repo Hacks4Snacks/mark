@@ -1,17 +1,3 @@
-"""Collections — auto-populated, manually-tunable groups of sessions.
-
-A collection's effective membership is::
-
-    (rule matches) ∪ (manual includes) − (manual excludes)
-
-The *rule* is a saved search (the same parameters the ``/api/search`` endpoint
-takes), so a collection keeps picking up newly indexed sessions on its own.
-Manual edits are stored as ``include``/``exclude`` rows in
-``collection_members``; recording a removal as an explicit ``exclude`` is what
-makes the manual tweak survive the next auto-sync — otherwise a re-indexed
-session that still matches the rule would silently reappear.
-"""
-
 from __future__ import annotations
 
 import html
@@ -46,12 +32,8 @@ def _rule_is_empty(rule: dict[str, Any] | None) -> bool:
     if not rule:
         return True
     return not any(
-        rule.get(k)
-        for k in ("q", "repo", "source", "tags", "date_from", "date_to")
+        rule.get(k) for k in ("q", "repo", "source", "tags", "date_from", "date_to")
     )
-
-
-# --- membership resolution ---------------------------------------------------
 
 
 def _rule_session_ids(rule: dict[str, Any]) -> list[str]:
@@ -86,14 +68,13 @@ def _manual_members(cid: str) -> tuple[set[str], set[str]]:
 def resolve_member_ids(coll: dict[str, Any]) -> set[str]:
     """Effective member ids: (rule ∪ includes) − excludes."""
     rule = _parse_rule(coll.get("rule"))
-    ids: set[str] = set(_rule_session_ids(rule)) if rule and not _rule_is_empty(rule) else set()
+    ids: set[str] = (
+        set(_rule_session_ids(rule)) if rule and not _rule_is_empty(rule) else set()
+    )
     includes, excludes = _manual_members(coll["id"])
     ids |= includes
     ids -= excludes
     return ids
-
-
-# --- CRUD --------------------------------------------------------------------
 
 
 def list_collections() -> list[dict[str, Any]]:
@@ -182,9 +163,6 @@ def delete(cid: str) -> bool:
         return cur.rowcount > 0
 
 
-# --- membership edits --------------------------------------------------------
-
-
 def set_member(cid: str, session_id: str, state: str = "include") -> None:
     state = "exclude" if state == "exclude" else "include"
     now = _now()
@@ -236,9 +214,6 @@ def collections_for_session(session_id: str) -> list[dict[str, Any]]:
             }
         )
     return out
-
-
-# --- rendering & rollups -----------------------------------------------------
 
 
 def _load_member_cards(ids: set[str]) -> list[dict[str, Any]]:

@@ -62,12 +62,20 @@ Your conversations stay on your machine — the container mounts them
 **read-only** and only writes the derived index to a named volume.
 
 ```bash
-docker compose up --build -d      # → http://127.0.0.1:8765
+docker compose up --build -d      # http://127.0.0.1:8765
 ```
 
-The compose file is preset for macOS + VS Code (stable). For Insiders, Linux, or
-Windows, edit the three host paths under `volumes:` (see the storage-path notes
-below). The server binds to `127.0.0.1` on the host only.
+The mounts land on the paths mark auto-detects inside the container, so **no
+`MARK_*` path variables are needed** — the same "no config = discover everything"
+behavior as a local install. The compose file is preset for macOS + VS Code
+(stable); for Insiders, Linux, or Windows edit only the **host** (left) side of
+each mount under `volumes:`. The server binds to `127.0.0.1` on the host only.
+
+Need finer control — disable a source, add a Cline-family label, or point at
+extra roots? Bind-mount a `sources.toml` (same format as a local
+`~/.mark/sources.toml`; see [`sources.example.toml`](sources.example.toml)). The
+compose file ships a commented mount line for it; use the **in-container** mount
+targets for any `roots` you set.
 
 ## Search modes
 
@@ -80,8 +88,8 @@ below). The server binds to `127.0.0.1` on the host only.
 ## Semantic engine
 
 Mark tries, in order: [`fastembed`](https://github.com/qdrant/fastembed)
-(ONNX transformer) → [`model2vec`](https://github.com/MinishLab/model2vec)
-(static embeddings) → a built-in NumPy vectorizer that always works offline.
+(ONNX transformer)  [`model2vec`](https://github.com/MinishLab/model2vec)
+(static embeddings)  a built-in NumPy vectorizer that always works offline.
 Install the optional upgrades for best quality:
 
 ```bash

@@ -1,13 +1,3 @@
-"""Cline-family coding-agent task histories (Cline, Zoo Code, Roo, Kilo, ...).
-
-These VS Code extensions store each task under
-``globalStorage/<ext-id>/tasks/<task-id>/`` with an
-``api_conversation_history.json`` (the message stream), optional
-``task_metadata.json`` (model usage) and ``history_item.json`` (token/cost
-totals). Any extension exposing that shape is auto-detected; the friendly source
-label comes from :data:`mark.config.CLINE_FAMILY_SOURCES`.
-"""
-
 from __future__ import annotations
 
 import hashlib

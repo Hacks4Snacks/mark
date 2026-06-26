@@ -65,7 +65,7 @@ cases. Three problems block that today:
 | Change detection | `sources_fingerprint()` hand-rolls each source's stat scan | `mark/ingest.py` |
 | Orchestration | `ingest_all(*, rebuild, do_embed, progress)` | `mark/ingest.py` |
 | Paths | per-source `MARK_*` env + platform candidates | `mark/config.py` |
-| Variant→label map | `CLINE_FAMILY_SOURCES` dict in code | `mark/config.py` |
+| Variantlabel map | `CLINE_FAMILY_SOURCES` dict in code | `mark/config.py` |
 | Manual files | uploads become `source='upload'` sessions | `mark/uploads.py` |
 
 The two `ingest_*` functions already share the signature
@@ -110,9 +110,9 @@ Sources differ in **how data arrives**, not in its shape:
 - **Watched local stores** — VS Code, Copilot CLI, Cline/Roo/Zoo/Kilo, and an
   Ollama frontend that persists history. Continuously written to known
   locations; participate in fingerprint + auto-sync.
-- **Cloud assistants via export files** — ChatGPT ("Export data" →
+- **Cloud assistants via export files** — ChatGPT ("Export data" 
   `conversations.json`), Gemini (Google Takeout). No live store to watch; data
-  arrives as a user-initiated export → modeled as **on-demand imports** that
+  arrives as a user-initiated export  modeled as **on-demand imports** that
   hang off the existing upload/import path.
 
 ```python
@@ -124,14 +124,14 @@ class WatchedSource(Protocol):          # auto-synced local stores
 class ImportSource(Protocol):           # user-supplied export files
     key: str
     def detect(self, path: Path) -> bool: ...                 # "is this a ChatGPT export?"
-    def parse_export(self, path: Path) -> Iterable[dict]: ...  # → session dicts
+    def parse_export(self, path: Path) -> Iterable[dict]: ...  #  session dicts
 ```
 
 Both flavors converge on the same session dict and the same `_write_session`, so
 search / metrics / UI are 100% shared; only discovery differs.
 
 > Caveat — "Ollama" is not one format. The bare CLI/server keeps no conversation
-> store; what is importable depends on the frontend (e.g. Open WebUI has a DB →
+> store; what is importable depends on the frontend (e.g. Open WebUI has a DB 
 > watched source; raw `ollama run` has nothing to index). "Support Ollama" means
 > "support whichever Ollama client persists history."
 
@@ -199,7 +199,7 @@ roots = [
 
 [sources.cline]
 enabled = false   # turn the whole Cline family off
-# extend the variant→label map without touching code:
+# extend the variantlabel map without touching code:
 options.extensions = { "some.new-cline-fork" = "myagent" }
 
 [sources.chatgpt_export]   # future ImportSource
@@ -227,8 +227,8 @@ rows, not new columns.
 | `MARK_*` env | set | one-offs, CI, Docker mounts |
 
 - **Back-compat:** existing env vars keep working by mapping onto the structure
-  (`MARK_COPILOT_STORE` → `copilot_cli.roots[0]`, `MARK_VSCODE_STORAGE` →
-  `vscode.roots`, `MARK_VSCODE_GLOBAL_STORAGE` → `cline.roots`, ...). Deprecated
+  (`MARK_COPILOT_STORE`  `copilot_cli.roots[0]`, `MARK_VSCODE_STORAGE` 
+  `vscode.roots`, `MARK_VSCODE_GLOBAL_STORAGE`  `cline.roots`, ...). Deprecated
   gently; no breakage.
 - **Validation:** paths are `expanduser()`-ed and resolved; missing paths are
   skipped silently (current behavior); files are scanned **read-only**; the TOML

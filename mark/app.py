@@ -1,10 +1,3 @@
-"""FastAPI application factory and lifespan wiring.
-
-Builds the app from the domain routers in :mod:`mark.api`, starts background
-indexing on startup, and mounts the static UI last so ``/api/*`` routes win.
-Binds to localhost only by default; this is a personal, single-user app.
-"""
-
 from __future__ import annotations
 
 from contextlib import asynccontextmanager

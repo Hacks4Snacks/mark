@@ -143,9 +143,12 @@
 
       <!-- ASK VIEW -->
       <div id="askView" hidden>
-        <div class="list-head">
-          <h2>Ask your history</h2>
-          <span id="askModel" class="muted"></span>
+        <div class="ask-head">
+          <div class="ask-head-text">
+            <h2><span class="ask-head-icon bi" data-icon="sparkles" data-icon-size="20"></span> Ask your history</h2>
+            <p class="ask-sub">Answers are written by a local LLM, grounded only in your indexed conversations — nothing leaves your machine.</p>
+          </div>
+          <span id="askModel" class="ask-model"></span>
         </div>
         <form class="ask-form" id="askForm">
           <textarea id="askInput" rows="2" placeholder="Ask a question about your past conversations... (Enter to send, Shift+Enter for a new line)" autocomplete="off" spellcheck="false"></textarea>
@@ -159,6 +162,7 @@
           <button class="btn btn-primary" id="askSend" type="submit">Ask</button>
         </form>
         <div id="askStatus" class="ask-status" hidden></div>
+        <div id="askExamples" class="ask-examples" hidden></div>
         <div id="askSources" class="ask-sources" hidden></div>
         <div id="askAnswer" class="ask-answer md" hidden></div>
       </div>

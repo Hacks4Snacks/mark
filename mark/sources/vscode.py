@@ -1,13 +1,3 @@
-"""VS Code Copilot chat sessions.
-
-VS Code stores each chat under
-``.../workspaceStorage/<id>/chatSessions/<uuid>.json``. Each file holds an ordered
-list of ``requests`` (turns); every turn has a user ``message`` and a list of
-``response`` parts (markdown text, tool invocations, file edits, references).
-This adapter extracts clean, structured content and is defensive about schema
-drift — unknown part kinds are simply ignored.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -28,8 +18,6 @@ from .base import (
     _friendly_repo,
     _uri_to_path,
 )
-
-# --- workspace → repository mapping ------------------------------------------
 
 
 def load_workspace_map(
@@ -52,9 +40,6 @@ def load_workspace_map(
                 path = wpath
             mapping[ws_id] = {"path": path, "name": _friendly_repo(path)}
     return mapping
-
-
-# --- turn extraction ---------------------------------------------------------
 
 
 def _part_text(val: Any) -> str:
@@ -159,9 +144,6 @@ def _parse_turn(req: dict[str, Any], index: int) -> dict[str, Any]:
         "urls": urls,
         "code_blocks": code_blocks,
     }
-
-
-# --- session parsing ---------------------------------------------------------
 
 
 def _is_request(obj: Any) -> bool:
@@ -289,7 +271,7 @@ def parse_session(
 
     workspace_id: str | None = path.parent.parent.name
     if path.parent.name == "emptyWindowChatSessions":
-        workspace_id = None  # started without a folder open → no repository
+        workspace_id = None  # started without a folder open  no repository
     repo = wsmap.get(workspace_id or "", {})
     session_id = data.get("sessionId") or path.stem
 

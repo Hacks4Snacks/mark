@@ -1,32 +1,3 @@
-"""Cursor editor chat / Composer history.
-
-Cursor (a VS Code fork) keeps its AI conversations in a SQLite key-value store at
-``.../Cursor/User/globalStorage/state.vscdb``. Two key shapes matter in its
-``cursorDiskKV`` table:
-
-* ``composerData:<composerId>`` — one conversation: ``name`` (title),
-  ``createdAt``/``lastUpdatedAt`` (epoch ms), ``unifiedMode`` (``agent``/``chat``)
-  and ``fullConversationHeadersOnly``, an ordered list of
-  ``{bubbleId, type}`` pointers (``type`` 1 = user, 2 = assistant).
-* ``bubbleId:<composerId>:<bubbleId>`` — one message: ``text`` (markdown), an
-  optional ``toolFormerData`` tool call (``name``/``rawArgs``/``result``) and
-  ``codeBlocks``.
-
-Per-workspace ``.../Cursor/User/workspaceStorage/<id>/state.vscdb`` databases keep a
-``composer.composerData`` list that maps each composer to its workspace folder,
-which is how a session gets its repository attribution.
-
-The global store can be many gigabytes, so this adapter never copies it: it reads
-read-only (honoring the WAL) and uses primary-key lookups. Unchanged conversations
-are skipped from a cheap metadata hash before any message bubbles are read. The
-model is read from ``composerData.modelConfig.modelName``; per-bubble ``tokenCount``
-supplies real usage. Because agentic turns re-send the whole conversation, the
-cumulative ``inputTokens`` are treated as prompt-cache reads (only the single
-largest context is billed as a fresh write) while ``outputTokens`` are billed
-verbatim; ``isRefunded`` bubbles are excluded. Conversations with no recorded
-tokens fall back to a text-length estimate (``tokens_estimated``).
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -63,9 +34,6 @@ _FILE_ARG_KEYS = (
     "filename",
     "uri",
 )
-
-
-# --- workspace → repository mapping ------------------------------------------
 
 
 def _ro_connect(path: Path) -> sqlite3.Connection | None:
@@ -123,9 +91,6 @@ def load_workspace_map(roots: list[Path]) -> dict[str, dict[str, str | None]]:
     return mapping
 
 
-# --- bubble / turn extraction ------------------------------------------------
-
-
 def _parse_raw_args(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
@@ -146,9 +111,7 @@ def _looks_like_path(value: Any) -> bool:
     )
 
 
-def _assistant_segment(
-    bubble: dict[str, Any]
-) -> tuple[str, str, list[str], list[str]]:
+def _assistant_segment(bubble: dict[str, Any]) -> tuple[str, str, list[str], list[str]]:
     """Render one assistant/tool bubble to (text, thinking, tools, files)."""
     text = (bubble.get("text") or "").strip()
     tools: list[str] = []
@@ -244,9 +207,6 @@ def _composer_turns(bubbles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return turns
 
 
-# --- composer parsing --------------------------------------------------------
-
-
 def _composer_hash(data: dict[str, Any], headers: list[dict[str, Any]]) -> str:
     """Cheap change signature from metadata only — no bubble reads required."""
     last = headers[-1].get("bubbleId") if headers else ""
@@ -255,7 +215,7 @@ def _composer_hash(data: dict[str, Any], headers: list[dict[str, Any]]) -> str:
 
 
 def _model_name(data: dict[str, Any]) -> str | None:
-    """Real model from ``modelConfig.modelName``; ``default``/empty → None."""
+    """Real model from ``modelConfig.modelName``; ``default``/empty  None."""
     mc = data.get("modelConfig")
     name = (mc.get("modelName") if isinstance(mc, dict) else None) or ""
     name = name.strip()

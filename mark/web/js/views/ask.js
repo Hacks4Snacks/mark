@@ -6,9 +6,17 @@
 import { api } from "../api.js";
 import { showOnly, state } from "../state.js";
 import { $, $$, esc, srcMeta, toast, withTransition } from "../utils.js";
+import { icon } from "../icons.js";
 import { openSession, teardownReading } from "./detail.js";
 
 let askBusy = false;
+
+const ASK_EXAMPLES = [
+  "What did I work on this past week?",
+  "Summarize my recent debugging sessions",
+  "Which problems took me the longest to solve?",
+  "Find conversations about authentication",
+];
 
 export async function showAsk(opts = {}) {
   const leaving = state.view !== "ask";
@@ -20,7 +28,28 @@ export async function showAsk(opts = {}) {
   else apply();
   if (!opts.fromHash) location.hash = "#/ask";
   checkAskStatus();
+  renderAskExamples();
   setTimeout(() => $("#askInput")?.focus(), 60);
+}
+
+// Clickable starter prompts — shown until a question has been answered.
+function renderAskExamples() {
+  const host = $("#askExamples");
+  if (!host) return;
+  if ($("#askAnswer") && !$("#askAnswer").hidden) { host.hidden = true; return; }
+  host.innerHTML =
+    `<div class="ask-ex-label">${icon("sparkles", { size: 13 })} Try asking</div>` +
+    `<div class="ask-ex-chips">${
+      ASK_EXAMPLES.map((q) => `<button class="ask-ex" type="button">${esc(q)}</button>`).join("")
+    }</div>`;
+  host.hidden = false;
+  $$(".ask-ex", host).forEach((b) =>
+    b.addEventListener("click", () => {
+      const input = $("#askInput");
+      input.value = b.textContent;
+      submitAsk();
+    })
+  );
 }
 
 async function checkAskStatus() {
@@ -44,6 +73,8 @@ export async function submitAsk() {
   if (askBusy) return;
   const q = $("#askInput").value.trim();
   if (!q) return;
+  const ex = $("#askExamples");
+  if (ex) ex.hidden = true;
   const limit = parseInt($("#askLimit")?.value, 10) || 8;
   askBusy = true;
   await streamAsk(

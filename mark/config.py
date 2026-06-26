@@ -44,9 +44,7 @@ OLLAMA_MODEL = os.environ.get("MARK_OLLAMA_MODEL", "").strip()
 # The Copilot CLI / agent session store (a live SQLite DB). mark reads a
 # consistent snapshot of it read-only.
 COPILOT_STORE_PATH = Path(
-    os.environ.get(
-        "MARK_COPILOT_STORE", Path.home() / ".copilot" / "session-store.db"
-    )
+    os.environ.get("MARK_COPILOT_STORE", Path.home() / ".copilot" / "session-store.db")
 ).expanduser()
 
 # Per-session event logs (token usage, model, duration) written by the CLI.
@@ -154,9 +152,7 @@ MAX_EMBED_CHUNKS_PER_SESSION = int(
 )
 # Cap the size of an agent-created file we snapshot as a viewable attachment.
 # Larger files are recorded (path + size) but their content is not stored.
-MAX_ATTACHMENT_BYTES = int(
-    os.environ.get("MARK_MAX_ATTACHMENT_BYTES", str(512 * 1024))
-)
+MAX_ATTACHMENT_BYTES = int(os.environ.get("MARK_MAX_ATTACHMENT_BYTES", str(512 * 1024)))
 
 # --- Uploads -----------------------------------------------------------------
 
@@ -336,7 +332,7 @@ def _env_flag(val: str | None, default: bool) -> bool:
 def resolve_source_config(default: SourceConfig) -> SourceConfig:
     """Merge a built-in default with the TOML file and env overrides.
 
-    Precedence (low → high): adapter default, ``sources.toml``,
+    Precedence (low  high): adapter default, ``sources.toml``,
     ``MARK_SOURCE_<KEY>_ENABLED`` / ``MARK_SOURCE_<KEY>_ROOTS``.
     """
     enabled = default.enabled

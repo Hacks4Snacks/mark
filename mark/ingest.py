@@ -1,11 +1,3 @@
-"""Orchestration: index every registered source into the mark database.
-
-The per-source readers live in :mod:`mark.sources`; persistence lives in
-:mod:`mark.persist`. This module just loops the source registry for change
-detection (:func:`sources_fingerprint`) and importing (:func:`ingest_all`), then
-embeds any new chunks.
-"""
-
 from __future__ import annotations
 
 from collections import Counter
@@ -17,9 +9,6 @@ from .sources import IMPORT_SOURCES, WATCHED_SOURCES
 from .sources.base import ProgressCb
 
 __all__ = ["ingest_all", "sources_fingerprint", "import_export"]
-
-
-# --- embeddings (batched) ----------------------------------------------------
 
 
 def _embed_pending(progress: ProgressCb | None = None, batch: int = 256) -> int:
@@ -58,9 +47,6 @@ def _embed_pending(progress: ProgressCb | None = None, batch: int = 256) -> int:
             if progress:
                 progress(f"Embedding {min(i + batch, total)}/{total} chunks...")
     return total
-
-
-# --- public API --------------------------------------------------------------
 
 
 def sources_fingerprint() -> str:

@@ -1,11 +1,3 @@
-"""Local, offline enrichment: extractive summaries and keyword tags.
-
-No LLM and no network calls. Summaries are built by ranking sentences against
-the conversation's own centroid embedding; tags use a KeyBERT-style rerank of
-candidate phrases against that same centroid. Whatever embedding backend is
-active (transformer or the built-in vectorizer) is reused here.
-"""
-
 from __future__ import annotations
 
 import re

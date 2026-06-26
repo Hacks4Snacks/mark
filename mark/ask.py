@@ -1,12 +1,3 @@
-"""Optional "ask your history" — local RAG over the archive via Ollama.
-
-Opt-in and fully local: when a local Ollama server is running, mark retrieves
-the most relevant past conversations and has a local model synthesise an answer
-with citations. No data leaves the machine; no API keys.
-
-Disabled gracefully when Ollama isn't reachable — the UI shows setup hints.
-"""
-
 from __future__ import annotations
 
 import json

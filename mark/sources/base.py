@@ -1,25 +1,3 @@
-"""Shared foundation for source adapters.
-
-A *source* turns some on-disk store of AI conversations into the canonical
-**session dict** consumed by :func:`mark.persist.write_session`. This module
-holds the adapter base class plus the generic helpers (URI/path handling, token
-and cost estimation, timestamp math) that more than one adapter needs.
-
-The session-dict contract
--------------------------
-Required keys: ``id``, ``source``, ``title``, ``turns`` (list), ``created_at``,
-``updated_at``, ``content_hash``. Everything else is optional/nullable:
-``workspace_id``, ``repository``, ``repo_path``, ``requester``, ``responder``,
-``source_path``, ``metrics`` (dict), ``extra_files`` (list of
-``(path, tool, turn_index)``), ``attachments`` (list of dicts). A plain chat
-fills the required core and leaves the coding-oriented fields empty; token/cost
-fall back to :func:`_estimate_metrics`.
-
-Each ``turn`` dict has: ``turn_index``, ``user_message``,
-``assistant_response``, ``tools`` (list), ``timestamp``, ``files`` (list),
-``urls`` (list), ``code_blocks`` (list of ``{language, content}``).
-"""
-
 from __future__ import annotations
 
 import re
@@ -104,9 +82,6 @@ class ImportSource(ABC):
         """Yield canonical session dicts parsed from the export bytes."""
 
 
-# --- low-level helpers -------------------------------------------------------
-
-
 def _epoch_ms_to_iso(ms: Any) -> str | None:
     try:
         return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).isoformat()
@@ -158,9 +133,6 @@ def _repo_from_cwd(repository: str | None, cwd: str | None) -> str | None:
         if i + 1 < len(parts):
             return parts[i + 1]
     return parts[-1] if parts else None
-
-
-# --- metrics: duration, tokens, cost -----------------------------------------
 
 
 def _estimate_tokens(text: str | None) -> int:
