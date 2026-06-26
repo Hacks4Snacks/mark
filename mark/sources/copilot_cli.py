@@ -231,10 +231,14 @@ def _tool_file_path(name: str | None, args: Any) -> str | None:
 def _finish_event_turn(turn: dict[str, Any]) -> dict[str, Any]:
     ar = (turn["assistant_response"] or "").strip()
     um = (turn["user_message"] or "").strip()
-    turn["user_message"] = um
-    turn["assistant_response"] = ar
     turn["tools"] = list(dict.fromkeys(turn["tools"]))
     turn["files"] = list(dict.fromkeys(turn["files"]))
+    # Some turns reply purely with tool calls (e.g. ask_user / report_intent) and
+    # carry no prose. Surface the tools so the turn isn't rendered as empty.
+    if not ar and turn["tools"]:
+        ar = "↳ " + ", ".join(turn["tools"])
+    turn["user_message"] = um
+    turn["assistant_response"] = ar
     turn["code_blocks"] = [
         {"language": (lang or "").strip() or None, "content": code.strip()}
         for lang, code in _FENCE_RE.findall(ar)

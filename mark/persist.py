@@ -10,20 +10,25 @@ completely source-agnostic.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from . import config, enrich
 
+# NUL/C0 control characters (except tab/newline/carriage-return) and the U+FFFD
+# replacement character — broken-UTF-8 noise that pollutes stored text and search.
+_BAD_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffd]")
 
-def _chunk_turn(turn: dict[str, Any]) -> list[str]:
-    parts = []
-    if turn["user_message"]:
-        parts.append("User: " + turn["user_message"])
-    if turn["assistant_response"]:
-        parts.append("Assistant: " + turn["assistant_response"])
-    text = "\n\n".join(parts)
+
+def _clean(text: str | None) -> str | None:
+    """Strip NUL/control and U+FFFD noise from text bound for storage/search."""
     if not text:
-        return []
+        return text
+    return _BAD_CHARS_RE.sub("", text)
+
+
+def _split(text: str) -> list[str]:
+    """Window text into overlapping chunks bounded by ``MAX_CHUNK_CHARS``."""
     limit = config.MAX_CHUNK_CHARS
     if len(text) <= limit:
         return [text]
@@ -79,8 +84,14 @@ def write_session(cur, session: dict[str, Any], *, light: bool = True) -> None:
         ),
     )
 
-    chunk_rows: list[tuple[int, str]] = []  # (chunk_id, content)
+    # User prompts carry the most search signal, so when a session exceeds the
+    # per-session chunk cap we keep every turn's user text before spending the
+    # remaining budget on assistant/tool output.
+    user_pieces: list[tuple[int, str]] = []  # (turn_index, content)
+    asst_pieces: list[tuple[int, str]] = []
     for t in turns:
+        um = _clean(t["user_message"])
+        ar = _clean(t["assistant_response"])
         cur.execute(
             """INSERT INTO turns
                (session_id, turn_index, user_message, assistant_response, tools, timestamp)
@@ -88,8 +99,8 @@ def write_session(cur, session: dict[str, Any], *, light: bool = True) -> None:
             (
                 sid,
                 t["turn_index"],
-                t["user_message"],
-                t["assistant_response"],
+                um,
+                ar,
                 json.dumps(t["tools"]),
                 t["timestamp"],
             ),
@@ -109,14 +120,22 @@ def write_session(cur, session: dict[str, Any], *, light: bool = True) -> None:
                 "INSERT INTO code_blocks(session_id, turn_index, language, content) VALUES (?,?,?,?)",
                 (sid, t["turn_index"], cb["language"], cb["content"]),
             )
-        for piece in _chunk_turn(t):
-            if len(chunk_rows) >= config.MAX_CHUNKS_PER_SESSION:
-                break
-            cur.execute(
-                "INSERT INTO chunks(session_id, source_type, turn_index, content) VALUES (?,?,?,?)",
-                (sid, "turn", t["turn_index"], piece),
+        if um and um.strip():
+            user_pieces.extend((t["turn_index"], p) for p in _split("User: " + um.strip()))
+        if ar and ar.strip():
+            asst_pieces.extend(
+                (t["turn_index"], p) for p in _split("Assistant: " + ar.strip())
             )
-            chunk_rows.append((cur.lastrowid, piece))
+
+    chunk_rows: list[tuple[int, str]] = []  # (chunk_id, content)
+    for turn_index, piece in (user_pieces + asst_pieces)[
+        : config.MAX_CHUNKS_PER_SESSION
+    ]:
+        cur.execute(
+            "INSERT INTO chunks(session_id, source_type, turn_index, content) VALUES (?,?,?,?)",
+            (sid, "turn", turn_index, piece),
+        )
+        chunk_rows.append((cur.lastrowid, piece))
 
     # Session-level file references (e.g. from the Copilot CLI store).
     for path, tool, turn_index in session.get("extra_files", []):

@@ -100,6 +100,12 @@ MODEL_PRICING: dict[str, tuple[float, float, float]] = {
     "o3": (2.0, 8.0, 0.50),
     "o1": (15.0, 60.0, 7.50),
     "gemini": (1.25, 5.0, 0.31),
+    "grok": (3.0, 15.0, 0.75),
+    # Cursor Composer and local/self-hosted models are not billed per token, so
+    # they price to zero rather than silently inheriting the sonnet _default.
+    "composer": (0.0, 0.0, 0.0),
+    "gpt-oss": (0.0, 0.0, 0.0),
+    "llama": (0.0, 0.0, 0.0),
     "_default": (3.0, 15.0, 0.30),
 }
 
@@ -122,9 +128,22 @@ def price_for(model: str | None) -> tuple[float, float, float]:
     table = _load_pricing()
     if model:
         key = model.lower()
+        matched_name: str | None = None
+        matched_price: tuple[float, float, float] | None = None
         for name, price in table.items():
             if name != "_default" and name in key:
-                return price
+                matched_name, matched_price = name, price
+                break
+        # Version-agnostic "mini" handling: a name like ``gpt-5.4-mini`` does not
+        # contain the literal ``gpt-5-mini`` key (the ``.4-`` breaks it), so it
+        # would otherwise match the full ``gpt-5`` tier. When the model is a mini,
+        # prefer its family's ``-mini`` price if one is defined.
+        if matched_name and "mini" in key and "mini" not in matched_name:
+            mini = table.get(f"{matched_name}-mini")
+            if mini is not None:
+                return mini
+        if matched_price is not None:
+            return matched_price
     return table.get("_default", (3.0, 15.0, 0.30))
 
 
