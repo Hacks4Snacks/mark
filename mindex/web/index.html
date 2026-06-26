@@ -69,6 +69,15 @@
       </div>
 
       <div class="filter-group">
+        <h4>Date range</h4>
+        <div class="date-range">
+          <input type="date" id="dateFrom" aria-label="From date" />
+          <span class="date-sep" aria-hidden="true">→</span>
+          <input type="date" id="dateTo" aria-label="To date" />
+        </div>
+      </div>
+
+      <div class="filter-group">
         <h4>Repositories</h4>
         <div id="repoFilters" class="facet-list"></div>
       </div>
@@ -76,11 +85,6 @@
       <div class="filter-group">
         <h4>Topics</h4>
         <div id="tagFilters" class="chips tag-cloud"></div>
-      </div>
-
-      <div class="filter-group">
-        <h4>Sources</h4>
-        <div id="sourcesPanel" class="sources-panel"></div>
       </div>
 
       <button id="clearFilters" class="btn btn-ghost btn-block">Clear filters</button>

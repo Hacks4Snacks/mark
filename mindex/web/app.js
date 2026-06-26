@@ -3,6 +3,8 @@
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 
+const PAGE_SIZE = 50;
+
 const state = {
   q: "",
   mode: "hybrid",
@@ -10,8 +12,11 @@ const state = {
   source: null,
   repo: null,
   tags: new Set(),
+  dateFrom: "",
+  dateTo: "",
   includeAutomation: false,
   view: "list",
+  limit: PAGE_SIZE,
 };
 
 const prefersReducedMotion = () =>
@@ -59,9 +64,6 @@ const SRC = {
   copilot: { icon: "\uD83D\uDCAC", label: "Copilot" },
 };
 const srcMeta = (s) => SRC[s] || { icon: "\uD83D\uDCAC", label: s || "session" };
-
-// Map a source-adapter key (from /api/sources) to a representative icon.
-const SRC_KEY_ICON = { vscode: "vscode", copilot_cli: "cli", cline: "cline", chatgpt: "chatgpt" };
 
 function fmtDate(iso) {
   if (!iso) return "";
@@ -120,7 +122,6 @@ function toast(msg, isError = false) {
 // ---------- stats & facets ----------
 async function loadStats() {
   const s = await api("/api/stats");
-  const semantic = s.embed_model && !s.embed_model.startsWith("builtin");
   const cards = [
     { n: s.sessions ?? 0, l: "sessions" },
     { n: s.turns ?? 0, l: "turns" },
@@ -135,11 +136,7 @@ async function loadStats() {
     : "";
   $("#statCards").innerHTML =
     cards.map((c) => `<div class="stat-card"><div class="n">${c.n}</div><div class="l">${c.l}</div></div>`).join("") +
-    cost +
-    `<div class="stat-card" style="grid-column:1/-1">
-       <div class="n">${semantic ? "Semantic" : "Lexical"}</div>
-       <div class="l ${semantic ? "semantic-on" : ""}">${semantic ? esc(s.embed_model) : "keyword + vectors"}</div>
-     </div>`;
+    cost;
   return s;
 }
 
@@ -167,33 +164,14 @@ async function loadFacets() {
     .map((t) => `<div class="chip" data-tag="${esc(t.tag)}">${esc(t.tag)}<span class="c">${t.count}</span></div>`)
     .join("") || `<span class="muted">No topics yet</span>`;
 
-  syncFilterUI();
-}
+  const dmin = (f.date_min || "").slice(0, 10);
+  const dmax = (f.date_max || "").slice(0, 10);
+  for (const id of ["#dateFrom", "#dateTo"]) {
+    if (dmin) $(id).min = dmin;
+    if (dmax) $(id).max = dmax;
+  }
 
-// ---------- sources health panel ----------
-async function loadSources() {
-  let list;
-  try { list = await api("/api/sources"); } catch (_) { return; }
-  $("#sourcesPanel").innerHTML = (list || [])
-    .map((s) => {
-      const status = !s.enabled ? "off" : (s.exists ? "ok" : "missing");
-      let tip;
-      if (s.kind === "import") {
-        tip = "Imported from an export file — add via ＋ Add ▸ File";
-      } else {
-        tip = (s.roots || []).join("\n") || "no path configured";
-        if (!s.enabled) tip += "\n(disabled)";
-        else if (!s.exists) tip += "\n(path not found)";
-      }
-      const ic = srcMeta(SRC_KEY_ICON[s.key] || s.key).icon;
-      return `<div class="src-row ${status}" title="${esc(tip)}">
-        <span class="src-dot"></span>
-        <span class="src-ic">${ic}</span>
-        <span class="src-name">${esc(s.label)}</span>
-        <span class="src-count">${s.indexed}</span>
-      </div>`;
-    })
-    .join("") || `<span class="muted">—</span>`;
+  syncFilterUI();
 }
 
 function syncFilterUI() {
@@ -203,37 +181,51 @@ function syncFilterUI() {
 }
 
 // ---------- search / browse ----------
-const run = debounce(async () => {
+async function doSearch(reset = true) {
+  if (reset) state.limit = PAGE_SIZE;
   showList();
   const params = new URLSearchParams();
   if (state.q) params.set("q", state.q);
   params.set("mode", state.mode);
+  params.set("sort", state.sort);
   if (state.source) params.set("source", state.source);
   if (state.repo) params.set("repo", state.repo);
   if (state.tags.size) params.set("tags", [...state.tags].join(","));
+  if (state.dateFrom) params.set("date_from", state.dateFrom);
+  if (state.dateTo) params.set("date_to", state.dateTo);
   if (state.includeAutomation) params.set("include_automation", "true");
-  params.set("limit", "40");
+  params.set("limit", String(state.limit));
 
-  $("#results").innerHTML = Array(4).fill(
-    '<div class="skeleton"><div class="sk-line lg"></div><div class="sk-line row"></div><div class="sk-line sm"></div></div>'
-  ).join("");
   renderActiveFilters();
+  if (reset) {
+    $("#results").innerHTML = Array(4).fill(
+      '<div class="skeleton"><div class="sk-line lg"></div><div class="sk-line row"></div><div class="sk-line sm"></div></div>'
+    ).join("");
+  }
   try {
-    const data = state.q
-      ? await api("/api/search?" + params)
-      : await api("/api/search?" + params); // empty q falls back to browse server-side
-    renderResults(data);
+    const data = await api("/api/search?" + params); // empty q falls back to browse server-side
+    renderResults(data, reset);
   } catch (e) {
     $("#results").innerHTML = `<div class="empty"><div class="big">⚠️</div>${esc(e.message)}</div>`;
   }
-}, 180);
+}
+
+const run = debounce(() => doSearch(true), 180);
+
+function loadMore() {
+  state.limit += PAGE_SIZE;
+  doSearch(false);
+}
 
 const normTitle = (t) => (t || "Untitled").toLowerCase().replace(/\s+/g, " ").trim();
 
-function renderResults(data) {
+function renderResults(data, animate = true) {
   const results = data.results || [];
+  const hasMore = results.length >= state.limit;
   $("#listTitle").textContent = state.q ? `Results for “${state.q}”` : "Recent sessions";
-  $("#listCount").textContent = results.length ? `${results.length} ${results.length === 1 ? "session" : "sessions"}` : "";
+  $("#listCount").textContent = results.length
+    ? `${results.length}${hasMore ? "+" : ""} ${results.length === 1 ? "session" : "sessions"}`
+    : "";
   kbdIndex = -1;
   renderActiveFilters();
 
@@ -261,10 +253,13 @@ function renderResults(data) {
     }
   }
 
-  $("#results").innerHTML = order
-    .map((gid) => cardHTML(resultGroups[gid][0], gid, resultGroups[gid].length))
-    .join("");
+  const resultsEl = $("#results");
+  resultsEl.classList.toggle("no-anim", !animate);
+  resultsEl.innerHTML =
+    order.map((gid) => cardHTML(resultGroups[gid][0], gid, resultGroups[gid].length)).join("") +
+    (hasMore ? `<button class="btn btn-block load-more" id="loadMore">Load ${PAGE_SIZE} more</button>` : "");
   wireCards();
+  $("#loadMore")?.addEventListener("click", loadMore);
 }
 
 function cardHTML(r, gid = "", groupSize = 1) {
@@ -340,6 +335,9 @@ function renderActiveFilters() {
   if (state.source) chips.push({ type: "source", val: state.source, label: `${srcMeta(state.source).icon} ${srcMeta(state.source).label}` });
   if (state.repo) chips.push({ type: "repo", val: state.repo, label: `📁 ${state.repo}` });
   [...state.tags].forEach((t) => chips.push({ type: "tag", val: t, label: `# ${t}` }));
+  if (state.dateFrom || state.dateTo) {
+    chips.push({ type: "date", val: "", label: `🗓 ${state.dateFrom || "…"} → ${state.dateTo || "…"}` });
+  }
   if (state.includeAutomation) chips.push({ type: "auto", val: "", label: "⏱ automation runs" });
 
   if (!chips.length) { el.hidden = true; el.innerHTML = ""; return; }
@@ -352,6 +350,8 @@ function renderActiveFilters() {
 
 function clearAllFilters() {
   state.source = null; state.repo = null; state.tags.clear();
+  state.dateFrom = ""; state.dateTo = "";
+  $("#dateFrom").value = ""; $("#dateTo").value = "";
   state.includeAutomation = false; $("#includeAutomation").checked = false;
   syncFilterUI(); run();
 }
@@ -601,7 +601,7 @@ async function pollStatus(initial = false) {
 // gentle: only re-run the result list when the user is idle at the top of the
 // list view, so an auto-sync never yanks the page while they're reading.
 async function refreshAll(gentle = false) {
-  const [s] = await Promise.all([loadStats(), loadFacets(), loadSources()]);
+  const [s] = await Promise.all([loadStats(), loadFacets()]);
   const count = s ? s.sessions ?? 0 : undefined;
   if (gentle && count != null && lastSessionCount != null && count > lastSessionCount) {
     const n = count - lastSessionCount;
@@ -733,9 +733,13 @@ function setup() {
     if (type === "source") state.source = null;
     else if (type === "repo") state.repo = null;
     else if (type === "tag") state.tags.delete(val);
+    else if (type === "date") { state.dateFrom = ""; state.dateTo = ""; $("#dateFrom").value = ""; $("#dateTo").value = ""; }
     else if (type === "auto") { state.includeAutomation = false; $("#includeAutomation").checked = false; }
     syncFilterUI(); run();
   });
+
+  $("#dateFrom").addEventListener("change", (e) => { state.dateFrom = e.target.value; run(); });
+  $("#dateTo").addEventListener("change", (e) => { state.dateTo = e.target.value; run(); });
 
   $("#brandHome").addEventListener("click", () => {
     state.q = ""; $("#search").value = "";

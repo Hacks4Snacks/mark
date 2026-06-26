@@ -250,6 +250,7 @@ def api_search(
     date_from: str | None = None,
     date_to: str | None = None,
     include_automation: bool = False,
+    sort: str = "recent",
     limit: int = 30,
 ) -> dict[str, Any]:
     tag_list = [t for t in (tags.split(",") if tags else []) if t]
@@ -262,7 +263,8 @@ def api_search(
         date_from=date_from,
         date_to=date_to,
         include_automation=include_automation,
-        limit=min(limit, 100),
+        sort=sort,
+        limit=min(limit, 500),
     )
     return {"query": q, "mode": mode, "count": len(results), "results": results}
 

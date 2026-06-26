@@ -197,6 +197,7 @@ def search(
     date_from: str | None = None,
     date_to: str | None = None,
     include_automation: bool = False,
+    sort: str = "recent",
     limit: int = 30,
 ) -> list[dict[str, Any]]:
     query = (query or "").strip()
@@ -207,6 +208,7 @@ def search(
             tags=tags,
             date_from=date_from,
             date_to=date_to,
+            sort=sort,
             include_automation=include_automation,
             limit=limit,
         )
@@ -261,6 +263,24 @@ def search(
         s["snippet"] = snippet
         s["match_turn"] = item.get("turn_index")
         results.append(s)
+    return _sort_results(results, sort)
+
+
+def _sort_results(
+    results: list[dict[str, Any]], sort: str
+) -> list[dict[str, Any]]:
+    """Reorder relevance-ranked results when the user picks an explicit sort.
+
+    ``recent`` is treated as "keep relevance order" for keyword/semantic queries
+    so the default search experience still surfaces the best matches first.
+    """
+    if sort == "oldest":
+        # "~" sorts after digits so undated sessions land last, mirroring browse.
+        return sorted(results, key=lambda r: r.get("updated_at") or r.get("created_at") or "~")
+    if sort == "turns":
+        return sorted(results, key=lambda r: r.get("turn_count") or 0, reverse=True)
+    if sort == "title":
+        return sorted(results, key=lambda r: (r.get("title") or "").lower())
     return results
 
 
@@ -280,9 +300,10 @@ def browse(
     )
     order = {
         "recent": "COALESCE(updated_at, created_at) DESC",
-        "oldest": "COALESCE(updated_at, created_at) ASC",
+        # nulls last so undated sessions don't masquerade as the "oldest".
+        "oldest": "COALESCE(updated_at, created_at) IS NULL, COALESCE(updated_at, created_at) ASC",
         "turns": "turn_count DESC",
-        "title": "title ASC",
+        "title": "title COLLATE NOCASE ASC",
     }.get(sort, "COALESCE(updated_at, created_at) DESC")
 
     sql = "SELECT * FROM sessions"
