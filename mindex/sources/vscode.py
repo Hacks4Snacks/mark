@@ -32,10 +32,12 @@ from .base import (
 # --- workspace → repository mapping ------------------------------------------
 
 
-def load_workspace_map() -> dict[str, dict[str, str | None]]:
+def load_workspace_map(
+    roots: list[Path],
+) -> dict[str, dict[str, str | None]]:
     """Map each workspaceStorage id to its repository path/name."""
     mapping: dict[str, dict[str, str | None]] = {}
-    for root in config.vscode_storage_roots():
+    for root in roots:
         for wj in root.glob("*/workspace.json"):
             ws_id = wj.parent.name
             try:
@@ -179,18 +181,26 @@ def parse_session(
     }
 
 
-def iter_session_paths() -> Iterable[Path]:
-    for root in config.vscode_storage_roots():
+def iter_session_paths(roots: list[Path]) -> Iterable[Path]:
+    for root in roots:
         yield from root.glob("*/chatSessions/*.json")
 
 
 class VSCodeSource(WatchedSource):
     key = "vscode"
+    row_sources = ("vscode",)
 
-    def fingerprint(self) -> str:
+    def default_config(self) -> config.SourceConfig:
+        return config.SourceConfig(
+            key=self.key,
+            roots=config.vscode_storage_roots(),
+            label="VS Code chat",
+        )
+
+    def fingerprint(self, cfg: config.SourceConfig) -> str:
         count = 0
         newest = 0
-        for f in iter_session_paths():
+        for f in iter_session_paths(cfg.roots):
             try:
                 st = f.stat()
             except OSError:
@@ -204,13 +214,14 @@ class VSCodeSource(WatchedSource):
         self,
         cur,
         existing: dict[str, str],
+        cfg: config.SourceConfig,
         *,
         rebuild: bool,
         progress: ProgressCb | None = None,
     ) -> dict[str, int]:
-        wsmap = load_workspace_map()
+        wsmap = load_workspace_map(cfg.roots)
         added = updated = skipped = 0
-        for path in iter_session_paths():
+        for path in iter_session_paths(cfg.roots):
             session = parse_session(path, wsmap)
             if not session:
                 continue

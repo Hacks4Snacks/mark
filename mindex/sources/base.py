@@ -44,14 +44,26 @@ class WatchedSource(ABC):
     They must not write to the database directly other than through
     :func:`mindex.persist.write_session`, so the persistence/search/UI layers
     stay source-agnostic.
+
+    Discovery is driven by a :class:`mindex.config.SourceConfig` (the effective
+    enable flag, root paths and options after defaults/file/env are merged), so
+    a source never reads its paths from ``config`` directly.
     """
 
     #: Stable adapter id (e.g. ``"vscode"``). Distinct from the per-session
     #: ``source`` string — one adapter may emit several (``cli``/``automation``).
     key: str = ""
 
+    #: The ``source`` strings this adapter can write, for display/counting in the
+    #: ``/api/sources`` endpoint. Adapters with dynamic names list the known ones.
+    row_sources: tuple[str, ...] = ()
+
+    def default_config(self) -> config.SourceConfig:
+        """Built-in defaults (discovered roots, label, options) before overrides."""
+        return config.SourceConfig(key=self.key)
+
     @abstractmethod
-    def fingerprint(self) -> str:
+    def fingerprint(self, cfg: config.SourceConfig) -> str:
         """A cheap, stat-only signature that changes when the source changes."""
 
     @abstractmethod
@@ -59,6 +71,7 @@ class WatchedSource(ABC):
         self,
         cur,
         existing: dict[str, str],
+        cfg: config.SourceConfig,
         *,
         rebuild: bool,
         progress: ProgressCb | None = None,

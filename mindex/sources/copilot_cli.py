@@ -46,9 +46,9 @@ _AUTOMATION_PREFIXES = (
 _AUTOMATION_EXACT = {"continue", "ok", "okay", "done", "reply with ok only", "proceed"}
 
 
-def _read_session_metrics(session_id: str) -> dict[str, Any] | None:
+def _read_session_metrics(session_id: str, state_dir: Path) -> dict[str, Any] | None:
     """Real model/token/duration metrics from the CLI's per-session events.jsonl."""
-    path = config.SESSION_STATE_DIR / session_id / "events.jsonl"
+    path = state_dir / session_id / "events.jsonl"
     if not path.exists():
         return None
     first_ts = last_ts = None
@@ -246,7 +246,7 @@ def _finish_event_turn(turn: dict[str, Any]) -> dict[str, Any]:
 
 
 def _events_to_turns(
-    session_id: str,
+    session_id: str, state_dir: Path
 ) -> tuple[list[dict[str, Any]], list[str]] | None:
     """Reconstruct turns + agent-modified files from the CLI per-session log.
 
@@ -255,7 +255,7 @@ def _events_to_turns(
     ``~/.copilot/session-state/<id>/events.jsonl``. Returns ``None`` when the log
     is missing so callers can fall back to the store's ``turns`` table.
     """
-    path = config.SESSION_STATE_DIR / session_id / "events.jsonl"
+    path = state_dir / session_id / "events.jsonl"
     if not path.exists():
         return None
     turns: list[dict[str, Any]] = []
@@ -369,13 +369,25 @@ def _read_attachment(path: str) -> dict[str, Any] | None:
 
 class CopilotCliSource(WatchedSource):
     key = "copilot_cli"
+    row_sources = ("cli", "automation")
 
-    def fingerprint(self) -> str:
+    def default_config(self) -> config.SourceConfig:
+        return config.SourceConfig(
+            key=self.key,
+            roots=[config.COPILOT_STORE_PATH],
+            label="Copilot CLI",
+            options={"state_dir": str(config.SESSION_STATE_DIR)},
+        )
+
+    def fingerprint(self, cfg: config.SourceConfig) -> str:
         # The main db plus its write-ahead log, which is what changes as turns
         # are appended during/after a session.
+        if not cfg.roots:
+            return ""
+        store = cfg.roots[0]
         parts: list[str] = []
         for suffix in ("", "-wal", "-shm"):
-            p = Path(f"{config.COPILOT_STORE_PATH}{suffix}")
+            p = Path(f"{store}{suffix}")
             try:
                 st = p.stat()
                 parts.append(f"c{suffix}:{st.st_mtime_ns}:{st.st_size}")
@@ -387,15 +399,19 @@ class CopilotCliSource(WatchedSource):
         self,
         cur,
         existing: dict[str, str],
+        cfg: config.SourceConfig,
         *,
         rebuild: bool,
         progress: ProgressCb | None = None,
     ) -> dict[str, int]:
         """Index sessions from the Copilot CLI / agent store."""
-        src = config.COPILOT_STORE_PATH
         counts = {"added": 0, "updated": 0, "skipped": 0, "automation": 0}
+        if not cfg.roots:
+            return counts
+        src = cfg.roots[0]
         if not src.exists():
             return counts
+        state_dir = Path(cfg.options.get("state_dir") or config.SESSION_STATE_DIR)
 
         snapshot = _snapshot_store(src)
         ro = sqlite3.connect(snapshot)
@@ -418,7 +434,7 @@ class CopilotCliSource(WatchedSource):
             seen = 0
             for s in sessions:
                 sid = s["id"]
-                events = _events_to_turns(sid)
+                events = _events_to_turns(sid, state_dir)
                 if events and events[0]:
                     turns, files_modified = events
                 else:
@@ -434,7 +450,9 @@ class CopilotCliSource(WatchedSource):
                     continue
                 if source == "automation":
                     counts["automation"] += 1
-                metrics = _read_session_metrics(sid) or _estimate_metrics(turns)
+                metrics = _read_session_metrics(sid, state_dir) or _estimate_metrics(
+                    turns
+                )
                 if metrics.get("duration_seconds") is None:
                     metrics["duration_seconds"] = _ts_diff_seconds(
                         s["created_at"], s["updated_at"]

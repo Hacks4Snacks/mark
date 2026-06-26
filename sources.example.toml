@@ -1,0 +1,38 @@
+# mindex source configuration (example)
+#
+# Copy to ~/.mindex/sources.toml (or set MINDEX_SOURCES_FILE) and edit.
+# Everything here is OPTIONAL: with no file, mindex auto-discovers all sources.
+# A key you don't list keeps its built-in defaults — you only override what you
+# set. Precedence is: built-in default < this file < MINDEX_* environment vars.
+#
+# Disabling a source stops it being scanned or imported, but NEVER deletes
+# already-indexed sessions (use the explicit prune action for that).
+
+# --- VS Code chat ------------------------------------------------------------
+[sources.vscode]
+enabled = true
+# workspaceStorage directories to scan (defaults to detected stable/Insiders/VSCodium):
+# roots = [
+#   "~/Library/Application Support/Code/User/workspaceStorage",
+#   "~/sync/other-machine/Code/User/workspaceStorage",   # e.g. a synced copy
+# ]
+
+# --- Copilot CLI / agent store ----------------------------------------------
+[sources.copilot_cli]
+enabled = true
+# roots[0] is the store database; options.state_dir holds per-session event logs:
+# roots = ["~/.copilot/session-store.db"]
+# options = { state_dir = "~/.copilot/session-state" }
+
+# --- Coding agents (Cline / Zoo Code / Roo / Kilo, auto-detected) ------------
+[sources.cline]
+enabled = true
+# globalStorage directories to scan:
+# roots = ["~/Library/Application Support/Code/User/globalStorage"]
+# Add label overrides for extensions mindex doesn't know yet (ext-id = label):
+# options.extensions = { "some.new-cline-fork" = "myagent" }
+
+# --- Environment overrides (highest precedence) ------------------------------
+# MINDEX_SOURCE_VSCODE_ENABLED=0           disable a source for one run
+# MINDEX_SOURCE_CLINE_ROOTS=/a/path:/b     os.pathsep-separated roots
+# MINDEX_SOURCES_FILE=/path/to/sources.toml   use a non-default config location

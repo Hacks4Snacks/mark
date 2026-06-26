@@ -37,9 +37,9 @@ _ENV_DETAILS_RE = re.compile(
 _TAG_UNWRAP_RE = re.compile(r"</?(?:task|user_message|feedback|answer|thinking)>")
 
 
-def _cline_source_name(ext_id: str) -> str:
-    if ext_id in config.CLINE_FAMILY_SOURCES:
-        return config.CLINE_FAMILY_SOURCES[ext_id]
+def _cline_source_name(ext_id: str, ext_map: dict[str, str]) -> str:
+    if ext_id in ext_map:
+        return ext_map[ext_id]
     base = ext_id.split(".")[-1].lower()
     return re.sub(r"[^a-z0-9]+", "-", base).strip("-") or "agent"
 
@@ -249,13 +249,15 @@ def _parse_cline_task(task_dir: Path, source: str) -> dict[str, Any] | None:
     }
 
 
-def _iter_cline_task_dirs() -> Iterable[tuple[Path, str]]:
+def _iter_cline_task_dirs(
+    roots: list[Path], ext_map: dict[str, str]
+) -> Iterable[tuple[Path, str]]:
     """Yield (task_dir, source) for every Cline-family extension found."""
-    for gs in config.vscode_global_storage_roots():
+    for gs in roots:
         for ext_dir in gs.glob("*/tasks"):
             if not ext_dir.is_dir():
                 continue
-            source = _cline_source_name(ext_dir.parent.name)
+            source = _cline_source_name(ext_dir.parent.name, ext_map)
             for task_dir in ext_dir.iterdir():
                 if (
                     task_dir.is_dir()
@@ -266,11 +268,20 @@ def _iter_cline_task_dirs() -> Iterable[tuple[Path, str]]:
 
 class ClineSource(WatchedSource):
     key = "cline"
+    row_sources = tuple(sorted(set(config.CLINE_FAMILY_SOURCES.values())))
 
-    def fingerprint(self) -> str:
+    def default_config(self) -> config.SourceConfig:
+        return config.SourceConfig(
+            key=self.key,
+            roots=config.vscode_global_storage_roots(),
+            label="Coding agents (Cline family)",
+            options={"extensions": {}},
+        )
+
+    def fingerprint(self, cfg: config.SourceConfig) -> str:
         count = 0
         newest = 0
-        for gs in config.vscode_global_storage_roots():
+        for gs in cfg.roots:
             for f in gs.glob("*/tasks/*/api_conversation_history.json"):
                 try:
                     st = f.stat()
@@ -285,14 +296,19 @@ class ClineSource(WatchedSource):
         self,
         cur,
         existing: dict[str, str],
+        cfg: config.SourceConfig,
         *,
         rebuild: bool,
         progress: ProgressCb | None = None,
     ) -> dict[str, int]:
         """Index Cline / Zoo Code / Roo / Kilo task histories from globalStorage."""
+        ext_map = {
+            **config.CLINE_FAMILY_SOURCES,
+            **(cfg.options.get("extensions") or {}),
+        }
         counts = {"added": 0, "updated": 0, "skipped": 0}
         seen = 0
-        for task_dir, source in _iter_cline_task_dirs():
+        for task_dir, source in _iter_cline_task_dirs(cfg.roots, ext_map):
             session = _parse_cline_task(task_dir, source)
             if not session:
                 continue

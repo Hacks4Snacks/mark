@@ -56,13 +56,20 @@ def _embed_pending(progress: ProgressCb | None = None, batch: int = 256) -> int:
 
 
 def sources_fingerprint() -> str:
-    """A cheap signature of all on-disk sources.
+    """A cheap signature of all enabled on-disk sources.
 
-    Joins each registered source's stat-only fingerprint so a background loop can
+    Joins each enabled source's stat-only fingerprint so a background loop can
     detect when a session was written or ended without doing a full import.
-    Changes whenever any source is added, grows, or is rewritten.
+    Changes whenever any source is added, grows, is rewritten, or is toggled.
+    Disabled sources contribute nothing (and so never trigger a sync).
     """
-    return "|".join(s.fingerprint() for s in WATCHED_SOURCES)
+    parts: list[str] = []
+    for s in WATCHED_SOURCES:
+        cfg = config.resolve_source_config(s.default_config())
+        if not cfg.enabled:
+            continue
+        parts.append(f"{s.key}={s.fingerprint(cfg)}")
+    return "|".join(parts)
 
 
 def ingest_all(
@@ -97,9 +104,13 @@ def ingest_all(
             for row in cur.execute("SELECT id, content_hash FROM sessions")
         }
         for source in WATCHED_SOURCES:
+            cfg = config.resolve_source_config(source.default_config())
+            if not cfg.enabled:
+                # Non-destructive: keep already-indexed rows, just stop importing.
+                continue
             if progress:
-                progress(f"Reading {source.key}…")
-            res = source.ingest(cur, existing, rebuild=rebuild, progress=progress)
+                progress(f"Reading {cfg.label or source.key}…")
+            res = source.ingest(cur, existing, cfg, rebuild=rebuild, progress=progress)
             counts.update(res)
             conn.commit()
 

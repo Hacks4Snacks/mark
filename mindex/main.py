@@ -9,6 +9,7 @@ import json
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -184,6 +185,36 @@ def api_status() -> dict[str, Any]:
     st["sync_interval"] = config.SYNC_INTERVAL
     st["last_ingest"] = db.get_meta("last_ingest")
     return st
+
+
+@app.get("/api/sources")
+def api_sources() -> list[dict[str, Any]]:
+    """Effective per-source config (defaults < sources.toml < env) for the UI.
+
+    ``indexed`` counts existing sessions for the adapter even when it is disabled,
+    since disabling keeps already-indexed rows.
+    """
+    with db.cursor() as cur:
+        by_source = {
+            r["source"]: r["n"]
+            for r in cur.execute(
+                "SELECT source, COUNT(*) n FROM sessions GROUP BY source"
+            ).fetchall()
+        }
+    out: list[dict[str, Any]] = []
+    for s in ingest.WATCHED_SOURCES:
+        cfg = config.resolve_source_config(s.default_config())
+        out.append(
+            {
+                "key": cfg.key,
+                "label": cfg.label or cfg.key,
+                "enabled": cfg.enabled,
+                "roots": [str(r) for r in cfg.roots],
+                "exists": any(Path(r).exists() for r in cfg.roots),
+                "indexed": sum(by_source.get(n, 0) for n in s.row_sources),
+            }
+        )
+    return out
 
 
 @app.post("/api/reindex")

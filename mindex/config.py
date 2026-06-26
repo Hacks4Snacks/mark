@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 # --- Project locations -------------------------------------------------------
 
@@ -225,6 +227,87 @@ CLINE_FAMILY_SOURCES: dict[str, str] = {
     "rooveterinaryinc.roo-cline": "roo",
     "kilocode.kilo-code": "kilocode",
 }
+
+
+# --- Per-source configuration ------------------------------------------------
+
+
+@dataclass
+class SourceConfig:
+    """Effective configuration for one source adapter.
+
+    Resolved with precedence: built-in adapter default < ``sources.toml`` < env.
+    ``roots`` meaning is adapter-specific (workspaceStorage dirs for VS Code, the
+    store db path for the Copilot CLI, globalStorage dirs for the Cline family).
+    Disabling a source stops it being scanned or imported but never deletes
+    already-indexed rows.
+    """
+
+    key: str
+    enabled: bool = True
+    roots: list[Path] = field(default_factory=list)
+    label: str | None = None
+    options: dict[str, Any] = field(default_factory=dict)
+
+
+def _sources_file_path() -> Path:
+    return Path(
+        os.environ.get("MINDEX_SOURCES_FILE", DATA_DIR / "sources.toml")
+    ).expanduser()
+
+
+def load_sources_file() -> dict[str, Any]:
+    """Parse the optional ``[sources.<key>]`` TOML overrides; {} when absent/bad."""
+    path = _sources_file_path()
+    if not path.exists():
+        return {}
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python < 3.11
+        return {}
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    srcs = data.get("sources")
+    return srcs if isinstance(srcs, dict) else {}
+
+
+def _env_flag(val: str | None, default: bool) -> bool:
+    if val is None:
+        return default
+    return val.strip().lower() not in ("0", "", "false", "no", "off")
+
+
+def resolve_source_config(default: SourceConfig) -> SourceConfig:
+    """Merge a built-in default with the TOML file and env overrides.
+
+    Precedence (low → high): adapter default, ``sources.toml``,
+    ``MINDEX_SOURCE_<KEY>_ENABLED`` / ``MINDEX_SOURCE_<KEY>_ROOTS``.
+    """
+    enabled = default.enabled
+    roots = list(default.roots)
+    label = default.label
+    options = dict(default.options)
+
+    filecfg = load_sources_file().get(default.key)
+    if isinstance(filecfg, dict):
+        if "enabled" in filecfg:
+            enabled = bool(filecfg["enabled"])
+        if filecfg.get("roots"):
+            roots = [Path(str(p)).expanduser() for p in filecfg["roots"]]
+        if filecfg.get("label"):
+            label = str(filecfg["label"])
+        if isinstance(filecfg.get("options"), dict):
+            options.update(filecfg["options"])
+
+    key_up = default.key.upper()
+    enabled = _env_flag(os.environ.get(f"MINDEX_SOURCE_{key_up}_ENABLED"), enabled)
+    env_roots = os.environ.get(f"MINDEX_SOURCE_{key_up}_ROOTS")
+    if env_roots:
+        roots = [Path(p).expanduser() for p in env_roots.split(os.pathsep) if p.strip()]
+
+    return SourceConfig(default.key, enabled, roots, label, options)
 
 
 def ensure_dirs() -> None:
