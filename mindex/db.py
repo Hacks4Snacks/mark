@@ -122,12 +122,33 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS collections (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    description  TEXT,
+    icon         TEXT,
+    color        TEXT,
+    rule         TEXT,                          -- JSON search rule; NULL = manual-only
+    pinned       INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at   TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS collection_members (
+    collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    state         TEXT NOT NULL DEFAULT 'include',  -- 'include' | 'exclude'
+    added_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (collection_id, session_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks(session_id);
 CREATE INDEX IF NOT EXISTS idx_files_session ON session_files(session_id);
 CREATE INDEX IF NOT EXISTS idx_tags_session ON tags(session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_repo ON sessions(repository);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
+CREATE INDEX IF NOT EXISTS idx_collection_members_session ON collection_members(session_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
     content,

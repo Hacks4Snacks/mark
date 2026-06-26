@@ -199,6 +199,7 @@ def search(
     include_automation: bool = False,
     sort: str = "recent",
     limit: int = 30,
+    only_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     query = (query or "").strip()
     if not query:
@@ -211,11 +212,14 @@ def search(
             sort=sort,
             include_automation=include_automation,
             limit=limit,
+            only_ids=only_ids,
         )
 
     allowed = _allowed_sessions(
         repo, source, tags, date_from, date_to, include_automation
     )
+    if only_ids is not None:
+        allowed = set(only_ids) if allowed is None else (allowed & only_ids)
 
     kw = _keyword_search(query, limit * 6) if mode in ("hybrid", "keyword") else []
     sem = _semantic_search(query, limit * 6) if mode in ("hybrid", "semantic") else []
@@ -294,10 +298,13 @@ def browse(
     sort: str = "recent",
     include_automation: bool = False,
     limit: int = 50,
+    only_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     allowed = _allowed_sessions(
         repo, source, tags, date_from, date_to, include_automation
     )
+    if only_ids is not None:
+        allowed = set(only_ids) if allowed is None else (allowed & only_ids)
     order = {
         "recent": "COALESCE(updated_at, created_at) DESC",
         # nulls last so undated sessions don't masquerade as the "oldest".

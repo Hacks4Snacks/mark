@@ -88,9 +88,11 @@ def _session_excerpt(s: dict[str, Any], max_chars: int = 1800) -> str:
     return text[:max_chars]
 
 
-def build_context(question: str, limit: int = 6) -> tuple[str, list[dict[str, Any]]]:
+def build_context(
+    question: str, limit: int = 6, session_ids: set[str] | None = None
+) -> tuple[str, list[dict[str, Any]]]:
     """Retrieve the most relevant sessions and assemble a citation context."""
-    results = search.search(question, mode="hybrid", limit=limit)
+    results = search.search(question, mode="hybrid", limit=limit, only_ids=session_ids)
     # Keep the whole context within a local model's window by sharing a fixed
     # character budget across however many sources were requested.
     per_source = max(700, min(1800, 22000 // max(len(results), 1)))
@@ -117,7 +119,9 @@ def build_context(question: str, limit: int = 6) -> tuple[str, list[dict[str, An
     return "\n\n---\n\n".join(blocks), sources
 
 
-def stream_answer(question: str, limit: int = 6) -> Iterator[dict[str, Any]]:
+def stream_answer(
+    question: str, limit: int = 6, session_ids: set[str] | None = None
+) -> Iterator[dict[str, Any]]:
     """Yield events: {sources}, then {token}* , then {done} or {error}."""
     st = status()
     if not st["available"] or not st["model"]:
@@ -127,7 +131,7 @@ def stream_answer(question: str, limit: int = 6) -> Iterator[dict[str, Any]]:
         }
         return
 
-    context, sources = build_context(question, limit)
+    context, sources = build_context(question, limit, session_ids=session_ids)
     yield {"type": "sources", "sources": sources}
     if not context.strip():
         yield {

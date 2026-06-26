@@ -169,6 +169,27 @@ Override the model with `MINDEX_OLLAMA_MODEL` or the endpoint with
 `MINDEX_OLLAMA_URL`. When Ollama isn't reachable, the view simply shows setup
 hints — every other feature works without it.
 
+## Collections
+
+**Collections** group related conversations so a long-running effort — *"the
+auth refactor"*, *"learning Rust"*, *"everything about repo X"* — reads as one
+place instead of scattered sessions. They're **auto-updating**: a collection
+follows a saved search and its filters (query, repo, topic, source, date), so
+newly indexed sessions flow in on their own. You stay in control — pin a session
+that the rule missed, or remove one it shouldn't include, and that choice
+**sticks across re-syncs**.
+
+- **Save as collection** — run any search or pick filters, then click *▦ Save as
+  collection* to turn the current view into an auto-updating group.
+- **＋ Collection** — on any conversation, add it to (or remove it from) a
+  collection by hand.
+- **Overview** — each collection rolls up its sessions: total spend, time, files
+  touched, topics, and date span.
+- **Ask this collection** — the optional local *Ask* (see below) can be scoped to
+  just one collection, so answers are drawn only from those conversations.
+
+Collections live in the same local SQLite database — nothing leaves your machine.
+
 ## How it works
 
 ```

@@ -23,7 +23,17 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ask, config, db, exporting, ingest, render, search, uploads
+from . import (
+    ask,
+    collections,
+    config,
+    db,
+    exporting,
+    ingest,
+    render,
+    search,
+    uploads,
+)
 
 # --- background reindex state ------------------------------------------------
 
@@ -521,6 +531,132 @@ def api_ask(body: AskIn) -> StreamingResponse:
 @app.post("/api/render")
 def api_render(body: RenderIn) -> dict[str, str]:
     return {"html": render.render_markdown(body.text or "")}
+
+
+# --- collections -------------------------------------------------------------
+
+
+class CollectionIn(BaseModel):
+    name: str
+    description: str | None = None
+    icon: str | None = None
+    color: str | None = None
+    rule: dict[str, Any] | None = None
+    pinned: bool = False
+
+
+class CollectionPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    icon: str | None = None
+    color: str | None = None
+    rule: dict[str, Any] | None = None
+    pinned: bool | None = None
+
+
+class MemberIn(BaseModel):
+    session_id: str
+    state: str = "include"
+
+
+class CollAskIn(BaseModel):
+    question: str
+    limit: int = 8
+
+
+@app.get("/api/collections")
+def api_collections() -> list[dict[str, Any]]:
+    return collections.list_collections()
+
+
+@app.post("/api/collections")
+def api_create_collection(body: CollectionIn) -> dict[str, Any]:
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    cid = collections.create(
+        name, body.description, body.icon, body.color, body.rule, body.pinned
+    )
+    return collections.get_collection(cid)
+
+
+@app.get("/api/collections/{cid}")
+def api_collection(cid: str) -> dict[str, Any]:
+    coll = collections.get_collection(cid)
+    if not coll:
+        raise HTTPException(status_code=404, detail="collection not found")
+    coll["members"] = collections.members_as_cards(cid)
+    coll["overview"] = collections.overview(cid)
+    coll["count"] = len(coll["members"])
+    return coll
+
+
+@app.patch("/api/collections/{cid}")
+def api_update_collection(cid: str, body: CollectionPatch) -> dict[str, Any]:
+    if not collections.get_collection(cid):
+        raise HTTPException(status_code=404, detail="collection not found")
+    fields = body.model_dump(exclude_unset=True)
+    if "name" in fields and not (fields["name"] or "").strip():
+        raise HTTPException(status_code=400, detail="name cannot be empty")
+    collections.update(cid, fields)
+    return collections.get_collection(cid)
+
+
+@app.delete("/api/collections/{cid}")
+def api_delete_collection(cid: str) -> dict[str, Any]:
+    if not collections.delete(cid):
+        raise HTTPException(status_code=404, detail="collection not found")
+    return {"ok": True}
+
+
+@app.post("/api/collections/{cid}/members")
+def api_add_member(cid: str, body: MemberIn) -> dict[str, Any]:
+    coll = collections.get_collection(cid)
+    if not coll:
+        raise HTTPException(status_code=404, detail="collection not found")
+    with db.cursor() as cur:
+        if not cur.execute(
+            "SELECT 1 FROM sessions WHERE id = ?", (body.session_id,)
+        ).fetchone():
+            raise HTTPException(status_code=404, detail="session not found")
+    collections.set_member(cid, body.session_id, body.state)
+    return {"ok": True, "count": len(collections.resolve_member_ids(coll))}
+
+
+@app.delete("/api/collections/{cid}/members/{session_id}")
+def api_remove_member(cid: str, session_id: str) -> dict[str, Any]:
+    coll = collections.get_collection(cid)
+    if not coll:
+        raise HTTPException(status_code=404, detail="collection not found")
+    collections.remove_member(cid, session_id)
+    return {"ok": True, "count": len(collections.resolve_member_ids(coll))}
+
+
+@app.get("/api/sessions/{session_id}/collections")
+def api_session_collections(session_id: str) -> list[dict[str, Any]]:
+    return collections.collections_for_session(session_id)
+
+
+@app.post("/api/collections/{cid}/ask")
+def api_collection_ask(cid: str, body: CollAskIn) -> StreamingResponse:
+    coll = collections.get_collection(cid)
+    if not coll:
+        raise HTTPException(status_code=404, detail="collection not found")
+    question = (body.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="empty question")
+    limit = max(1, min(int(body.limit), 20))
+    member_ids = collections.resolve_member_ids(coll)
+
+    def gen():
+        for event in ask.stream_answer(question, limit=limit, session_ids=member_ids):
+            yield "data: " + json.dumps(event) + "\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def _sync_session_fts_tags(cur, session_id: str) -> None:
