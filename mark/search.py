@@ -168,9 +168,8 @@ def _allowed_sessions(repo, source, tags, date_from, date_to) -> set[str] | None
         params.append(date_to + "T23:59:59Z")
     sql = "SELECT s.id FROM sessions s"
     if tags:
-        sql += " JOIN tags t ON t.session_id = s.id AND t.tag IN (%s)" % ",".join(
-            "?" * len(tags)
-        )
+        placeholders = ",".join("?" * len(tags))
+        sql += f" JOIN tags t ON t.session_id = s.id AND t.tag IN ({placeholders})"
         params = list(tags) + params
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
@@ -306,7 +305,8 @@ def browse(
     if allowed is not None:
         if not allowed:
             return []
-        sql += " WHERE id IN (%s)" % ",".join("?" * len(allowed))
+        placeholders = ",".join("?" * len(allowed))
+        sql += f" WHERE id IN ({placeholders})"
         params = list(allowed)
     sql += f" ORDER BY {order} LIMIT ?"
     params.append(limit)
@@ -324,10 +324,11 @@ def _load_sessions(ids: list[str]) -> dict[str, dict[str, Any]]:
     if not ids:
         return {}
     with db.cursor() as cur:
+        placeholders = ",".join("?" * len(ids))
         rows = [
             dict(r)
             for r in cur.execute(
-                "SELECT * FROM sessions WHERE id IN (%s)" % ",".join("?" * len(ids)),
+                f"SELECT * FROM sessions WHERE id IN ({placeholders})",
                 ids,
             ).fetchall()
         ]
@@ -340,9 +341,10 @@ def attach_tags(rows: list[dict[str, Any]]) -> None:
         return
     ids = [r["id"] for r in rows]
     with db.cursor() as cur:
+        placeholders = ",".join("?" * len(ids))
         tag_rows = cur.execute(
-            "SELECT session_id, tag FROM tags WHERE session_id IN (%s) ORDER BY score DESC"
-            % ",".join("?" * len(ids)),
+            f"SELECT session_id, tag FROM tags WHERE session_id IN ({placeholders}) "
+            "ORDER BY score DESC",
             ids,
         ).fetchall()
     by_sid: dict[str, list[str]] = {}
@@ -356,9 +358,9 @@ def _load_chunk_text(ids: list[int]) -> dict[int, str]:
     if not ids:
         return {}
     with db.cursor() as cur:
+        placeholders = ",".join("?" * len(ids))
         rows = cur.execute(
-            "SELECT id, content FROM chunks WHERE id IN (%s)"
-            % ",".join("?" * len(ids)),
+            f"SELECT id, content FROM chunks WHERE id IN ({placeholders})",
             ids,
         ).fetchall()
     return {r["id"]: r["content"] for r in rows}
@@ -467,7 +469,7 @@ def related_sessions(session_id: str, limit: int = 8) -> list[dict[str, Any]]:
     then ranks every other session by its single best-matching chunk. Returns
     lightweight cards the detail view can link to.
     """
-    ids, sessions, matrix = _vector_matrix()
+    _ids, sessions, matrix = _vector_matrix()
     if matrix.shape[0] == 0:
         return []
     own = [i for i, s in enumerate(sessions) if s == session_id]
@@ -496,7 +498,7 @@ def related_sessions(session_id: str, limit: int = 8) -> list[dict[str, Any]]:
             r["id"]: r
             for r in cur.execute(
                 "SELECT id, title, source, repository, created_at, updated_at "
-                "FROM sessions WHERE id IN (%s)" % ",".join("?" * len(order)),
+                f"FROM sessions WHERE id IN ({','.join('?' * len(order))})",
                 order,
             ).fetchall()
         }

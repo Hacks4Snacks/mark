@@ -147,9 +147,7 @@ def _tool_message_paths(part: dict[str, Any]) -> list[str]:
     return paths
 
 
-def _append_code_fence(
-    segments: list[str], uri_path: str | None, content: str
-) -> None:
+def _append_code_fence(segments: list[str], uri_path: str | None, content: str) -> None:
     body = content.rstrip()
     if not body:
         return
@@ -232,9 +230,9 @@ def _extract_response(parts: Any) -> dict[str, Any]:
                 else _message_part_text(p.get("invocationMessage"))
             )
             if not msg.strip():
-                msg = _message_part_text(p.get("pastTenseMessage")) or _message_part_text(
-                    p.get("invocationMessage")
-                )
+                msg = _message_part_text(
+                    p.get("pastTenseMessage")
+                ) or _message_part_text(p.get("invocationMessage"))
             if msg.strip():
                 text_segments.append(f"\n{msg.strip()}\n")
 

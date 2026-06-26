@@ -4,6 +4,7 @@ import hashlib
 import re
 import threading
 from collections.abc import Sequence
+from itertools import pairwise
 
 import numpy as np
 
@@ -139,7 +140,7 @@ class _HashEmbed(Embedder):
         words = [w for w in _WORD_RE.findall(text) if w not in _STOP and len(w) > 1]
         toks: list[str] = list(words)
         # word bigrams capture short phrases
-        toks += [f"{a}_{b}" for a, b in zip(words, words[1:])]
+        toks += [f"{a}_{b}" for a, b in pairwise(words)]
         # character n-grams give sub-word / typo robustness
         joined = " ".join(words)
         for n in (3, 4, 5):

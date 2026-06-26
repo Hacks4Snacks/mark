@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from itertools import pairwise
 from typing import Any
 
 import numpy as np
@@ -226,7 +227,7 @@ def _candidates(text: str, max_candidates: int = 30) -> list[tuple[str, float]]:
         if w and w not in _STOP and len(w) > 2 and not w.replace(".", "").isdigit()
     ]
     unigrams = Counter(filt)
-    bigrams = Counter(f"{a} {b}" for a, b in zip(filt, filt[1:]))
+    bigrams = Counter(f"{a} {b}" for a, b in pairwise(filt))
     raw: dict[str, float] = {}
     for w, c in unigrams.items():
         raw[w] = float(c)
@@ -245,7 +246,7 @@ def _keywords(text: str, top_k: int = 6) -> list[tuple[str, float]]:
     if not cands:
         return []
     terms = [t for t, _ in cands]
-    freq = {t: f for t, f in cands}
+    freq = dict(cands)
 
     emb = embeddings.get_embedder()
     doc_vec = emb.embed([text[:4000]])

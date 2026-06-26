@@ -40,7 +40,7 @@ def _embed_pending(progress: ProgressCb | None = None, batch: int = 256) -> int:
                 "INSERT OR REPLACE INTO embeddings(chunk_id, session_id, model, dim, vector) VALUES (?,?,?,?,?)",
                 [
                     (r["id"], r["session_id"], emb.name, emb.dim, embeddings.to_blob(v))
-                    for r, v in zip(part, vectors)
+                    for r, v in zip(part, vectors, strict=False)
                 ],
             )
             conn.commit()

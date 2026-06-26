@@ -94,7 +94,7 @@ def _index_document(
                 "INSERT OR IGNORE INTO tags(session_id, tag, score) VALUES (?,?,?)",
                 (session_id, tag, score),
             )
-        for i, (piece, vec) in enumerate(zip(chunks, vectors)):
+        for i, (piece, vec) in enumerate(zip(chunks, vectors, strict=False)):
             cur.execute(
                 "INSERT INTO chunks(session_id, source_type, turn_index, content) VALUES (?,?,?,?)",
                 (session_id, "document", i, piece),

@@ -305,7 +305,9 @@ def test_vscode_text_edit_groups_become_code_fences(tmp_path):
                                     "path": "/repo/mark/persist.py",
                                     "scheme": "file",
                                 },
-                                "edits": [[{"text": "def write_session():\n    pass\n"}]],
+                                "edits": [
+                                    [{"text": "def write_session():\n    pass\n"}]
+                                ],
                             },
                             {"value": "\n```\n\n```\n"},
                         ],

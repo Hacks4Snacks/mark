@@ -44,7 +44,8 @@ def snippets(
     ]
     params: list[Any] = []
     if commands:
-        where.append("LOWER(cb.language) IN (%s)" % ",".join("?" * len(SHELL_LANGS)))
+        placeholders = ",".join("?" * len(SHELL_LANGS))
+        where.append(f"LOWER(cb.language) IN ({placeholders})")
         params.extend(SHELL_LANGS)
     elif language:
         where.append("cb.language = ?")

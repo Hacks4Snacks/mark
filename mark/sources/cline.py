@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
-from collections.abc import Iterable
 
 from .. import config
 from ..persist import write_session
@@ -193,10 +194,8 @@ def _ui_token_totals(
         tout += int(float(j.get("tokensOut") or 0))
         cr += int(float(j.get("cacheReads") or 0))
         cw += int(float(j.get("cacheWrites") or 0))
-        try:
+        with contextlib.suppress(TypeError, ValueError):
             cost += float(j.get("cost") or 0)
-        except (TypeError, ValueError):
-            pass
     return tin, tout, cr, cw, cost
 
 

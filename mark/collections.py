@@ -2,7 +2,7 @@
 
 Persistence lives in :mod:`mark.repositories.collections`; this module composes
 those CRUD/query functions with the search layer to resolve a collection's
-effective members — ``(rule ∪ manual includes) − manual excludes`` — and to
+effective members — ``(rule | manual includes) - manual excludes`` — and to
 shape the cards/overview the API returns.
 """
 
@@ -80,7 +80,7 @@ def _resolve_ids(
 
 
 def resolve_member_ids(coll: dict[str, Any]) -> set[str]:
-    """Effective member ids: (rule ∪ includes) − excludes."""
+    """Effective member ids: (rule | includes) - excludes."""
     rule = _parse_rule(coll.get("rule"))
     includes, excludes = _manual_members(coll["id"])
     return _resolve_ids(rule, includes, excludes)
