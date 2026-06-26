@@ -8,6 +8,7 @@ import { showOnly, state } from "../state.js";
 import {
   $, $$, esc, fmtCost, fmtDate, fmtDuration, srcMeta, toast, withTransition,
 } from "../utils.js";
+import { icon } from "../icons.js";
 import { cardHTML } from "./list.js";
 import { openSession, teardownReading } from "./detail.js";
 import { streamAsk } from "./ask.js";
@@ -38,9 +39,9 @@ function ruleSummary(r) {
   const parts = [];
   if (r.q) parts.push(`matching \u201C${esc(r.q)}\u201D`);
   if (r.source) parts.push(`${srcMeta(r.source).icon} ${esc(srcMeta(r.source).label)}`);
-  if (r.repo) parts.push(`\uD83D\uDCC1 ${esc(r.repo)}`);
+  if (r.repo) parts.push(`${icon("folder")} ${esc(r.repo)}`);
   (r.tags || []).forEach((t) => parts.push(`# ${esc(t)}`));
-  if (r.date_from || r.date_to) parts.push(`\uD83D\uDDD3 ${esc(r.date_from || "\u2026")} \u2192 ${esc(r.date_to || "\u2026")}`);
+  if (r.date_from || r.date_to) parts.push(`${icon("calendar")} ${esc(r.date_from || "\u2026")} ${icon("arrow-right", { size: 13 })} ${esc(r.date_to || "\u2026")}`);
   return parts.map((p) => `<span class="crs-chip">${p}</span>`).join("");
 }
 
@@ -70,7 +71,7 @@ async function loadCollectionsGrid() {
       ? `${cols.length} collection${cols.length === 1 ? "" : "s"}`
       : "";
     if (!cols.length) {
-      host.innerHTML = `<div class="empty"><div class="big">\u25A6</div>No collections yet.<br/>Run a search or pick filters, then <b>Save as collection</b> \u2014 or create one here.</div>`;
+      host.innerHTML = `<div class="empty"><div class="big">${icon("layers", { size: 40 })}</div>No collections yet.<br/>Run a search or pick filters, then <b>Save as collection</b> \u2014 or create one here.</div>`;
       return;
     }
     host.innerHTML = cols.map(collectionCardHTML).join("");
@@ -78,7 +79,7 @@ async function loadCollectionsGrid() {
       el.addEventListener("click", () => openCollection(el.dataset.id))
     );
   } catch (e) {
-    host.innerHTML = `<div class="empty"><div class="big">\u26A0\uFE0F</div>${esc(e.message)}</div>`;
+    host.innerHTML = `<div class="empty"><div class="big">${icon("alert", { size: 40 })}</div>${esc(e.message)}</div>`;
   }
 }
 
@@ -130,22 +131,22 @@ function renderCollection(c) {
   ].map(([v, k]) => `<div class="usage-stat"><div class="us-val">${v}</div><div class="us-key">${k}</div></div>`).join("");
 
   const span = (ov.date_min || ov.date_max)
-    ? `<span class="pill">\uD83D\uDDD3 ${fmtDate(ov.date_min)} \u2013 ${fmtDate(ov.date_max)}</span>` : "";
+    ? `<span class="pill">${icon("calendar")} ${fmtDate(ov.date_min)} \u2013 ${fmtDate(ov.date_max)}</span>` : "";
   const topics = (ov.topics || []).slice(0, 10)
     .map((tp) => `<span class="t">${esc(tp.tag)}</span>`).join("");
 
   const members = c.members || [];
   const membersHTML = members.length
-    ? members.map((m) => `<div class="coll-member">${cardHTML(m)}<button class="coll-remove" data-id="${esc(m.id)}" title="Remove from this collection">\u00D7</button></div>`).join("")
-    : `<div class="empty"><div class="big">\uD83D\uDDC2\uFE0F</div>No sessions in this collection yet.${ruleIsEmpty(c.rule) ? " Open a conversation and use \u201C\uFF0B Collection\u201D to add it." : ""}</div>`;
+    ? members.map((m) => `<div class="coll-member">${cardHTML(m)}<button class="coll-remove" data-id="${esc(m.id)}" title="Remove from this collection">${icon("x", { size: 14 })}</button></div>`).join("")
+    : `<div class="empty"><div class="big">${icon("archive", { size: 40 })}</div>No sessions in this collection yet.${ruleIsEmpty(c.rule) ? " Open a conversation and use \u201CCollection\u201D to add it." : ""}</div>`;
 
   view.innerHTML = `
     <div class="detail-head">
       <div class="detail-top">
-        <span class="back" id="collBack">\u2190 All collections</span>
+        <span class="back" id="collBack">${icon("arrow-left", { size: 15 })} All collections</span>
         <div class="detail-actions">
-          <button class="btn btn-ghost" id="collEdit" title="Edit name, icon, description">\u270E Edit</button>
-          <button class="btn btn-ghost" id="collDelete" title="Delete this collection">\uD83D\uDDD1 Delete</button>
+          <button class="btn btn-ghost" id="collEdit" title="Edit name, icon, description">${icon("pencil")} Edit</button>
+          <button class="btn btn-ghost" id="collDelete" title="Delete this collection">${icon("trash")} Delete</button>
         </div>
       </div>
       <h1><span class="coll-title-icon">${esc(collIconOf(c))}</span> ${esc(c.name)}</h1>
@@ -157,7 +158,7 @@ function renderCollection(c) {
     ${topics ? `<div class="coll-topics"><h4>Topics</h4><div class="card-tags">${topics}</div></div>` : ""}
 
     <div class="coll-ask">
-      <h4>\u2726 Ask this collection</h4>
+      <h4>${icon("sparkles")} Ask this collection</h4>
       <form class="ask-form" id="collAskForm">
         <textarea id="collAskInput" rows="2" placeholder="Ask a question answered only from these conversations\u2026"></textarea>
         <button class="btn btn-primary" id="collAskSend" type="submit">Ask</button>
@@ -312,9 +313,9 @@ export async function openCollMenu(anchor, sessionId) {
   try { items = await api(`/api/sessions/${encodeURIComponent(sessionId)}/collections`); }
   catch (e) { return toast(e.message, true); }
   const rows = items.length
-    ? items.map((c) => `<button class="cm-item${c.member ? " on" : ""}" data-id="${esc(c.id)}"><span class="cm-mark">${c.member ? "\u2713" : "\uFF0B"}</span> <span class="cm-name">${esc(collIconOf(c))} ${esc(c.name)}</span></button>`).join("")
+    ? items.map((c) => `<button class="cm-item${c.member ? " on" : ""}" data-id="${esc(c.id)}"><span class="cm-mark">${c.member ? icon("check", { size: 14 }) : icon("plus", { size: 14 })}</span> <span class="cm-name">${esc(collIconOf(c))} ${esc(c.name)}</span></button>`).join("")
     : `<div class="cm-empty muted">No collections yet</div>`;
-  menu.innerHTML = rows + `<button class="cm-item cm-new" data-new="1"><span class="cm-mark">\uFF0B</span> <span class="cm-name">New collection\u2026</span></button>`;
+  menu.innerHTML = rows + `<button class="cm-item cm-new" data-new="1"><span class="cm-mark">${icon("plus", { size: 14 })}</span> <span class="cm-name">New collection\u2026</span></button>`;
   const r = anchor.getBoundingClientRect();
   menu.style.top = (window.scrollY + r.bottom + 6) + "px";
   menu.style.left = (window.scrollX + Math.max(8, Math.min(r.left, window.innerWidth - 268))) + "px";

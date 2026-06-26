@@ -9,6 +9,7 @@ import { loadFacets } from "../sidebar.js";
 import {
   $, $$, esc, fmtBytes, fmtCost, fmtDate, fmtDuration, fmtTokens, srcMeta, toast, withTransition,
 } from "../utils.js";
+import { icon } from "../icons.js";
 import { showList } from "./list.js";
 import { openCollMenu } from "./collections.js";
 
@@ -34,11 +35,11 @@ function renderDetail(s) {
   const manualSet = new Set(s.manual_tags || []);
   const meta = [
     `<span class="pill src-${s.source}">${srcMeta(s.source).icon} ${esc(srcMeta(s.source).label)}</span>`,
-    s.repository ? `<span class="pill">📁 ${esc(s.repository)}</span>` : "",
-    `<span class="pill">🕑 ${fmtDate(s.updated_at || s.created_at)}</span>`,
-    s.turn_count ? `<span class="pill">💬 ${s.turn_count} turns</span>` : "",
-    s.model ? `<span class="pill">🧠 ${esc(s.model)}</span>` : "",
-    fmtDuration(s.duration_seconds) ? `<span class="pill">⏱ ${fmtDuration(s.duration_seconds)}</span>` : "",
+    s.repository ? `<span class="pill">${icon("folder")} ${esc(s.repository)}</span>` : "",
+    `<span class="pill">${icon("clock")} ${fmtDate(s.updated_at || s.created_at)}</span>`,
+    s.turn_count ? `<span class="pill">${icon("message")} ${s.turn_count} turns</span>` : "",
+    s.model ? `<span class="pill">${icon("cpu")} ${esc(s.model)}</span>` : "",
+    fmtDuration(s.duration_seconds) ? `<span class="pill">${icon("timer")} ${fmtDuration(s.duration_seconds)}</span>` : "",
     s.est_cost_usd ? `<span class="pill cost">~${fmtCost(s.est_cost_usd)}${s.tokens_estimated ? " est." : ""}</span>` : "",
   ].join("");
 
@@ -51,8 +52,8 @@ function renderDetail(s) {
   const resumeCmd = `copilot --resume ${s.id}`;
   asideBlocks.push(`<div><h4>Session</h4>
     ${isCli ? `<div class="resume-hint">Resume in Copilot CLI</div>
-      <div class="copy-row"><code>${esc(resumeCmd)}</code><button class="copy-btn" data-copy="${esc(resumeCmd)}" title="Copy">⧉</button></div>`
-      : `<div class="copy-row"><code title="${esc(s.id)}">${esc(s.id)}</code><button class="copy-btn" data-copy="${esc(s.id)}" title="Copy">⧉</button></div>`}
+      <div class="copy-row"><code>${esc(resumeCmd)}</code><button class="copy-btn" data-copy="${esc(resumeCmd)}" title="Copy">${icon("copy")}</button></div>`
+      : `<div class="copy-row"><code title="${esc(s.id)}">${esc(s.id)}</code><button class="copy-btn" data-copy="${esc(s.id)}" title="Copy">${icon("copy")}</button></div>`}
   </div>`);
 
   // Usage / cost
@@ -81,13 +82,13 @@ function renderDetail(s) {
   }
   const topicPills = (s.tags || []).map((t) => {
     const m = manualSet.has(t);
-    return `<span class="pill topic${m ? " manual" : ""}" data-tag="${esc(t)}">${esc(t)}${m ? `<button class="topic-x" data-del="${esc(t)}" title="Remove topic">×</button>` : ""}</span>`;
+    return `<span class="pill topic${m ? " manual" : ""}" data-tag="${esc(t)}">${esc(t)}${m ? `<button class="topic-x" data-del="${esc(t)}" title="Remove topic">${icon("x", { size: 12 })}</button>` : ""}</span>`;
   }).join("");
   asideBlocks.push(`<div><h4>Topics</h4>
     <div class="chips topics-edit">${topicPills || '<span class="muted">none yet</span>'}</div>
     <form class="topic-add" id="topicAdd">
       <input id="topicInput" placeholder="add a topic..." maxlength="40" autocomplete="off" spellcheck="false" />
-      <button class="btn btn-ghost" type="submit" title="Add topic">＋</button>
+      <button class="btn btn-ghost icon-only" type="submit" title="Add topic">${icon("plus")}</button>
     </form>
   </div>`);
 
@@ -103,10 +104,10 @@ function renderDetail(s) {
       attachments.map((a, i) => {
         const dl = attDownloadHref(a);
         const dlLink = dl
-          ? `<a class="att-dl" href="${dl}" download="${esc(a.filename || "file")}" title="Download ${esc(a.filename || "file")}">⤓</a>`
+          ? `<a class="att-dl" href="${dl}" download="${esc(a.filename || "file")}" title="Download ${esc(a.filename || "file")}">${icon("download", { size: 14 })}</a>`
           : "";
         return `<div class="aside-file att-row" title="${esc(a.filename || "")}">`
-          + `<a class="att-jump" data-att="${i}">📎 ${esc(a.filename || "file")}</a>${dlLink}</div>`;
+          + `<a class="att-jump" data-att="${i}">${icon("paperclip", { size: 13 })} ${esc(a.filename || "file")}</a>${dlLink}</div>`;
       }).join("")
     }</div></div>`);
   }
@@ -123,14 +124,14 @@ function renderDetail(s) {
         const meta = `${esc(a.filename || "file")} · ${fmtBytes(a.size_bytes)}`;
         const dl = attDownloadHref(a);
         const dlLink = dl
-          ? `<a class="att-dl" href="${dl}" download="${esc(a.filename || "file")}" title="Download ${esc(a.filename || "file")}">⤓ Download</a>`
+          ? `<a class="att-dl" href="${dl}" download="${esc(a.filename || "file")}" title="Download ${esc(a.filename || "file")}">${icon("download", { size: 14 })} Download</a>`
           : "";
         const inner = a.html
           ? `<div class="md">${a.html}</div>`
           : a.content != null
             ? `<pre class="att-pre">${esc(a.content)}</pre>`
             : `<p class="muted">Not stored (binary or larger than the snapshot limit). Path: ${esc(a.stored_path || "")}</p>`;
-        return `<details class="attachment" id="att-${i}"><summary>📎 ${meta}${dlLink}</summary>${inner}</details>`;
+        return `<details class="attachment" id="att-${i}"><summary>${icon("paperclip", { size: 13 })} ${meta}${dlLink}</summary>${inner}</details>`;
       }).join("")
     }</div>`;
   }
@@ -138,11 +139,11 @@ function renderDetail(s) {
   view.innerHTML = `
     <div class="detail-head">
       <div class="detail-top">
-        <span class="back" id="backBtn">← Back to results</span>
+        <span class="back" id="backBtn">${icon("arrow-left", { size: 15 })} Back to results</span>
         <div class="detail-actions">
-          <button class="btn btn-ghost" id="addToColl" title="Add this conversation to a collection">＋ Collection</button>
-          <button class="btn btn-ghost" id="copyLink" title="Copy a link to this conversation">🔗 Link</button>
-          <a class="btn btn-ghost" id="exportMd" href="/api/sessions/${encodeURIComponent(s.id)}/export.md" download title="Download as Markdown">⤓ Markdown</a>
+          <button class="btn btn-ghost" id="addToColl" title="Add this conversation to a collection">${icon("plus")} Collection</button>
+          <button class="btn btn-ghost" id="copyLink" title="Copy a link to this conversation">${icon("link")} Link</button>
+          <a class="btn btn-ghost" id="exportMd" href="/api/sessions/${encodeURIComponent(s.id)}/export.md" download title="Download as Markdown">${icon("download")} Markdown</a>
         </div>
       </div>
       <h1>${esc(s.title || "Untitled")}</h1>
@@ -150,7 +151,7 @@ function renderDetail(s) {
       <div class="detail-meta">${meta}</div>
     </div>
     <div class="detail-sticky" id="detailSticky">
-      <span class="ds-back" id="dsBack" title="Back to results">←</span>
+      <span class="ds-back" id="dsBack" title="Back to results">${icon("arrow-left", { size: 16 })}</span>
       <span class="ds-title">${esc(s.title || "Untitled")}</span>
     </div>
     <div class="detail-body">

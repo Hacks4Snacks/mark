@@ -5,6 +5,7 @@
 import { api } from "../api.js";
 import { showOnly, state } from "../state.js";
 import { $, esc, fmtCost, fmtTokens, srcMeta, withTransition } from "../utils.js";
+import { icon } from "../icons.js";
 import { teardownReading } from "./detail.js";
 
 export async function showUsage(opts = {}) {
@@ -26,7 +27,7 @@ export async function loadUsage() {
     const data = await api("/api/usage");
     host.innerHTML = renderUsage(data);
   } catch (e) {
-    host.innerHTML = `<div class="empty"><div class="big">⚠️</div>${esc(e.message)}</div>`;
+    host.innerHTML = `<div class="empty"><div class="big">${icon("alert", { size: 40 })}</div>${esc(e.message)}</div>`;
   }
 }
 
@@ -46,12 +47,12 @@ function renderUsage(d) {
   ];
   const stats = cards.map(([k, v, hint]) =>
     `<div class="usage-stat"><div class="us-val">${v}</div><div class="us-key">${esc(k)}${
-      hint ? ` <span class="us-info" tabindex="0" role="img" aria-label="${esc(hint)}" title="${esc(hint)}">ⓘ</span>` : ""
+      hint ? ` <span class="us-info" tabindex="0" role="img" aria-label="${esc(hint)}" title="${esc(hint)}">${icon("info", { size: 13 })}</span>` : ""
     }</div></div>`
   ).join("");
   return `
     <div class="usage-stats">${stats}</div>
-    <p class="usage-caption">Spend and token figures are best-effort estimates — not every source reports usage, so totals can undercount. Hover ⓘ for details.</p>
+    <p class="usage-caption">Spend and token figures are best-effort estimates — not every source reports usage, so totals can undercount. Hover ${icon("info", { size: 12 })} for details.</p>
     ${usageColChart(d.by_day || [])}
     <div class="usage-grid">
       ${usageBars("By model", d.by_model || [], "model")}

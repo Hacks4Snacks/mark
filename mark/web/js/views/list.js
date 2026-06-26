@@ -9,6 +9,7 @@ import { syncFilterUI } from "../sidebar.js";
 import {
   $, $$, debounce, esc, fmtCost, fmtDate, fmtDuration, normTitle, srcMeta, withTransition,
 } from "../utils.js";
+import { icon } from "../icons.js";
 import { openSession, teardownReading } from "./detail.js";
 import { toggleSaveCollectionBtn } from "./collections.js";
 
@@ -39,7 +40,7 @@ export async function doSearch(reset = true, opts = {}) {
     const data = await api("/api/search?" + params); // empty q falls back to browse server-side
     renderResults(data, reset);
   } catch (e) {
-    $("#results").innerHTML = `<div class="empty"><div class="big">⚠️</div>${esc(e.message)}</div>`;
+    $("#results").innerHTML = `<div class="empty"><div class="big">${icon("alert", { size: 40 })}</div>${esc(e.message)}</div>`;
   }
 }
 
@@ -61,7 +62,7 @@ function renderResults(data, animate = true) {
   renderActiveFilters();
 
   if (!results.length) {
-    $("#results").innerHTML = `<div class="empty"><div class="big">${state.q ? "🔍" : "🗂️"}</div>${
+    $("#results").innerHTML = `<div class="empty"><div class="big">${state.q ? icon("search", { size: 40 }) : icon("archive", { size: 40 })}</div>${
       state.q ? "No conversations match. Try semantic mode or different words." : "Nothing here yet — re-scan or add a note."
     }</div>`;
     return;
@@ -95,13 +96,13 @@ function renderResults(data, animate = true) {
 
 export function cardHTML(r, gid = "", groupSize = 1) {
   const score = r.score != null ? `<div class="score" title="relevance"><i style="width:${Math.round(r.score * 100)}%"></i></div>` : "";
-  const repo = r.repository ? `<span class="pill">📁 ${esc(r.repository)}</span>` : "";
+  const repo = r.repository ? `<span class="pill">${icon("folder")} ${esc(r.repository)}</span>` : "";
   const src = `<span class="pill src-${r.source}">${srcMeta(r.source).icon} ${esc(srcMeta(r.source).label)}</span>`;
   const tags = (r.tags || []).slice(0, 4).map((t) => `<span class="t">${esc(t)}</span>`).join("");
   const dur = fmtDuration(r.duration_seconds);
   const cost = r.est_cost_usd ? fmtCost(r.est_cost_usd) : "";
   const dupe = groupSize > 1
-    ? `<button class="dupe-badge" data-group="${gid}" title="Show ${groupSize - 1} more similar session${groupSize - 1 === 1 ? "" : "s"}">⧉ ${groupSize}</button>`
+    ? `<button class="dupe-badge" data-group="${gid}" title="Show ${groupSize - 1} more similar session${groupSize - 1 === 1 ? "" : "s"}">${icon("layers", { size: 13 })} ${groupSize}</button>`
     : "";
   return `
     <div class="card" data-id="${esc(r.id)}"${gid ? ` data-group-rep="${gid}"` : ""}>
@@ -113,9 +114,9 @@ export function cardHTML(r, gid = "", groupSize = 1) {
       <div class="card-snippet">${r.snippet || esc(r.summary || "")}</div>
       <div class="card-meta">
         ${src}${repo}
-        <span class="pill">🕑 ${fmtDate(r.updated_at || r.created_at)}</span>
-        ${r.turn_count ? `<span class="pill">💬 ${r.turn_count}</span>` : ""}
-        ${dur ? `<span class="pill">⏱ ${dur}</span>` : ""}
+        <span class="pill">${icon("clock")} ${fmtDate(r.updated_at || r.created_at)}</span>
+        ${r.turn_count ? `<span class="pill">${icon("message")} ${r.turn_count}</span>` : ""}
+        ${dur ? `<span class="pill">${icon("timer")} ${dur}</span>` : ""}
         ${cost ? `<span class="pill cost">~${cost}</span>` : ""}
         <div class="card-tags">${tags}</div>
       </div>
@@ -164,18 +165,18 @@ export function renderActiveFilters() {
   const el = $("#activeFilters");
   if (!el) return;
   const chips = [];
-  if (state.source) chips.push({ type: "source", val: state.source, label: `${srcMeta(state.source).icon} ${srcMeta(state.source).label}` });
-  if (state.repo) chips.push({ type: "repo", val: state.repo, label: `📁 ${state.repo}` });
+  if (state.source) chips.push({ type: "source", val: state.source, label: `${srcMeta(state.source).icon} ${esc(srcMeta(state.source).label)}`, raw: true });
+  if (state.repo) chips.push({ type: "repo", val: state.repo, label: `${icon("folder")} ${esc(state.repo)}`, raw: true });
   [...state.tags].forEach((t) => chips.push({ type: "tag", val: t, label: `# ${t}` }));
   if (state.dateFrom || state.dateTo) {
-    chips.push({ type: "date", val: "", label: `🗓 ${state.dateFrom || "..."} → ${state.dateTo || "..."}` });
+    chips.push({ type: "date", val: "", label: `${icon("calendar")} ${esc(state.dateFrom || "...")} ${icon("arrow-right", { size: 13 })} ${esc(state.dateTo || "...")}`, raw: true });
   }
 
   if (!chips.length) { el.hidden = true; el.innerHTML = ""; return; }
   el.hidden = false;
   el.innerHTML =
     `<span class="af-label">Filtered by</span>` +
-    chips.map((c) => `<button class="af-chip" data-type="${c.type}" data-val="${esc(c.val)}">${esc(c.label)}<span class="x">×</span></button>`).join("") +
+    chips.map((c) => `<button class="af-chip" data-type="${c.type}" data-val="${esc(c.val)}">${c.raw ? c.label : esc(c.label)}<span class="x">${icon("x", { size: 12 })}</span></button>`).join("") +
     `<button class="af-clear" id="afClear">Clear all</button>`;
 }
 

@@ -143,6 +143,7 @@ mark { background: var(--mark); color: var(--mark-ink); border-radius: 3px; padd
 
 .actions { display: flex; gap: 8px; }
 .btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
   border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
   border-radius: 10px; padding: 9px 13px; cursor: pointer; font-weight: 600;
   transition: all var(--speed); white-space: nowrap;
@@ -152,6 +153,15 @@ mark { background: var(--mark); color: var(--mark-ink); border-radius: 3px; padd
 .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--accent-ink); border: none; }
 .btn-ghost { background: none; border: none; }
 .btn-block { width: 100%; }
+.btn.icon-only { padding: 9px 10px; }
+
+/* inline SVG iconography (Lucide-style). `.ic` is dropped into text and flex
+   alike; vertical-align is ignored inside flex parents and corrects baseline
+   alignment everywhere else. */
+.ic { flex: none; vertical-align: -0.18em; }
+.bi { display: inline-flex; }
+/* compact contexts: scale icons down to sit proportionally with small text */
+.pill .ic, .chip .ic, .crs-chip .ic, .af-chip .ic { width: 13px; height: 13px; }
 #reindexBtn.spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

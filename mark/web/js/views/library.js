@@ -5,6 +5,7 @@
 import { api } from "../api.js";
 import { showOnly, state } from "../state.js";
 import { $, $$, esc, srcMeta, toast, withTransition } from "../utils.js";
+import { icon } from "../icons.js";
 import { openSession, teardownReading } from "./detail.js";
 
 export const libState = { q: "", language: "", commands: false };
@@ -47,7 +48,7 @@ export async function loadSnippets() {
       ? `${snippetData.length}${snippetData.length >= 80 ? "+" : ""} snippet${snippetData.length === 1 ? "" : "s"}`
       : "";
     if (!snippetData.length) {
-      host.innerHTML = `<div class="empty"><div class="big">⌗</div>No snippets match that filter.</div>`;
+      host.innerHTML = `<div class="empty"><div class="big">${icon("code", { size: 40 })}</div>No snippets match that filter.</div>`;
       return;
     }
     host.innerHTML = snippetData.map(snippetCardHTML).join("");
@@ -57,7 +58,7 @@ export async function loadSnippets() {
       catch (_) { toast("Copy failed", true); }
     }));
   } catch (e) {
-    host.innerHTML = `<div class="empty"><div class="big">⚠️</div>${esc(e.message)}</div>`;
+    host.innerHTML = `<div class="empty"><div class="big">${icon("alert", { size: 40 })}</div>${esc(e.message)}</div>`;
   }
 }
 
@@ -68,7 +69,7 @@ function snippetCardHTML(s, i) {
     <div class="snip-head">
       <span class="snip-lang">${esc(lang)}</span>
       <a class="snip-open" data-id="${esc(s.session_id)}" title="Open conversation">${srcMeta(s.source).icon} ${esc(s.session_title || "Untitled")}${repo}</a>
-      <button class="snip-copy" data-idx="${i}" title="Copy snippet">⧉</button>
+      <button class="snip-copy" data-idx="${i}" title="Copy snippet">${icon("copy", { size: 14 })}</button>
     </div>
     <pre class="snip-code"><code>${esc(s.content)}</code></pre>
   </div>`;

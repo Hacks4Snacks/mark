@@ -7,6 +7,7 @@ import { api } from "./api.js";
 import { state } from "./state.js";
 import { loadFacets, loadStats, syncFilterUI } from "./sidebar.js";
 import { $, $$, debounce, srcMeta, toast } from "./utils.js";
+import { icon } from "./icons.js";
 import { routeFromHash } from "./router.js";
 import {
   clearAllFilters, doSearch, handleListKey, run, showList,
@@ -247,7 +248,18 @@ function setup() {
   setupDialog();
 }
 
+// Paint inline SVGs into any static `data-icon` placeholders (topbar, dialogs).
+// Dynamically-rendered views call `icon()` directly, so this runs once on boot.
+function paintIcons(root = document) {
+  $$("[data-icon]", root).forEach((el) => {
+    const size = el.dataset.iconSize ? Number(el.dataset.iconSize) : 16;
+    el.innerHTML = icon(el.dataset.icon, { size });
+    delete el.dataset.icon;
+  });
+}
+
 async function init() {
+  paintIcons();
   setup();
   await refreshAll();
   routeFromHash();

@@ -1,7 +1,9 @@
 "use strict";
 
-// DOM + formatting helpers shared across every view. Leaf module: it imports
-// nothing from the app, so anything may import it without creating a cycle.
+// DOM + formatting helpers shared across every view. Imports only the icon
+// set (itself a leaf), so anything may import this without creating a cycle.
+
+import { srcIcon } from "./icons.js";
 
 export const $ = (sel, el = document) => el.querySelector(sel);
 export const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
@@ -10,20 +12,24 @@ export const esc = (s) =>
   (s ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-export const SRC = {
-  vscode: { icon: "\uD83D\uDCAC", label: "VS Code" },
-  cli: { icon: "\uD83E\uDD16", label: "Copilot CLI" },
-  cline: { icon: "\uD83D\uDEE0\uFE0F", label: "Cline" },
-  zoocode: { icon: "\uD83E\uDD93", label: "Zoo Code" },
-  roo: { icon: "\uD83E\uDD98", label: "Roo Code" },
-  kilocode: { icon: "\uD83D\uDD36", label: "Kilo Code" },
-  cursor: { icon: "\uD83D\uDD32", label: "Cursor" },
-  chatgpt: { icon: "\u2728", label: "ChatGPT" },
-  agent: { icon: "\uD83E\uDDE0", label: "Agent" },
-  upload: { icon: "\uD83D\uDCCE", label: "Upload" },
-  copilot: { icon: "\uD83D\uDCAC", label: "Copilot" },
+export const SRC_LABEL = {
+  vscode: "VS Code",
+  cli: "Copilot CLI",
+  cline: "Cline",
+  zoocode: "Zoo Code",
+  roo: "Roo Code",
+  kilocode: "Kilo Code",
+  cursor: "Cursor",
+  chatgpt: "ChatGPT",
+  agent: "Agent",
+  upload: "Upload",
+  copilot: "Copilot",
 };
-export const srcMeta = (s) => SRC[s] || { icon: "\uD83D\uDCAC", label: s || "session" };
+// `icon` is an inline SVG string; `label` is the human name.
+export const srcMeta = (s) => ({
+  icon: srcIcon(s),
+  label: SRC_LABEL[s] || s || "session",
+});
 
 export function fmtDate(iso) {
   if (!iso) return "";
