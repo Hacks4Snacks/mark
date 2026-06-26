@@ -1,6 +1,8 @@
-# 🧠 mindex — a knowledge base for your Copilot sessions
+<p align="center"><img src="mindex/web/favicon.svg" width="72" alt="mindex logo" /></p>
 
-mindex turns the Copilot history already stored on your machine into a
+# mindex — your searchable AI chat archive
+
+mindex turns the AI coding history already stored on your machine into a
 **beautiful, searchable knowledge base**, so you never lose a useful
 conversation again. It indexes several sources automatically:
 

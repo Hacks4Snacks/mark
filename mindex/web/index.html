@@ -3,19 +3,26 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>mindex · Copilot knowledge base</title>
+  <title>mindex · your searchable AI chat archive</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
   <link rel="stylesheet" href="/api/pygments.css" />
   <link rel="stylesheet" href="/styles.css" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand" id="brandHome" title="Home">
-      <span class="brand-mark">🧠</span>
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M6 4h12a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3h-7l-4 3.5V17H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3z" stroke="#fff" stroke-width="1.7" stroke-linejoin="round"/>
+          <path d="M12 7l1 2.3 2.3 1-2.3 1-1 2.3-1-2.3-2.3-1 2.3-1z" fill="#fff"/>
+        </svg>
+      </span>
       <div class="brand-text">
         <strong>mindex</strong>
-        <small>your Copilot memory</small>
+        <small>your searchable AI chat archive</small>
       </div>
     </div>
 
@@ -30,11 +37,13 @@
     </div>
 
     <div class="actions">
-      <button id="addBtn" class="btn btn-primary" title="Add a note or file">＋ Add</button>
-      <button id="reindexBtn" class="btn" title="Re-scan now · auto-syncs new sessions automatically">⟳</button>
-      <button id="themeBtn" class="btn" title="Toggle theme">◐</button>
+      <button id="addBtn" class="btn btn-primary" title="Add a note or file" aria-label="Add a note or file">＋ Add</button>
+      <button id="reindexBtn" class="btn" title="Re-scan now · auto-syncs new sessions automatically" aria-label="Re-scan history now">⟳</button>
+      <button id="themeBtn" class="btn" title="Toggle theme" aria-label="Toggle light or dark theme">◐</button>
     </div>
   </header>
+
+  <div id="readProgress" class="read-progress" role="progressbar" aria-label="Reading progress" hidden></div>
 
   <main class="layout">
     <aside class="sidebar">
@@ -86,6 +95,7 @@
           <h2 id="listTitle">Recent sessions</h2>
           <span id="listCount" class="muted"></span>
         </div>
+        <div id="activeFilters" class="active-filters" hidden></div>
         <div id="results" class="results"></div>
       </div>
 

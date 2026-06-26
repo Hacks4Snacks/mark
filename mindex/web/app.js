@@ -14,6 +14,22 @@ const state = {
   view: "list",
 };
 
+const prefersReducedMotion = () =>
+  window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// Run a DOM mutation inside a View Transition when supported (graceful fallback).
+function withTransition(fn) {
+  if (document.startViewTransition && !prefersReducedMotion()) {
+    document.startViewTransition(fn);
+  } else {
+    fn();
+  }
+}
+
+let kbdIndex = -1;             // keyboard-highlighted result card
+let resultGroups = {};         // gid -> [representative, ...near-duplicates]
+let detailScrollHandler = null; // active reading-progress listener
+
 // ---------- helpers ----------
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -198,7 +214,10 @@ const run = debounce(async () => {
   if (state.includeAutomation) params.set("include_automation", "true");
   params.set("limit", "40");
 
-  $("#results").innerHTML = Array(4).fill('<div class="skeleton"></div>').join("");
+  $("#results").innerHTML = Array(4).fill(
+    '<div class="skeleton"><div class="sk-line lg"></div><div class="sk-line row"></div><div class="sk-line sm"></div></div>'
+  ).join("");
+  renderActiveFilters();
   try {
     const data = state.q
       ? await api("/api/search?" + params)
@@ -209,10 +228,14 @@ const run = debounce(async () => {
   }
 }, 180);
 
+const normTitle = (t) => (t || "Untitled").toLowerCase().replace(/\s+/g, " ").trim();
+
 function renderResults(data) {
   const results = data.results || [];
   $("#listTitle").textContent = state.q ? `Results for “${state.q}”` : "Recent sessions";
   $("#listCount").textContent = results.length ? `${results.length} ${results.length === 1 ? "session" : "sessions"}` : "";
+  kbdIndex = -1;
+  renderActiveFilters();
 
   if (!results.length) {
     $("#results").innerHTML = `<div class="empty"><div class="big">${state.q ? "🔍" : "🗂️"}</div>${
@@ -221,21 +244,44 @@ function renderResults(data) {
     return;
   }
 
-  $("#results").innerHTML = results.map(cardHTML).join("");
-  $$("#results .card").forEach((el) => el.addEventListener("click", () => openSession(el.dataset.id)));
+  // Group near-duplicate titles, preserving order of first appearance, so a
+  // burst of identical threads collapses into one expandable card.
+  resultGroups = {};
+  const order = [];
+  const seen = new Map();
+  for (const r of results) {
+    const key = normTitle(r.title);
+    if (seen.has(key)) {
+      resultGroups[seen.get(key)].push(r);
+    } else {
+      const gid = "g" + order.length;
+      seen.set(key, gid);
+      resultGroups[gid] = [r];
+      order.push(gid);
+    }
+  }
+
+  $("#results").innerHTML = order
+    .map((gid) => cardHTML(resultGroups[gid][0], gid, resultGroups[gid].length))
+    .join("");
+  wireCards();
 }
 
-function cardHTML(r) {
+function cardHTML(r, gid = "", groupSize = 1) {
   const score = r.score != null ? `<div class="score" title="relevance"><i style="width:${Math.round(r.score * 100)}%"></i></div>` : "";
   const repo = r.repository ? `<span class="pill">📁 ${esc(r.repository)}</span>` : "";
   const src = `<span class="pill src-${r.source}">${srcMeta(r.source).icon} ${esc(srcMeta(r.source).label)}</span>`;
   const tags = (r.tags || []).slice(0, 4).map((t) => `<span class="t">${esc(t)}</span>`).join("");
   const dur = fmtDuration(r.duration_seconds);
   const cost = r.est_cost_usd ? fmtCost(r.est_cost_usd) : "";
+  const dupe = groupSize > 1
+    ? `<button class="dupe-badge" data-group="${gid}" title="Show ${groupSize - 1} more similar session${groupSize - 1 === 1 ? "" : "s"}">⧉ ${groupSize}</button>`
+    : "";
   return `
-    <div class="card" data-id="${esc(r.id)}">
+    <div class="card" data-id="${esc(r.id)}"${gid ? ` data-group-rep="${gid}"` : ""}>
       <div class="card-top">
         <h3 class="card-title">${esc(r.title || "Untitled")}</h3>
+        ${dupe}
         ${score}
       </div>
       <div class="card-snippet">${r.snippet || esc(r.summary || "")}</div>
@@ -250,11 +296,71 @@ function cardHTML(r) {
     </div>`;
 }
 
+function wireCards() {
+  $$("#results .card").forEach((el) =>
+    el.addEventListener("click", (e) => {
+      if (e.target.closest(".dupe-badge")) return;
+      openSession(el.dataset.id);
+    })
+  );
+  $$("#results .dupe-badge").forEach((b) =>
+    b.addEventListener("click", (e) => { e.stopPropagation(); toggleGroup(b); })
+  );
+}
+
+// Expand/collapse the near-duplicate sessions that sit behind a representative card.
+function toggleGroup(badge) {
+  const gid = badge.dataset.group;
+  const rep = badge.closest(".card");
+  const extras = (resultGroups[gid] || []).slice(1);
+  if (rep.dataset.expanded === "1") {
+    let n = rep.nextElementSibling;
+    while (n && n.classList.contains("group-extra")) { const nx = n.nextElementSibling; n.remove(); n = nx; }
+    rep.dataset.expanded = "0";
+    badge.classList.remove("open");
+  } else {
+    rep.insertAdjacentHTML("afterend", extras.map((r) => cardHTML(r)).join(""));
+    let n = rep.nextElementSibling;
+    for (let i = 0; i < extras.length && n; i++) {
+      n.classList.add("group-extra");
+      const id = n.dataset.id;
+      n.addEventListener("click", () => openSession(id));
+      n = n.nextElementSibling;
+    }
+    rep.dataset.expanded = "1";
+    badge.classList.add("open");
+  }
+}
+
+// ---------- active-filter summary ----------
+function renderActiveFilters() {
+  const el = $("#activeFilters");
+  if (!el) return;
+  const chips = [];
+  if (state.source) chips.push({ type: "source", val: state.source, label: `${srcMeta(state.source).icon} ${srcMeta(state.source).label}` });
+  if (state.repo) chips.push({ type: "repo", val: state.repo, label: `📁 ${state.repo}` });
+  [...state.tags].forEach((t) => chips.push({ type: "tag", val: t, label: `# ${t}` }));
+  if (state.includeAutomation) chips.push({ type: "auto", val: "", label: "⏱ automation runs" });
+
+  if (!chips.length) { el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  el.innerHTML =
+    `<span class="af-label">Filtered by</span>` +
+    chips.map((c) => `<button class="af-chip" data-type="${c.type}" data-val="${esc(c.val)}">${esc(c.label)}<span class="x">×</span></button>`).join("") +
+    `<button class="af-clear" id="afClear">Clear all</button>`;
+}
+
+function clearAllFilters() {
+  state.source = null; state.repo = null; state.tags.clear();
+  state.includeAutomation = false; $("#includeAutomation").checked = false;
+  syncFilterUI(); run();
+}
+
 // ---------- detail ----------
 async function openSession(id) {
   try {
     const s = await api("/api/sessions/" + encodeURIComponent(id));
-    renderDetail(s);
+    withTransition(() => renderDetail(s));
   } catch (e) {
     toast(e.message, true);
   }
@@ -361,11 +467,17 @@ function renderDetail(s) {
       ${s.summary ? `<p class="detail-summary">${esc(s.summary)}</p>` : ""}
       <div class="detail-meta">${meta}</div>
     </div>
+    <div class="detail-sticky" id="detailSticky">
+      <span class="ds-back" id="dsBack" title="Back to results">←</span>
+      <span class="ds-title">${esc(s.title || "Untitled")}</span>
+    </div>
     <div class="detail-body">
       <div class="transcript detail-scroll">${body || '<p class="muted">No content.</p>'}</div>
       <div class="detail-aside">${asideBlocks.join("") || '<span class="muted">No attachments.</span>'}</div>
     </div>`;
   $("#backBtn").addEventListener("click", showList);
+  $("#dsBack").addEventListener("click", showList);
+  setupReading();
   $$("#detailView .copy-btn").forEach((b) =>
     b.addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(b.dataset.copy); toast("Copied"); }
@@ -408,10 +520,48 @@ function turnHTML(t) {
   return `<div class="turn">${user}${asst}</div>`;
 }
 
+function highlightCard() {
+  const cards = $$("#results .card");
+  cards.forEach((c, i) => c.classList.toggle("kbd-active", i === kbdIndex));
+  if (kbdIndex >= 0 && cards[kbdIndex]) cards[kbdIndex].scrollIntoView({ block: "nearest" });
+}
+
 function showList() {
-  state.view = "list";
-  $("#detailView").hidden = true;
-  $("#listView").hidden = false;
+  const fromDetail = state.view === "detail";
+  teardownReading();
+  const apply = () => {
+    state.view = "list";
+    $("#detailView").hidden = true;
+    $("#listView").hidden = false;
+  };
+  if (fromDetail) withTransition(apply);
+  else apply();
+}
+
+// ---------- reading mode (progress bar + sticky header) ----------
+function setupReading() {
+  const prog = $("#readProgress");
+  const sticky = $("#detailSticky");
+  if (prog) prog.hidden = false;
+  const onScroll = () => {
+    const doc = document.documentElement;
+    const max = doc.scrollHeight - doc.clientHeight;
+    const pct = max > 0 ? Math.min(1, Math.max(0, doc.scrollTop / max)) : 0;
+    if (prog) prog.style.width = (pct * 100).toFixed(1) + "%";
+    if (sticky) sticky.classList.toggle("show", doc.scrollTop > 150);
+  };
+  window.addEventListener("scroll", onScroll, { passive: true });
+  detailScrollHandler = onScroll;
+  onScroll();
+}
+
+function teardownReading() {
+  if (detailScrollHandler) {
+    window.removeEventListener("scroll", detailScrollHandler);
+    detailScrollHandler = null;
+  }
+  const prog = $("#readProgress");
+  if (prog) { prog.hidden = true; prog.style.width = "0"; }
 }
 
 // ---------- status, reindex & live auto-sync ----------
@@ -574,9 +724,16 @@ function setup() {
     syncFilterUI(); run();
   });
 
-  $("#clearFilters").addEventListener("click", () => {
-    state.source = null; state.repo = null; state.tags.clear();
-    state.includeAutomation = false; $("#includeAutomation").checked = false;
+  $("#clearFilters").addEventListener("click", clearAllFilters);
+
+  $("#activeFilters").addEventListener("click", (e) => {
+    if (e.target.closest("#afClear")) { clearAllFilters(); return; }
+    const chip = e.target.closest(".af-chip"); if (!chip) return;
+    const { type, val } = chip.dataset;
+    if (type === "source") state.source = null;
+    else if (type === "repo") state.repo = null;
+    else if (type === "tag") state.tags.delete(val);
+    else if (type === "auto") { state.includeAutomation = false; $("#includeAutomation").checked = false; }
     syncFilterUI(); run();
   });
 
@@ -593,10 +750,24 @@ function setup() {
   });
 
   document.addEventListener("keydown", (e) => {
-    if ((e.key === "/" || (e.metaKey && e.key === "k")) && document.activeElement !== $("#search")) {
-      e.preventDefault(); $("#search").focus();
+    const inSearch = document.activeElement === $("#search");
+    if ((e.key === "/" && !inSearch) || (e.metaKey && e.key === "k")) {
+      e.preventDefault(); $("#search").focus(); return;
     }
-    if (e.key === "Escape" && state.view === "detail") showList();
+    if (e.key === "Escape" && state.view === "detail") { showList(); return; }
+
+    // arrow-key navigation through results (works even while typing a query)
+    if (state.view === "list") {
+      const cards = $$("#results .card");
+      if (!cards.length) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault(); kbdIndex = Math.min(kbdIndex + 1, cards.length - 1); highlightCard();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault(); kbdIndex = Math.max(kbdIndex - 1, 0); highlightCard();
+      } else if (e.key === "Enter" && kbdIndex >= 0 && cards[kbdIndex]) {
+        e.preventDefault(); openSession(cards[kbdIndex].dataset.id);
+      }
+    }
   });
 
   setupDialog();
