@@ -49,8 +49,8 @@ pdf = ["pypdf>=4.0"]
 # Expose the archive to MCP clients (Copilot CLI, Cline, Claude Desktop, …).
 mcp = ["mcp>=1.2"]
 all = ["fastembed>=0.3", "pypdf>=4.0", "mcp>=1.2"]
-# Test/dev tooling (TestClient needs httpx).
-dev = ["pytest>=8.0", "httpx>=0.27"]
+# Test/dev tooling (TestClient needs httpx; ruff lints in CI and locally).
+dev = ["pytest>=8.0", "httpx>=0.27", "ruff>=0.15"]
 
 [project.scripts]
 mark = "mark.main:main"
@@ -78,3 +78,14 @@ mark = ["web/*", "web/js/*", "web/js/views/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+# High-signal, low-churn defaults: Pyflakes (F) + the pycodestyle error subset
+# (E4/E7/E9). These catch real bugs — undefined names, unused imports, broken
+# syntax — without imposing stylistic rewrites. Broaden (e.g. add "I", "B",
+# "UP", "SIM") after a one-time `ruff format` pass if you want stricter gates.
+select = ["E4", "E7", "E9", "F"]
