@@ -122,6 +122,12 @@ def ingest_all(
             counts.update(res)
             conn.commit()
 
+    result = {"added": 0, "updated": 0, "skipped": 0}
+    result.update(counts)
+
+    if result.get("added") or result.get("updated"):
+        db.set_meta("last_ingest", datetime.now(timezone.utc).isoformat())
+
     if do_embed:
         _embed_pending(progress)
         db.set_meta("embed_model", current_model)
@@ -134,14 +140,6 @@ def ingest_all(
         finally:
             vac.close()
 
-    result = {"added": 0, "updated": 0, "skipped": 0}
-    result.update(counts)
-    # Only advance the change marker when the visible index actually changed.
-    # Otherwise the UI's live-refresh fires on no-op syncs: the Copilot CLI's
-    # live WAL database, a touched mtime, or an unchanged re-scan all churn the
-    # source fingerprint without adding or updating a single session.
-    if result.get("added") or result.get("updated"):
-        db.set_meta("last_ingest", datetime.now(timezone.utc).isoformat())
     return result
 
 
