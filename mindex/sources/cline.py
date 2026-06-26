@@ -1,0 +1,308 @@
+"""Cline-family coding-agent task histories (Cline, Zoo Code, Roo, Kilo, …).
+
+These VS Code extensions store each task under
+``globalStorage/<ext-id>/tasks/<task-id>/`` with an
+``api_conversation_history.json`` (the message stream), optional
+``task_metadata.json`` (model usage) and ``history_item.json`` (token/cost
+totals). Any extension exposing that shape is auto-detected; the friendly source
+label comes from :data:`mindex.config.CLINE_FAMILY_SOURCES`.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections import Counter
+from pathlib import Path
+from typing import Any, Iterable
+
+from .. import config
+from ..persist import write_session
+from .base import (
+    _FENCE_RE,
+    _URL_RE,
+    ProgressCb,
+    WatchedSource,
+    _compute_cost,
+    _epoch_ms_to_iso,
+    _estimate_tokens,
+    _repo_from_cwd,
+    _ts_diff_seconds,
+)
+
+_ENV_DETAILS_RE = re.compile(
+    r"<environment_details>.*?</environment_details>", re.DOTALL
+)
+_TAG_UNWRAP_RE = re.compile(r"</?(?:task|user_message|feedback|answer|thinking)>")
+
+
+def _cline_source_name(ext_id: str) -> str:
+    if ext_id in config.CLINE_FAMILY_SOURCES:
+        return config.CLINE_FAMILY_SOURCES[ext_id]
+    base = ext_id.split(".")[-1].lower()
+    return re.sub(r"[^a-z0-9]+", "-", base).strip("-") or "agent"
+
+
+def _clean_user_text(text: str) -> str:
+    text = _ENV_DETAILS_RE.sub(" ", text)
+    text = _TAG_UNWRAP_RE.sub("", text)
+    return text.strip()
+
+
+def _block_text(block: Any) -> str:
+    if isinstance(block, str):
+        return block
+    if not isinstance(block, dict):
+        return ""
+    kind = block.get("type")
+    if kind == "text":
+        return block.get("text", "") or ""
+    if kind == "tool_use":
+        name = block.get("name", "tool")
+        arg = (
+            json.dumps(block.get("input"))[:60]
+            if block.get("input") is not None
+            else ""
+        )
+        return f"\n`▷ {name}` {arg}\n"
+    if kind == "tool_result":
+        # Tool outputs (file reads, command dumps) are bulky and low-value for
+        # search — keep only a short trace.
+        content = block.get("content")
+        text = (
+            " ".join(_block_text(b) for b in content)
+            if isinstance(content, list)
+            else str(content or "")
+        )
+        text = " ".join(text.split())
+        return f"  ⮑ {text[:100]}\n" if text else ""
+    if kind == "image":
+        return "[image]"
+    return ""
+
+
+def _content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(_block_text(b) for b in content).strip()
+    return ""
+
+
+def _has_real_text(content: Any) -> bool:
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        return any(
+            isinstance(b, dict)
+            and b.get("type") == "text"
+            and (b.get("text") or "").strip()
+            for b in content
+        )
+    return False
+
+
+def _cline_turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pair real user prompts with the assistant's full response (incl. tool activity)."""
+    turns: list[dict[str, Any]] = []
+    cur_user: str | None = None
+    cur_asst: list[str] = []
+    cur_ts: Any = None
+
+    def flush() -> None:
+        nonlocal cur_user, cur_asst, cur_ts
+        if cur_user is not None or cur_asst:
+            asst = "".join(cur_asst).strip()
+            if len(asst) > config.MAX_AGENT_TURN_CHARS:
+                asst = asst[: config.MAX_AGENT_TURN_CHARS].rstrip() + " …[truncated]"
+            user = (cur_user or "").strip()
+            if user or asst:
+                code_blocks = [
+                    {"language": (lang or "").strip() or None, "content": code.strip()}
+                    for lang, code in _FENCE_RE.findall(asst)
+                ]
+                urls = list(
+                    dict.fromkeys(
+                        u.rstrip(".,);") for u in _URL_RE.findall(f"{user} {asst}")
+                    )
+                )
+                turns.append(
+                    {
+                        "turn_index": len(turns),
+                        "user_message": user,
+                        "assistant_response": asst,
+                        "tools": [],
+                        "timestamp": _epoch_ms_to_iso(cur_ts),
+                        "files": [],
+                        "urls": urls,
+                        "code_blocks": code_blocks,
+                    }
+                )
+        cur_user, cur_asst, cur_ts = None, [], None
+
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        role, content, ts = m.get("role"), m.get("content"), m.get("ts")
+        if role == "user" and _has_real_text(content):
+            flush()
+            cur_user = _clean_user_text(_content_text(content))
+            cur_ts = ts
+        elif role == "user":  # tool_result feeding back to the assistant
+            cur_asst.append("\n" + _content_text(content))
+        elif role == "assistant":
+            if cur_ts is None:
+                cur_ts = ts
+            cur_asst.append(_content_text(content) + "\n")
+    flush()
+    return turns
+
+
+def _cline_model(task_dir: Path) -> str | None:
+    tm = task_dir / "task_metadata.json"
+    try:
+        usage = json.loads(tm.read_text()).get("model_usage") or []
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+    ids = [
+        u.get("model_id") for u in usage if isinstance(u, dict) and u.get("model_id")
+    ]
+    if not ids:
+        return None
+    model = Counter(ids).most_common(1)[0][0]
+    if not isinstance(model, str):
+        return None
+    return model.split("/", 1)[-1] if "/" in model else model  # drop provider prefix
+
+
+def _parse_cline_task(task_dir: Path, source: str) -> dict[str, Any] | None:
+    api = task_dir / "api_conversation_history.json"
+    try:
+        raw = api.read_bytes()
+        messages = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(messages, list) or not messages:
+        return None
+    turns = _cline_turns(messages)
+    if not turns:
+        return None
+
+    history = {}
+    hi = task_dir / "history_item.json"
+    if hi.exists():
+        try:
+            history = json.loads(hi.read_text())
+        except (OSError, json.JSONDecodeError):
+            history = {}
+
+    model = _cline_model(task_dir)
+    workspace = history.get("workspace")
+    title = (history.get("task") or turns[0]["user_message"] or "Untitled").strip()
+    title = title.splitlines()[0][:90] if title else "Untitled"
+
+    tokens_in = int(history.get("tokensIn") or 0)
+    tokens_out = int(history.get("tokensOut") or 0)
+    cache_r = int(history.get("cacheReads") or 0)
+    cache_w = int(history.get("cacheWrites") or 0)
+    estimated = tokens_in == 0 and tokens_out == 0
+    if estimated:
+        tokens_in = sum(_estimate_tokens(t["user_message"]) for t in turns)
+        tokens_out = sum(_estimate_tokens(t["assistant_response"]) for t in turns)
+    cost = history.get("totalCost") or 0
+    if not cost:
+        cost = _compute_cost(
+            model, tokens_in, tokens_out, cache_r, cache_w, input_includes_cache=False
+        )
+
+    stamps = [t["timestamp"] for t in turns if t["timestamp"]]
+    created = _epoch_ms_to_iso(history.get("ts")) or (stamps[0] if stamps else None)
+    updated = stamps[-1] if stamps else created
+
+    return {
+        "id": f"{source}-{task_dir.name}",
+        "source": source,
+        "title": title,
+        "workspace_id": None,
+        "repository": _repo_from_cwd(None, workspace),
+        "repo_path": workspace,
+        "requester": None,
+        "responder": source,
+        "created_at": created,
+        "updated_at": updated,
+        "source_path": str(task_dir),
+        "content_hash": hashlib.sha256(raw).hexdigest(),
+        "turns": turns,
+        "metrics": {
+            "duration_seconds": (
+                _ts_diff_seconds(stamps[0], stamps[-1]) if len(stamps) >= 2 else None
+            ),
+            "model": model,
+            "input_tokens": tokens_in,
+            "output_tokens": tokens_out,
+            "premium_requests": None,
+            "aiu": None,
+            "est_cost_usd": round(float(cost), 4),
+            "tokens_estimated": 1 if estimated else 0,
+        },
+    }
+
+
+def _iter_cline_task_dirs() -> Iterable[tuple[Path, str]]:
+    """Yield (task_dir, source) for every Cline-family extension found."""
+    for gs in config.vscode_global_storage_roots():
+        for ext_dir in gs.glob("*/tasks"):
+            if not ext_dir.is_dir():
+                continue
+            source = _cline_source_name(ext_dir.parent.name)
+            for task_dir in ext_dir.iterdir():
+                if (
+                    task_dir.is_dir()
+                    and (task_dir / "api_conversation_history.json").exists()
+                ):
+                    yield task_dir, source
+
+
+class ClineSource(WatchedSource):
+    key = "cline"
+
+    def fingerprint(self) -> str:
+        count = 0
+        newest = 0
+        for gs in config.vscode_global_storage_roots():
+            for f in gs.glob("*/tasks/*/api_conversation_history.json"):
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                count += 1
+                if st.st_mtime_ns > newest:
+                    newest = st.st_mtime_ns
+        return f"ag:{count}:{newest}"
+
+    def ingest(
+        self,
+        cur,
+        existing: dict[str, str],
+        *,
+        rebuild: bool,
+        progress: ProgressCb | None = None,
+    ) -> dict[str, int]:
+        """Index Cline / Zoo Code / Roo / Kilo task histories from globalStorage."""
+        counts = {"added": 0, "updated": 0, "skipped": 0}
+        seen = 0
+        for task_dir, source in _iter_cline_task_dirs():
+            session = _parse_cline_task(task_dir, source)
+            if not session:
+                continue
+            prior = existing.get(session["id"])
+            if prior is not None and prior == session["content_hash"] and not rebuild:
+                counts["skipped"] += 1
+                continue
+            write_session(cur, session, light=True)
+            counts["added" if prior is None else "updated"] += 1
+            seen += 1
+            if progress and seen % 50 == 0:
+                progress(f"Indexed {seen} coding-agent tasks…")
+        return counts

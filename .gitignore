@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# kbank data (local knowledge base — never commit your conversations)
+data/
+!data/.gitkeep
+
+# OS / editor
+.DS_Store
+.idea/
+*.log

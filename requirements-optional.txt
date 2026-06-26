@@ -1,0 +1,13 @@
+# Optional semantic-search upgrades (best quality "find by meaning").
+# The app works without these via a built-in NumPy vectorizer, but installing
+# one of these enables true transformer embeddings. Tried in this order.
+
+# Lightweight ONNX transformer embeddings (no PyTorch). Preferred.
+fastembed>=0.3
+
+# Static distilled embeddings — tiny + fast, good fallback if fastembed is
+# unavailable for your Python version.
+model2vec>=0.3
+
+# Richer uploads: extract text from PDFs.
+pypdf>=4.0

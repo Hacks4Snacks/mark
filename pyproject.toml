@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mindex"
+version = "0.1.0"
+description = "A local, private knowledge base for your AI coding sessions (Copilot, Cline, Zoo Code, …) with hybrid semantic search."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Mark Dalton Gray" }]
+keywords = [
+    "copilot",
+    "cline",
+    "knowledge-base",
+    "semantic-search",
+    "vscode",
+    "chat-history",
+    "ai",
+]
+classifiers = [
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+    "markdown-it-py>=3.0",
+    "mdit-py-plugins>=0.4",
+    "pygments>=2.17",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# Best-quality "find by meaning" — transformer embeddings (ONNX, no PyTorch).
+semantic = ["fastembed>=0.3"]
+# Extract text from PDF uploads.
+pdf = ["pypdf>=4.0"]
+all = ["fastembed>=0.3", "pypdf>=4.0"]
+
+[project.scripts]
+mindex = "mindex.main:main"
+
+[project.urls]
+Homepage = "https://github.com/graymark/mindex"
+Issues = "https://github.com/graymark/mindex/issues"
+
+[tool.setuptools]
+packages = ["mindex", "mindex.sources"]
+
+[tool.setuptools.package-data]
+mindex = ["web/*"]
