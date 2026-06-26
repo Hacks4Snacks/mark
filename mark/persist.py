@@ -92,15 +92,19 @@ def write_session(cur, session: dict[str, Any], *, light: bool = True) -> None:
     for t in turns:
         um = _clean(t["user_message"])
         ar = _clean(t["assistant_response"])
+        # Reasoning/"thinking" is retained verbatim for auditable records but is
+        # display-only: it is not chunked, so it never enters FTS or embeddings.
+        thinking = _clean(t.get("thinking")) or None
         cur.execute(
             """INSERT INTO turns
-               (session_id, turn_index, user_message, assistant_response, tools, timestamp)
-               VALUES (?,?,?,?,?,?)""",
+               (session_id, turn_index, user_message, assistant_response, thinking, tools, timestamp)
+               VALUES (?,?,?,?,?,?,?)""",
             (
                 sid,
                 t["turn_index"],
                 um,
                 ar,
+                thinking,
                 json.dumps(t["tools"]),
                 t["timestamp"],
             ),

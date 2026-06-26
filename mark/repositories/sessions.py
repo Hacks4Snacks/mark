@@ -15,6 +15,17 @@ def exists(session_id: str) -> bool:
         )
 
 
+def get_attachment(session_id: str, doc_id: int) -> dict | None:
+    """Fetch one attachment document (scoped to its session) for download."""
+    with db.cursor() as cur:
+        row = cur.execute(
+            "SELECT id, filename, stored_path, mime, size_bytes, content "
+            "FROM documents WHERE id = ? AND session_id = ? AND kind = 'attachment'",
+            (doc_id, session_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def _sync_fts_tags(cur, session_id: str) -> None:
     """Refresh a session's FTS ``tags`` column so manual topics stay searchable."""
     tag_text = " ".join(

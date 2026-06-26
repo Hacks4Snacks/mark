@@ -163,6 +163,7 @@ def _cli_turns(ro: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
                 "turn_index": r["turn_index"],
                 "user_message": um,
                 "assistant_response": ar,
+                "thinking": "",
                 "tools": [],
                 "timestamp": r["timestamp"],
                 "files": [],
@@ -212,6 +213,7 @@ def _finish_event_turn(turn: dict[str, Any]) -> dict[str, Any]:
         ar = "↳ " + ", ".join(turn["tools"])
     turn["user_message"] = um
     turn["assistant_response"] = ar
+    turn["thinking"] = (turn.get("thinking") or "").strip()
     turn["code_blocks"] = [
         {"language": (lang or "").strip() or None, "content": code.strip()}
         for lang, code in _FENCE_RE.findall(ar)
@@ -244,6 +246,7 @@ def _events_to_turns(
             "turn_index": len(turns),
             "user_message": user,
             "assistant_response": "",
+            "thinking": "",
             "tools": [],
             "files": [],
             "timestamp": ts,
@@ -279,6 +282,12 @@ def _events_to_turns(
                     if isinstance(content, str) and content.strip():
                         sep = "\n\n" if cur_turn["assistant_response"] else ""
                         cur_turn["assistant_response"] += sep + content.strip()
+                    # Plaintext model reasoning (only some messages carry it; the
+                    # reasoningOpaque/encryptedContent variants are not decodable).
+                    rt = data.get("reasoningText")
+                    if isinstance(rt, str) and rt.strip():
+                        tsep = "\n\n" if cur_turn["thinking"] else ""
+                        cur_turn["thinking"] += tsep + rt.strip()
                     for tr in data.get("toolRequests") or []:
                         if not isinstance(tr, dict):
                             continue

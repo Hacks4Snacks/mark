@@ -146,11 +146,19 @@ def _looks_like_path(value: Any) -> bool:
     )
 
 
-def _assistant_segment(bubble: dict[str, Any]) -> tuple[str, list[str], list[str]]:
-    """Render one assistant/tool bubble to (text, tools, files)."""
+def _assistant_segment(
+    bubble: dict[str, Any]
+) -> tuple[str, str, list[str], list[str]]:
+    """Render one assistant/tool bubble to (text, thinking, tools, files)."""
     text = (bubble.get("text") or "").strip()
     tools: list[str] = []
     files: list[str] = []
+
+    # Cursor stores model reasoning per assistant bubble as {text, signature}.
+    thinking = ""
+    th = bubble.get("thinking")
+    if isinstance(th, dict) and isinstance(th.get("text"), str):
+        thinking = th["text"].strip()
 
     tfd = bubble.get("toolFormerData")
     if isinstance(tfd, dict) and tfd.get("name"):
@@ -171,7 +179,7 @@ def _assistant_segment(bubble: dict[str, Any]) -> tuple[str, list[str], list[str
             trace += f"\n  ⮑ {rtext[:100]}"
         text = f"{text}\n{trace}" if text else trace
 
-    return text, tools, files
+    return text, thinking, tools, files
 
 
 def _composer_turns(bubbles: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -179,14 +187,16 @@ def _composer_turns(bubbles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     turns: list[dict[str, Any]] = []
     cur_user: str | None = None
     cur_asst: list[str] = []
+    cur_think: list[str] = []
     cur_tools: list[str] = []
     cur_files: list[str] = []
 
     def flush() -> None:
-        nonlocal cur_user, cur_asst, cur_tools, cur_files
+        nonlocal cur_user, cur_asst, cur_think, cur_tools, cur_files
         if cur_user is None and not cur_asst:
             return
         asst = "".join(cur_asst).strip()
+        thinking = "\n\n".join(cur_think).strip()
         user = (cur_user or "").strip()
         if user or asst:
             code_blocks = [
@@ -203,6 +213,7 @@ def _composer_turns(bubbles: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "turn_index": len(turns),
                     "user_message": user,
                     "assistant_response": asst,
+                    "thinking": thinking,
                     "tools": list(dict.fromkeys(cur_tools)),
                     "timestamp": None,
                     "files": list(dict.fromkeys(cur_files)),
@@ -210,7 +221,7 @@ def _composer_turns(bubbles: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "code_blocks": code_blocks,
                 }
             )
-        cur_user, cur_asst, cur_tools, cur_files = None, [], [], []
+        cur_user, cur_asst, cur_think, cur_tools, cur_files = None, [], [], [], []
 
     for b in bubbles:
         if not isinstance(b, dict):
@@ -222,9 +233,11 @@ def _composer_turns(bubbles: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 cur_user = (b.get("text") or "").strip()
             # An empty user bubble is a tool-result placeholder — ignore it.
         elif btype == _BUBBLE_ASSISTANT:
-            seg, tools, files = _assistant_segment(b)
+            seg, thinking, tools, files = _assistant_segment(b)
             if seg:
                 cur_asst.append(seg + "\n")
+            if thinking:
+                cur_think.append(thinking)
             cur_tools.extend(tools)
             cur_files.extend(files)
     flush()

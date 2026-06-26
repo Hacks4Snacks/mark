@@ -412,7 +412,7 @@ def get_session(session_id: str) -> dict[str, Any] | None:
         turns = [
             dict(r)
             for r in cur.execute(
-                "SELECT turn_index, user_message, assistant_response, tools, timestamp "
+                "SELECT turn_index, user_message, assistant_response, thinking, tools, timestamp "
                 "FROM turns WHERE session_id = ? ORDER BY turn_index",
                 (session_id,),
             ).fetchall()
@@ -446,7 +446,7 @@ def get_session(session_id: str) -> dict[str, Any] | None:
         attachments = [
             dict(r)
             for r in cur.execute(
-                "SELECT filename, stored_path, mime, size_bytes, content FROM documents "
+                "SELECT id, filename, stored_path, mime, size_bytes, content FROM documents "
                 "WHERE session_id = ? AND kind = 'attachment' ORDER BY filename",
                 (session_id,),
             ).fetchall()

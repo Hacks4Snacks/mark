@@ -57,15 +57,25 @@ def load_workspace_map(
 # --- turn extraction ---------------------------------------------------------
 
 
+def _part_text(val: Any) -> str:
+    """Coerce a response part's ``value`` (string or {value: …}) to text."""
+    if isinstance(val, str):
+        return val
+    if isinstance(val, dict):
+        return str(val.get("value", ""))
+    return ""
+
+
 def _extract_response(parts: Any) -> dict[str, Any]:
-    """Pull text, tools, touched files, urls and code blocks from response parts."""
+    """Pull text, thinking, tools, touched files, urls and code blocks from parts."""
     text_segments: list[str] = []
+    think_segments: list[str] = []
     tools: list[str] = []
     files: list[str] = []
     urls: list[str] = []
 
     if not isinstance(parts, list):
-        return {"text": "", "tools": [], "files": [], "urls": []}
+        return {"text": "", "thinking": "", "tools": [], "files": [], "urls": []}
 
     for p in parts:
         if not isinstance(p, dict):
@@ -78,6 +88,10 @@ def _extract_response(parts: Any) -> dict[str, Any]:
             text_segments.append(
                 val if isinstance(val, str) else str(val.get("value", ""))
             )
+        elif kind == "thinking":  # model reasoning, kept for auditable records
+            seg = _part_text(p.get("value") if "value" in p else p.get("text"))
+            if seg.strip():
+                think_segments.append(seg.strip())
         elif kind == "inlineReference":
             path = _uri_to_path(p.get("inlineReference") or p.get("reference"))
             if path:
@@ -98,7 +112,13 @@ def _extract_response(parts: Any) -> dict[str, Any]:
     text = "".join(text_segments).strip()
     for m in _URL_RE.findall(text):
         urls.append(m.rstrip(".,);"))
-    return {"text": text, "tools": tools, "files": files, "urls": urls}
+    return {
+        "text": text,
+        "thinking": "\n\n".join(think_segments).strip(),
+        "tools": tools,
+        "files": files,
+        "urls": urls,
+    }
 
 
 def _content_references(req: dict[str, Any]) -> tuple[list[str], list[str]]:
@@ -132,6 +152,7 @@ def _parse_turn(req: dict[str, Any], index: int) -> dict[str, Any]:
         "turn_index": index,
         "user_message": (user_text or "").strip(),
         "assistant_response": assistant,
+        "thinking": resp.get("thinking", ""),
         "tools": list(dict.fromkeys(resp["tools"])),
         "timestamp": _epoch_ms_to_iso(req.get("timestamp")),
         "files": files,

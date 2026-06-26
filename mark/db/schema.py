@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS turns (
     turn_index          INTEGER NOT NULL,
     user_message        TEXT,
     assistant_response  TEXT,
+    thinking            TEXT,
     tools               TEXT,
     timestamp           TEXT,
     UNIQUE(session_id, turn_index)

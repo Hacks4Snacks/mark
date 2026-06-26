@@ -6,7 +6,7 @@
 import { api } from "./api.js";
 import { state } from "./state.js";
 import { loadFacets, loadStats, syncFilterUI } from "./sidebar.js";
-import { $, $$, debounce, esc, srcMeta, toast } from "./utils.js";
+import { $, $$, debounce, srcMeta, toast } from "./utils.js";
 import { routeFromHash } from "./router.js";
 import {
   clearAllFilters, doSearch, handleListKey, run, showList,
@@ -32,16 +32,9 @@ async function pollStatus(initial = false) {
   let running = false;
   try {
     const st = await api("/api/status");
-    const banner = $("#statusBanner");
     running = !!st.running;
-    if (running) {
-      banner.hidden = false;
-      banner.innerHTML = `<span class="dot"></span> ${esc(st.message || "Indexing...")}`;
-      $("#reindexBtn").classList.add("spin");
-    } else {
-      banner.hidden = true;
-      $("#reindexBtn").classList.remove("spin");
-    }
+    // The spinning re-scan button is the sole sync indicator (no banner/toast).
+    $("#reindexBtn").classList.toggle("spin", running);
     // The index changed (manual reindex or background auto-sync completed).
     if (st.last_ingest !== lastSeenIngest) {
       const first = lastSeenIngest === undefined;
@@ -59,10 +52,6 @@ async function refreshAll(gentle = false) {
   const [s] = await Promise.all([loadStats(), loadFacets()]);
   const count = s ? s.sessions ?? 0 : undefined;
   const changed = count != null && lastSessionCount != null && count !== lastSessionCount;
-  if (gentle && changed && count > lastSessionCount) {
-    const n = count - lastSessionCount;
-    toast(`Synced ${n} new session${n === 1 ? "" : "s"}`);
-  }
   if (count != null) lastSessionCount = count;
   if (state.view === "list") {
     const idle =

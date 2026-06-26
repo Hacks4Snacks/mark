@@ -41,6 +41,9 @@ def session_to_markdown(s: dict[str, Any]) -> str:
             if t.get("user_message"):
                 out.append("**You:**\n")
                 out.append(t["user_message"].strip() + "\n")
+            if t.get("thinking"):
+                out.append("**Reasoning:**\n")
+                out.append("> " + t["thinking"].strip().replace("\n", "\n> ") + "\n")
             if t.get("assistant_response"):
                 tools = t.get("tools")
                 if isinstance(tools, str):

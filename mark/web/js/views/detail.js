@@ -94,9 +94,20 @@ function renderDetail(s) {
   asideBlocks.push(`<div id="relatedBlock" class="related-block" hidden></div>`);
 
   const attachments = (s.attachments || []);
+  const attDownloadHref = (a) =>
+    (a.id != null && (a.content != null || a.stored_path))
+      ? `/api/sessions/${encodeURIComponent(s.id)}/attachments/${encodeURIComponent(a.id)}/download`
+      : null;
   if (attachments.length) {
     asideBlocks.push(`<div><h4>Attachments (${attachments.length})</h4><div class="aside-files">${
-      attachments.map((a, i) => `<a class="aside-file" href="#att-${i}" data-att="${i}" title="${esc(a.filename || "")}">📎 ${esc(a.filename || "file")}</a>`).join("")
+      attachments.map((a, i) => {
+        const dl = attDownloadHref(a);
+        const dlLink = dl
+          ? `<a class="att-dl" href="${dl}" download="${esc(a.filename || "file")}" title="Download ${esc(a.filename || "file")}">⤓</a>`
+          : "";
+        return `<div class="aside-file att-row" title="${esc(a.filename || "")}">`
+          + `<a class="att-jump" data-att="${i}">📎 ${esc(a.filename || "file")}</a>${dlLink}</div>`;
+      }).join("")
     }</div></div>`);
   }
 
@@ -110,12 +121,16 @@ function renderDetail(s) {
     body += `<div class="attachments"><h3>Attachments created by the agent</h3>${
       attachments.map((a, i) => {
         const meta = `${esc(a.filename || "file")} · ${fmtBytes(a.size_bytes)}`;
+        const dl = attDownloadHref(a);
+        const dlLink = dl
+          ? `<a class="att-dl" href="${dl}" download="${esc(a.filename || "file")}" title="Download ${esc(a.filename || "file")}">⤓ Download</a>`
+          : "";
         const inner = a.html
           ? `<div class="md">${a.html}</div>`
           : a.content != null
             ? `<pre class="att-pre">${esc(a.content)}</pre>`
             : `<p class="muted">Not stored (binary or larger than the snapshot limit). Path: ${esc(a.stored_path || "")}</p>`;
-        return `<details class="attachment" id="att-${i}"><summary>📎 ${meta}</summary>${inner}</details>`;
+        return `<details class="attachment" id="att-${i}"><summary>📎 ${meta}${dlLink}</summary>${inner}</details>`;
       }).join("")
     }</div>`;
   }
@@ -161,12 +176,16 @@ function renderDetail(s) {
     })
   );
   // Jump to (and expand) an attachment without touching the hash router.
-  $$("#detailView .aside-file[data-att]").forEach((a) =>
+  $$("#detailView [data-att]").forEach((a) =>
     a.addEventListener("click", (e) => {
       e.preventDefault();
       const el = $("#att-" + a.dataset.att);
       if (el) { el.open = true; el.scrollIntoView({ behavior: "smooth", block: "start" }); }
     })
+  );
+  // Download links must not toggle/expand the attachment panel they sit in.
+  $$("#detailView .att-dl").forEach((a) =>
+    a.addEventListener("click", (e) => e.stopPropagation())
   );
   $("#topicAdd")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -220,7 +239,14 @@ function turnHTML(t) {
     ? `<div class="tool-tags">${t.tools.map((x) => `<span class="tool">${esc(x)}</span>`).join("")}</div>`
     : "";
   const user = t.user_html ? `<div class="role"><span class="who">You</span></div><div class="bubble user"><div class="md">${t.user_html}</div></div>` : "";
-  const asst = t.assistant_html ? `<div class="role"><span class="who">Copilot</span></div>${tools}<div class="bubble assistant"><div class="md">${t.assistant_html}</div></div>` : "";
+  // Model reasoning, collapsed by default — kept for auditable/forensic review.
+  const thinking = t.thinking_html
+    ? `<details class="thinking"><summary>Reasoning</summary><div class="md">${t.thinking_html}</div></details>`
+    : "";
+  const asst = (t.assistant_html || thinking)
+    ? `<div class="role"><span class="who">Copilot</span></div>${tools}${thinking}`
+      + (t.assistant_html ? `<div class="bubble assistant"><div class="md">${t.assistant_html}</div></div>` : "")
+    : "";
   return `<div class="turn">${user}${asst}</div>`;
 }
 

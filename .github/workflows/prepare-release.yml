@@ -1,0 +1,150 @@
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump (ignored when 'version' is set)"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: "Explicit version, e.g. 0.2.0 (overrides bump)"
+        type: string
+        required: false
+      prerelease:
+        description: "Mark the release as a pre-release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Bump version & draft release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compute target version
+        id: ver
+        env:
+          INPUT_BUMP: ${{ inputs.bump }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          cur="$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")"
+          override="${INPUT_VERSION#v}"
+          if [ -n "${override}" ]; then
+            new="${override}"
+          else
+            base="${cur%%[-+]*}"
+            major="${base%%.*}"; rest="${base#*.}"; minor="${rest%%.*}"; patch="${rest##*.}"
+            case "${INPUT_BUMP}" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch) patch=$((patch + 1)) ;;
+              *) echo "::error::unknown bump '${INPUT_BUMP}'"; exit 1 ;;
+            esac
+            new="${major}.${minor}.${patch}"
+          fi
+          if ! [[ "${new}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-].+)?$ ]]; then
+            echo "::error::'${new}' is not a valid version"; exit 1
+          fi
+          echo "current=${cur}" >> "$GITHUB_OUTPUT"
+          echo "version=${new}" >> "$GITHUB_OUTPUT"
+          echo "Releasing: ${cur} -> ${new}"
+
+      - name: Ensure tag does not already exist
+        env:
+          NEW_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git rev-parse "v${NEW_VERSION}" >/dev/null 2>&1; then
+            echo "::error::Tag v${NEW_VERSION} already exists — nothing to prepare."
+            exit 1
+          fi
+
+      - name: Bump pyproject.toml & commit
+        if: steps.ver.outputs.version != steps.ver.outputs.current
+        env:
+          NEW_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          NEW_VERSION="${NEW_VERSION}" python -c "import os,re,pathlib;new=os.environ['NEW_VERSION'];p=pathlib.Path('pyproject.toml');t=p.read_text();t2,n=re.subn(r'(?m)^version = \"[^\"]*\"','version = \"%s\"'%new,t,count=1);p.write_text(t2);raise SystemExit(0 if n==1 else 'expected exactly one project version line')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(release): prepare v${NEW_VERSION}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Generate release notes
+        env:
+          NEW_VERSION: ${{ steps.ver.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          prev="$(git tag -l 'v*' --sort=-v:refname | head -n1 || true)"
+          gen_args=(-X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes"
+            -f tag_name="v${NEW_VERSION}" -f target_commitish="${GITHUB_REF_NAME}")
+          if [ -n "${prev}" ]; then
+            gen_args+=(-f previous_tag_name="${prev}")
+          fi
+          notes="$(gh api "${gen_args[@]}" --jq .body || true)"
+          image="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "Mark v${NEW_VERSION} — your local, private, searchable archive of every AI coding chat."
+            echo
+            echo "## Install"
+            echo
+            echo '```bash'
+            echo "pipx install 'markive[semantic]==${NEW_VERSION}'   # or: pip install 'markive[semantic]==${NEW_VERSION}'"
+            echo '```'
+            echo
+            echo "## Container"
+            echo
+            echo '```bash'
+            echo "docker pull ${image}:${NEW_VERSION}"
+            echo '```'
+            echo
+            if [ -n "${notes}" ]; then
+              echo "${notes}"
+            else
+              echo "## What's Changed"
+              echo
+              echo "_Initial release._"
+            fi
+          } > release-notes.md
+          echo "Generated $(wc -l < release-notes.md) lines of release notes."
+
+      - name: Create draft release
+        env:
+          NEW_VERSION: ${{ steps.ver.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          flags=(--draft --title "v${NEW_VERSION}" --notes-file release-notes.md --target "${GITHUB_REF_NAME}")
+          if [ "${PRERELEASE}" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "v${NEW_VERSION}" "${flags[@]}" --repo "${GITHUB_REPOSITORY}"
+          url="$(gh release view "v${NEW_VERSION}" --repo "${GITHUB_REPOSITORY}" --json url --jq .url)"
+          {
+            echo "### Draft release \`v${NEW_VERSION}\` created"
+            echo
+            echo "1. Review and edit the notes here: ${url}"
+            echo "2. Click **Publish release** to create the \`v${NEW_VERSION}\` tag."
+            echo
+            echo "Publishing triggers **PyPI** (release.yml) and the **container image** (docker-publish.yml)."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 
 from .. import exporting, render, search
 from ..repositories import sessions as sessions_repo
 from ..schemas import OkResponse, TagIn, TagResponse
 
 router = APIRouter()
+
+
+def _safe_filename(name: str | None, fallback: str) -> str:
+    """A header-safe download filename: basename only, no quotes/control chars."""
+    base = Path(name or "").name.strip()
+    base = "".join(c for c in base if c >= " " and c not in '"\\')
+    return base or fallback
 
 
 @router.get("/api/sessions/{session_id}")
@@ -24,6 +32,9 @@ def api_session(session_id: str) -> dict[str, Any]:
     for turn in session["turns"]:
         turn["user_html"] = render.render_markdown(turn.get("user_message"))
         turn["assistant_html"] = render.render_markdown(turn.get("assistant_response"))
+        turn["thinking_html"] = (
+            render.render_markdown(turn["thinking"]) if turn.get("thinking") else ""
+        )
         try:
             turn["tools"] = json.loads(turn.get("tools") or "[]")
         except (TypeError, json.JSONDecodeError):
@@ -48,6 +59,34 @@ def api_session(session_id: str) -> dict[str, Any]:
 @router.get("/api/sessions/{session_id}/related")
 def api_related(session_id: str) -> list[dict[str, Any]]:
     return search.related_sessions(session_id)
+
+
+@router.get("/api/sessions/{session_id}/attachments/{doc_id}/download")
+def api_download_attachment(session_id: str, doc_id: int):
+    """Download an agent-created attachment: from disk if it still exists,
+    otherwise from the snapshot stored at ingest time."""
+    att = sessions_repo.get_attachment(session_id, doc_id)
+    if not att:
+        raise HTTPException(status_code=404, detail="attachment not found")
+    filename = _safe_filename(att.get("filename"), f"attachment-{doc_id}")
+    mime = att.get("mime") or "application/octet-stream"
+
+    stored = att.get("stored_path")
+    if stored and Path(stored).is_file():
+        return FileResponse(stored, media_type=mime, filename=filename)
+
+    content = att.get("content")
+    if content is not None:
+        body = content.encode("utf-8") if isinstance(content, str) else content
+        return Response(
+            content=body,
+            media_type=mime,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    raise HTTPException(
+        status_code=404,
+        detail="attachment content is unavailable (binary or larger than the snapshot limit)",
+    )
 
 
 @router.get("/api/sessions/{session_id}/export.md")
