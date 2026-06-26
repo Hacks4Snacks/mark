@@ -187,8 +187,6 @@ def _composer_turns(bubbles: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if cur_user is None and not cur_asst:
             return
         asst = "".join(cur_asst).strip()
-        if len(asst) > config.MAX_AGENT_TURN_CHARS:
-            asst = asst[: config.MAX_AGENT_TURN_CHARS].rstrip() + " …[truncated]"
         user = (cur_user or "").strip()
         if user or asst:
             code_blocks = [

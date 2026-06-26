@@ -21,7 +21,6 @@ def api_search(
     tags: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
-    include_automation: bool = False,
     sort: str = "recent",
     limit: int = 30,
 ) -> dict[str, Any]:
@@ -34,7 +33,6 @@ def api_search(
         tags=tag_list,
         date_from=date_from,
         date_to=date_to,
-        include_automation=include_automation,
         sort=sort,
         limit=min(limit, 500),
     )

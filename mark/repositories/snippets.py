@@ -27,9 +27,8 @@ def languages() -> list[dict[str, Any]]:
     with db.cursor() as cur:
         rows = cur.execute(
             "SELECT cb.language AS language, COUNT(*) AS count "
-            "FROM code_blocks cb JOIN sessions s ON s.id = cb.session_id "
-            "WHERE s.source != 'automation' AND cb.language IS NOT NULL "
-            "  AND cb.language != '' "
+            "FROM code_blocks cb "
+            "WHERE cb.language IS NOT NULL AND cb.language != '' "
             "GROUP BY cb.language ORDER BY count DESC, language"
         ).fetchall()
     return [{"language": r["language"], "count": r["count"]} for r in rows]
@@ -40,7 +39,6 @@ def snippets(
 ) -> list[dict[str, Any]]:
     """Code blocks filtered by content/language, newest session first."""
     where = [
-        "s.source != 'automation'",
         "cb.content IS NOT NULL",
         "LENGTH(TRIM(cb.content)) > 1",
     ]

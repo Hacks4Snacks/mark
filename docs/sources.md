@@ -149,10 +149,9 @@ defines it; we make it explicit.
 A plain chat (ChatGPT/Gemini) fills the required core and leaves the coding
 fields empty; token/cost fall back to the existing estimators
 (`_estimate_metrics` / `_estimate_tokens`), exactly as VS Code sessions already
-do. **One adapter may emit multiple `source` strings** — `copilot_cli` emits
-`cli` and `automation`; `cline` emits `cline`/`zoocode`/`roo`/`kilocode`. The
-registry is keyed by *adapter*; each session keeps its own `source`, so the
-`by_source` UI breakdown is unaffected.
+do. **One adapter may emit multiple `source` strings** — `cline` emits
+`cline`/`zoocode`/`roo`/`kilocode`. The registry is keyed by *adapter*; each
+session keeps its own `source`, so the `by_source` UI breakdown is unaffected.
 
 ### 4.4 Layered per-source configuration
 
@@ -179,7 +178,7 @@ Example `~/.mark/sources.toml`:
 [sources.copilot_cli]
 enabled = true
 roots   = ["~/.copilot/session-store.db"]
-options = { state_dir = "~/.copilot/session-state", index_automation = false }
+options = { state_dir = "~/.copilot/session-state" }
 
 [sources.vscode]
 roots = [
@@ -198,8 +197,8 @@ roots   = ["~/Downloads/chatgpt-export"]
 ```
 
 TOML is chosen for comments + stdlib `tomllib` (Python 3.11+); no new
-dependency. The Cline-family map (`CLINE_FAMILY_SOURCES`) and the
-`EMBED_AUTOMATION` flag fold into adapter `options`.
+dependency. The Cline-family map (`CLINE_FAMILY_SOURCES`) folds into adapter
+`options`.
 
 ## 5. Data-model impact
 
@@ -251,18 +250,18 @@ mark/
     __init__.py        # SOURCES registry + iteration helpers
     base.py            # Protocols, SourceConfig, shared session-dict helpers
     vscode.py          # WatchedSource
-    copilot_cli.py     # WatchedSource (emits cli + automation)
+    copilot_cli.py     # WatchedSource (emits cli)
     cline.py           # WatchedSource (emits cline/zoocode/roo/kilocode)
     chatgpt_export.py  # ImportSource   (future)
     gemini_export.py   # ImportSource   (future)
   ingest.py            # thin: orchestration loop over SOURCES
-  persist.py           # _write_session, _chunk_turn (persistence boundary)
+  persist.py           # write_session, _split/_clean (persistence boundary)
   config.py            # SourceConfig resolver: defaults < TOML < env
 ```
 
 Generic helpers (`_compute_cost`, `_estimate_metrics`, `_uri_to_path`, token
 counting, fence/URL regexes) move to `sources/base.py`. Persistence
-(`_write_session`, `_chunk_turn`) and embedding (`_embed_pending`) stay central.
+(`write_session`, chunk splitting) and embedding (`_embed_pending`) stay central.
 
 ## 10. Migration plan (phased, each independently shippable)
 

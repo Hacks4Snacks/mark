@@ -127,10 +127,12 @@ def write_session(cur, session: dict[str, Any], *, light: bool = True) -> None:
                 (t["turn_index"], p) for p in _split("Assistant: " + ar.strip())
             )
 
+    # Every chunk is indexed for keyword (FTS) search — no per-session cap, so no
+    # searchable text is dropped. User prompts are emitted before assistant/tool
+    # output so that the per-session *embedding* cap (applied later, at embed time)
+    # keeps the highest-signal chunks.
     chunk_rows: list[tuple[int, str]] = []  # (chunk_id, content)
-    for turn_index, piece in (user_pieces + asst_pieces)[
-        : config.MAX_CHUNKS_PER_SESSION
-    ]:
+    for turn_index, piece in user_pieces + asst_pieces:
         cur.execute(
             "INSERT INTO chunks(session_id, source_type, turn_index, content) VALUES (?,?,?,?)",
             (sid, "turn", turn_index, piece),

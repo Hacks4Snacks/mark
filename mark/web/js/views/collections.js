@@ -18,7 +18,7 @@ const collIconOf = (c) => (c && c.icon) || "\u25A6";
 
 export function ruleIsEmpty(r) {
   if (!r) return true;
-  return !(r.q || r.repo || r.source || (r.tags && r.tags.length) || r.date_from || r.date_to || r.include_automation);
+  return !(r.q || r.repo || r.source || (r.tags && r.tags.length) || r.date_from || r.date_to);
 }
 
 export function currentRule() {
@@ -30,7 +30,6 @@ export function currentRule() {
   if (state.tags.size) rule.tags = [...state.tags];
   if (state.dateFrom) rule.date_from = state.dateFrom;
   if (state.dateTo) rule.date_to = state.dateTo;
-  if (state.includeAutomation) rule.include_automation = true;
   return rule;
 }
 
@@ -42,7 +41,6 @@ function ruleSummary(r) {
   if (r.repo) parts.push(`\uD83D\uDCC1 ${esc(r.repo)}`);
   (r.tags || []).forEach((t) => parts.push(`# ${esc(t)}`));
   if (r.date_from || r.date_to) parts.push(`\uD83D\uDDD3 ${esc(r.date_from || "\u2026")} \u2192 ${esc(r.date_to || "\u2026")}`);
-  if (r.include_automation) parts.push("incl. automation");
   return parts.map((p) => `<span class="crs-chip">${p}</span>`).join("");
 }
 

@@ -153,7 +153,7 @@ def _render_fts_snippet(raw: str) -> str:
 
 
 def _allowed_sessions(
-    repo, source, tags, date_from, date_to, include_automation=False
+    repo, source, tags, date_from, date_to
 ) -> set[str] | None:
     clauses, params = [], []
     if repo:
@@ -162,8 +162,6 @@ def _allowed_sessions(
     if source:
         clauses.append("s.source = ?")
         params.append(source)
-    elif not include_automation:
-        clauses.append("s.source != 'automation'")
     if date_from:
         clauses.append("COALESCE(s.updated_at, s.created_at) >= ?")
         params.append(date_from)
@@ -196,7 +194,6 @@ def search(
     tags: list[str] | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
-    include_automation: bool = False,
     sort: str = "recent",
     limit: int = 30,
     only_ids: set[str] | None = None,
@@ -210,14 +207,11 @@ def search(
             date_from=date_from,
             date_to=date_to,
             sort=sort,
-            include_automation=include_automation,
             limit=limit,
             only_ids=only_ids,
         )
 
-    allowed = _allowed_sessions(
-        repo, source, tags, date_from, date_to, include_automation
-    )
+    allowed = _allowed_sessions(repo, source, tags, date_from, date_to)
     if only_ids is not None:
         allowed = set(only_ids) if allowed is None else (allowed & only_ids)
 
@@ -296,13 +290,10 @@ def browse(
     date_from: str | None = None,
     date_to: str | None = None,
     sort: str = "recent",
-    include_automation: bool = False,
     limit: int = 50,
     only_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    allowed = _allowed_sessions(
-        repo, source, tags, date_from, date_to, include_automation
-    )
+    allowed = _allowed_sessions(repo, source, tags, date_from, date_to)
     if only_ids is not None:
         allowed = set(only_ids) if allowed is None else (allowed & only_ids)
     order = {
@@ -382,7 +373,7 @@ def facets() -> dict[str, Any]:
             {"name": r["repository"], "count": r["n"]}
             for r in cur.execute(
                 "SELECT repository, COUNT(*) n FROM sessions "
-                "WHERE repository IS NOT NULL AND source != 'automation' "
+                "WHERE repository IS NOT NULL "
                 "GROUP BY repository ORDER BY n DESC"
             ).fetchall()
         ]
@@ -390,7 +381,7 @@ def facets() -> dict[str, Any]:
             {"tag": r["tag"], "count": r["n"]}
             for r in cur.execute(
                 "SELECT t.tag, COUNT(*) n FROM tags t "
-                "JOIN sessions s ON s.id = t.session_id AND s.source != 'automation' "
+                "JOIN sessions s ON s.id = t.session_id "
                 "GROUP BY t.tag ORDER BY n DESC LIMIT 40"
             ).fetchall()
         ]
@@ -508,7 +499,7 @@ def related_sessions(session_id: str, limit: int = 8) -> list[dict[str, Any]]:
             r["id"]: r
             for r in cur.execute(
                 "SELECT id, title, source, repository, created_at, updated_at "
-                "FROM sessions WHERE id IN (%s) AND source != 'automation'"
+                "FROM sessions WHERE id IN (%s)"
                 % ",".join("?" * len(order)),
                 order,
             ).fetchall()

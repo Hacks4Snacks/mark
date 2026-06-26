@@ -20,8 +20,8 @@ def api_stats() -> dict[str, Any]:
 
 
 @router.get("/api/usage", response_model=UsageResponse)
-def api_usage(include_automation: bool = False) -> dict[str, Any]:
-    return usage_repo.usage(include_automation=include_automation)
+def api_usage() -> dict[str, Any]:
+    return usage_repo.usage()
 
 
 @router.get("/api/snippets/languages")

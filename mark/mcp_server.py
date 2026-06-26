@@ -61,7 +61,6 @@ def search_history(
     limit: int = 8,
     source: str | None = None,
     repo: str | None = None,
-    include_automation: bool = False,
 ) -> str:
     """Search your past AI coding conversations by meaning or keyword.
 
@@ -71,7 +70,6 @@ def search_history(
         limit: Max conversations to return (1-25).
         source: Optionally restrict to a source (vscode, cli, cline, zoocode, chatgpt).
         repo: Optionally restrict to a repository name.
-        include_automation: Include background automation runs (off by default).
 
     Returns matching conversations with their id, title, source, repository,
     date, relevance score, and best-matching snippet. Pass a returned id to
@@ -83,7 +81,6 @@ def search_history(
         mode=mode if mode in ("hybrid", "semantic", "keyword") else "hybrid",
         source=source,
         repo=repo,
-        include_automation=include_automation,
         limit=limit,
     )
     if not results:

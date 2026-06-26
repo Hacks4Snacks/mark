@@ -23,18 +23,25 @@ __all__ = ["ingest_all", "sources_fingerprint", "import_export"]
 
 
 def _embed_pending(progress: ProgressCb | None = None, batch: int = 256) -> int:
-    """Embed every chunk that does not yet have a vector, in batches."""
+    """Embed chunks that lack a vector, capped to the first N chunks per session.
+
+    Keyword search indexes every chunk, but semantic search loads all vectors into
+    memory, so embeddings are bounded per session (earliest chunks — user prompts
+    first — win). The cap is applied by chunk rank within each session, so it is
+    stable across incremental runs.
+    """
     emb = embeddings.get_embedder()
     with db.connect() as conn:
         cur = conn.cursor()
-        automation_clause = (
-            "" if config.EMBED_AUTOMATION else " AND s.source != 'automation'"
-        )
         rows = cur.execute(
-            "SELECT c.id, c.session_id, c.content FROM chunks c "
-            "JOIN sessions s ON s.id = c.session_id "
-            "LEFT JOIN embeddings e ON e.chunk_id = c.id "
-            "WHERE e.chunk_id IS NULL" + automation_clause
+            "SELECT r.id, r.session_id, r.content FROM ("
+            "  SELECT c.id, c.session_id, c.content, "
+            "         ROW_NUMBER() OVER (PARTITION BY c.session_id ORDER BY c.id) AS rn "
+            "  FROM chunks c"
+            ") r "
+            "LEFT JOIN embeddings e ON e.chunk_id = r.id "
+            "WHERE e.chunk_id IS NULL AND r.rn <= ?",
+            (config.MAX_EMBED_CHUNKS_PER_SESSION,),
         ).fetchall()
         total = len(rows)
         for i in range(0, total, batch):
@@ -81,7 +88,7 @@ def ingest_all(
 ) -> dict[str, int]:
     """Index every registered source into mark.
 
-    Returns counts of added/updated/skipped sessions (plus automation).
+    Returns counts of added/updated/skipped sessions.
     """
     db.init_db()
 
@@ -128,7 +135,7 @@ def ingest_all(
             vac.close()
     db.set_meta("last_ingest", datetime.now(timezone.utc).isoformat())
 
-    result = {"added": 0, "updated": 0, "skipped": 0, "automation": 0}
+    result = {"added": 0, "updated": 0, "skipped": 0}
     result.update(counts)
     return result
 

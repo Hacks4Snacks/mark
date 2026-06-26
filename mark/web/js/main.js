@@ -163,10 +163,6 @@ function setup() {
     state.source = state.source === chip.dataset.source ? null : chip.dataset.source;
     syncFilterUI(); run();
   });
-  $("#includeAutomation").addEventListener("change", (e) => {
-    state.includeAutomation = e.target.checked;
-    run();
-  });
   $("#repoFilters").addEventListener("click", (e) => {
     const f = e.target.closest(".facet"); if (!f) return;
     state.repo = state.repo === f.dataset.repo ? null : f.dataset.repo;
@@ -189,7 +185,6 @@ function setup() {
     else if (type === "repo") state.repo = null;
     else if (type === "tag") state.tags.delete(val);
     else if (type === "date") { state.dateFrom = ""; state.dateTo = ""; $("#dateFrom").value = ""; $("#dateTo").value = ""; }
-    else if (type === "auto") { state.includeAutomation = false; $("#includeAutomation").checked = false; }
     syncFilterUI(); run();
   });
 
@@ -199,7 +194,6 @@ function setup() {
   $("#brandHome").addEventListener("click", () => {
     state.q = ""; $("#search").value = "";
     state.source = null; state.repo = null; state.tags.clear();
-    state.includeAutomation = false; $("#includeAutomation").checked = false;
     syncFilterUI(); showList(); run();
   });
 
@@ -236,7 +230,6 @@ function setup() {
   });
 
   $("#usageBtn").addEventListener("click", () => showUsage());
-  $("#usageAuto").addEventListener("change", loadUsage);
 
   $("#askBtn").addEventListener("click", () => showAsk());
   $("#askForm").addEventListener("submit", (e) => { e.preventDefault(); submitAsk(); });

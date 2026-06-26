@@ -13,7 +13,6 @@ export const state = {
   tags: new Set(),
   dateFrom: "",
   dateTo: "",
-  includeAutomation: false,
   view: "list",
   currentId: null,
   currentCollectionId: null,

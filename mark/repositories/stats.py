@@ -8,7 +8,7 @@ from .. import db
 
 
 def source_counts() -> dict[str, int]:
-    """Number of sessions per ``source`` string (includes automation)."""
+    """Number of sessions per ``source`` string."""
     with db.cursor() as cur:
         return {
             r["source"]: r["n"]
@@ -27,24 +27,15 @@ def overview() -> dict[str, Any]:
                 "SELECT source, COUNT(*) n FROM sessions GROUP BY source"
             ).fetchall()
         }
-        visible = cur.execute(
-            "SELECT COUNT(*) FROM sessions WHERE source != 'automation'"
-        ).fetchone()[0]
-        turns = cur.execute(
-            "SELECT COUNT(*) FROM turns t JOIN sessions s ON s.id = t.session_id "
-            "WHERE s.source != 'automation'"
-        ).fetchone()[0]
+        visible = cur.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        turns = cur.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
         files = cur.execute(
-            "SELECT COUNT(DISTINCT f.file_path) FROM session_files f "
-            "JOIN sessions s ON s.id = f.session_id WHERE s.source != 'automation'"
+            "SELECT COUNT(DISTINCT file_path) FROM session_files"
         ).fetchone()[0]
-        tags = cur.execute(
-            "SELECT COUNT(DISTINCT t.tag) FROM tags t "
-            "JOIN sessions s ON s.id = t.session_id WHERE s.source != 'automation'"
-        ).fetchone()[0]
+        tags = cur.execute("SELECT COUNT(DISTINCT tag) FROM tags").fetchone()[0]
         agg = cur.execute(
             "SELECT COALESCE(SUM(est_cost_usd),0) c, COALESCE(SUM(premium_requests),0) p, "
-            "COALESCE(SUM(duration_seconds),0) d FROM sessions WHERE source != 'automation'"
+            "COALESCE(SUM(duration_seconds),0) d FROM sessions"
         ).fetchone()
         rng = cur.execute(
             "SELECT MIN(COALESCE(created_at, updated_at)) mn, "
@@ -52,7 +43,6 @@ def overview() -> dict[str, Any]:
         ).fetchone()
     return {
         "sessions": visible,
-        "automation": sources.get("automation", 0),
         "by_source": sources,
         "turns": turns,
         "files": files,

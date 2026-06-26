@@ -4,8 +4,7 @@ The CLI keeps a live SQLite store at ``~/.copilot/session-store.db`` plus a
 per-session event log at ``~/.copilot/session-state/<id>/events.jsonl``. The
 event log is authoritative for turns (the store's ``assistant_response`` is empty
 for recent interactive sessions) and for real token/cost metrics and the list of
-files the agent created or modified. Background automation runs are classified as
-``source='automation'``.
+files the agent created or modified.
 """
 
 from __future__ import annotations
@@ -33,18 +32,6 @@ from .base import (
     _ts_diff_seconds,
     _uri_to_path,
 )
-
-_AUTOMATION_PREFIXES = (
-    "## Paperclip Wake Payload",
-    "You are running step",
-    "Analyze the session file and write the session insights",
-    "Classify this command:",
-    "Apply context_board",
-    "Reply with OK",
-)
-# Whole first-messages that signal a system/continuation run, not a conversation.
-_AUTOMATION_EXACT = {"continue", "ok", "okay", "done", "reply with ok only", "proceed"}
-
 
 def _read_session_metrics(session_id: str, state_dir: Path) -> dict[str, Any] | None:
     """Real model/token/duration metrics from the CLI's per-session events.jsonl."""
@@ -122,21 +109,6 @@ def _read_session_metrics(session_id: str, state_dir: Path) -> dict[str, Any] | 
         "est_cost_usd": _compute_cost(model, inp, outp, cread, cwrite),
         "tokens_estimated": 1 if (inp == 0 and outp == 0) else 0,
     }
-
-
-def _classify_cli_source(cwd: str | None, first_user: str | None) -> str:
-    """'automation' for background heartbeats and system/templated runs."""
-    if cwd and "/.paperclip/" in cwd:
-        return "automation"
-    fu = (first_user or "").strip()
-    if (
-        fu.startswith(_AUTOMATION_PREFIXES)
-        or "scheduled automation" in fu[:200].lower()
-    ):
-        return "automation"
-    if fu.lower().rstrip(".!") in _AUTOMATION_EXACT:
-        return "automation"
-    return "cli"
 
 
 def _hash_cli_session(updated_at: str | None, turns: list[dict[str, Any]]) -> str:
@@ -373,7 +345,7 @@ def _read_attachment(path: str) -> dict[str, Any] | None:
 
 class CopilotCliSource(WatchedSource):
     key = "copilot_cli"
-    row_sources = ("cli", "automation")
+    row_sources = ("cli",)
 
     def default_config(self) -> config.SourceConfig:
         return config.SourceConfig(
@@ -409,7 +381,7 @@ class CopilotCliSource(WatchedSource):
         progress: ProgressCb | None = None,
     ) -> dict[str, int]:
         """Index sessions from the Copilot CLI / agent store."""
-        counts = {"added": 0, "updated": 0, "skipped": 0, "automation": 0}
+        counts = {"added": 0, "updated": 0, "skipped": 0}
         if not cfg.roots:
             return counts
         src = cfg.roots[0]
@@ -446,14 +418,11 @@ class CopilotCliSource(WatchedSource):
                     files_modified = []
                 if not turns:
                     continue
-                source = _classify_cli_source(s["cwd"], turns[0]["user_message"])
                 content_hash = _hash_cli_session(s["updated_at"], turns)
                 prior = existing.get(sid)
                 if prior is not None and prior == content_hash and not rebuild:
                     counts["skipped"] += 1
                     continue
-                if source == "automation":
-                    counts["automation"] += 1
                 metrics = _read_session_metrics(sid, state_dir) or _estimate_metrics(
                     turns
                 )
@@ -471,14 +440,13 @@ class CopilotCliSource(WatchedSource):
                 extra_files = list(files_by.get(sid, []))
                 extra_files.extend((p, "agent", None) for p in files_modified)
                 attachments: list[dict[str, Any]] = []
-                if source != "automation":
-                    for fp in agent_files:
-                        att = _read_attachment(fp)
-                        if att:
-                            attachments.append(att)
+                for fp in agent_files:
+                    att = _read_attachment(fp)
+                    if att:
+                        attachments.append(att)
                 session = {
                     "id": sid,
-                    "source": source,
+                    "source": "cli",
                     "title": _derive_title(turns),
                     "workspace_id": None,
                     "repository": _repo_from_cwd(s["repository"], s["cwd"]),

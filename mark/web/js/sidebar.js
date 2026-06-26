@@ -34,15 +34,6 @@ export async function loadFacets() {
     .map((s) => `<div class="chip" data-source="${esc(s.source)}">${srcMeta(s.source).icon} ${esc(srcMeta(s.source).label)} <span class="c">${s.count}</span></div>`)
     .join("") || `<span class="muted">—</span>`;
 
-  const auto = (f.sources || []).find((s) => s.source === "automation");
-  const row = $("#autoToggleRow");
-  if (auto) {
-    row.hidden = false;
-    $("#autoCount").textContent = `(${auto.count})`;
-  } else {
-    row.hidden = true;
-  }
-
   $("#repoFilters").innerHTML = (f.repositories || [])
     .map((r) => `<div class="facet" data-repo="${esc(r.name)}"><span class="name">${esc(r.name)}</span><span class="count">${r.count}</span></div>`)
     .join("") || `<span class="muted">No repositories</span>`;

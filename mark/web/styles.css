@@ -295,7 +295,6 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .pill.src-roo { color: #c98bdb; }
 .pill.src-kilocode { color: #6ea8fe; }
 .pill.src-agent { color: var(--accent); }
-.pill.src-automation { color: var(--faint); }
 .pill.src-upload { color: var(--good); }
 .card-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
 .card-tags .t { font-size: 11.5px; color: var(--faint); background: var(--chip); padding: 2px 8px; border-radius: 6px; }
@@ -423,11 +422,6 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .pill.cost { color: var(--good); background: color-mix(in srgb, var(--good) 14%, var(--chip)); }
 .stat-card.cost { background: linear-gradient(135deg, color-mix(in srgb, var(--good) 16%, var(--surface)), var(--surface)); border-color: color-mix(in srgb, var(--good) 30%, var(--border)); }
 .stat-card.cost .n { color: var(--good); }
-
-/* automation toggle */
-.toggle { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12.5px; color: var(--muted); cursor: pointer; user-select: none; }
-.toggle input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
-.toggle em { color: var(--faint); font-style: normal; }
 
 /* topic editor (session detail) */
 .topics-edit { gap: 5px; }

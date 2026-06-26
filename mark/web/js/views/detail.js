@@ -47,7 +47,7 @@ function renderDetail(s) {
   const asideBlocks = [];
 
   // Session id + resume
-  const isCli = s.source === "cli" || s.source === "automation";
+  const isCli = s.source === "cli";
   const resumeCmd = `copilot --resume ${s.id}`;
   asideBlocks.push(`<div><h4>Session</h4>
     ${isCli ? `<div class="resume-hint">Resume in Copilot CLI</div>

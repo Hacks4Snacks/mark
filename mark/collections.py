@@ -48,7 +48,7 @@ def _rule_is_empty(rule: dict[str, Any] | None) -> bool:
     return not any(
         rule.get(k)
         for k in ("q", "repo", "source", "tags", "date_from", "date_to")
-    ) and not rule.get("include_automation")
+    )
 
 
 # --- membership resolution ---------------------------------------------------
@@ -62,7 +62,6 @@ def _rule_session_ids(rule: dict[str, Any]) -> list[str]:
         tags=rule.get("tags") or None,
         date_from=rule.get("date_from") or None,
         date_to=rule.get("date_to") or None,
-        include_automation=bool(rule.get("include_automation")),
         sort=rule.get("sort") or "recent",
         limit=int(rule.get("limit") or 500),
     )

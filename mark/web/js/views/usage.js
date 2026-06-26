@@ -23,8 +23,7 @@ export async function loadUsage() {
   const host = $("#usageBody");
   host.innerHTML = `<div class="lib-loading muted">Loading…</div>`;
   try {
-    const params = $("#usageAuto").checked ? "?include_automation=true" : "";
-    const data = await api("/api/usage" + params);
+    const data = await api("/api/usage");
     host.innerHTML = renderUsage(data);
   } catch (e) {
     host.innerHTML = `<div class="empty"><div class="big">⚠️</div>${esc(e.message)}</div>`;

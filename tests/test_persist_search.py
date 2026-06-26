@@ -33,17 +33,6 @@ def test_keyword_search_finds_session(make_session, persist_session):
     assert "b" not in found
 
 
-def test_automation_hidden_by_default(make_session, persist_session):
-    persist_session(make_session(sid="auto1", source="automation"))
-    persist_session(make_session(sid="real1", source="vscode"))
-    ids = {r["id"] for r in search.browse()}
-    assert "real1" in ids
-    assert "auto1" not in ids
-    # ...but available when explicitly included.
-    ids_auto = {r["id"] for r in search.browse(include_automation=True)}
-    assert "auto1" in ids_auto
-
-
 def test_semantic_search_over_embedded_note():
     # Notes are embedded on write, so semantic search has vectors to match.
     sid = uploads.add_note(

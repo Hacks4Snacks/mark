@@ -54,17 +54,6 @@ SESSION_STATE_DIR = Path(
     os.environ.get("MARK_SESSION_STATE", Path.home() / ".copilot" / "session-state")
 ).expanduser()
 
-# All sessions are imported and classified; background automation runs (e.g.
-# "Paperclip Wake Payload" heartbeats) are simply tagged source='automation' and
-# hidden behind a UI toggle. Semantic embedding of those runs is skipped by
-# default to keep indexing fast — set to 1 to embed them too.
-EMBED_AUTOMATION = os.environ.get("MARK_EMBED_AUTOMATION", "0") not in (
-    "0",
-    "",
-    "false",
-    "False",
-)
-
 # Command shown in the UI for resuming a Copilot CLI session.
 RESUME_COMMAND = os.environ.get("MARK_RESUME_CMD", "copilot --resume {id}")
 
@@ -154,13 +143,15 @@ EMBED_MODEL = os.environ.get("MARK_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 # Dimension used by the always-available built-in hashing vectorizer fallback.
 HASH_EMBED_DIM = int(os.environ.get("MARK_HASH_DIM", "1024"))
 
-# Max characters embedded per chunk (keeps memory bounded on huge turns).
+# Max characters per search chunk (the window size used to split long turns).
 MAX_CHUNK_CHARS = int(os.environ.get("MARK_MAX_CHUNK_CHARS", "2000"))
-# Cap chunks indexed per session so a single huge agent transcript can't bloat
-# the index. The full text is still stored; only later chunks skip search/vectors.
-MAX_CHUNKS_PER_SESSION = int(os.environ.get("MARK_MAX_CHUNKS_PER_SESSION", "40"))
-# Cap stored assistant text per agent turn (tool outputs/file dumps are noisy).
-MAX_AGENT_TURN_CHARS = int(os.environ.get("MARK_MAX_AGENT_TURN_CHARS", "4000"))
+# Keyword (FTS) search indexes every chunk so nothing is lost from search. Only
+# *embeddings* are capped per session, because semantic search loads all vectors
+# into memory and one huge agent transcript would otherwise dominate it. The
+# earliest chunks per session win (user prompts are emitted first).
+MAX_EMBED_CHUNKS_PER_SESSION = int(
+    os.environ.get("MARK_MAX_EMBED_CHUNKS_PER_SESSION", "40")
+)
 # Cap the size of an agent-created file we snapshot as a viewable attachment.
 # Larger files are recorded (path + size) but their content is not stored.
 MAX_ATTACHMENT_BYTES = int(

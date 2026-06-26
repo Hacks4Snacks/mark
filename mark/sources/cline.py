@@ -116,8 +116,6 @@ def _cline_turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         nonlocal cur_user, cur_asst, cur_ts
         if cur_user is not None or cur_asst:
             asst = "".join(cur_asst).strip()
-            if len(asst) > config.MAX_AGENT_TURN_CHARS:
-                asst = asst[: config.MAX_AGENT_TURN_CHARS].rstrip() + " …[truncated]"
             user = (cur_user or "").strip()
             if user or asst:
                 code_blocks = [

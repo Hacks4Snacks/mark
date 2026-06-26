@@ -20,7 +20,6 @@ export const SRC = {
   cursor: { icon: "\uD83D\uDD32", label: "Cursor" },
   chatgpt: { icon: "\u2728", label: "ChatGPT" },
   agent: { icon: "\uD83E\uDDE0", label: "Agent" },
-  automation: { icon: "\u23F1\uFE0F", label: "Automation" },
   upload: { icon: "\uD83D\uDCCE", label: "Upload" },
   copilot: { icon: "\uD83D\uDCAC", label: "Copilot" },
 };

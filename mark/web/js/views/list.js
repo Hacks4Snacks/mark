@@ -27,7 +27,6 @@ export async function doSearch(reset = true, opts = {}) {
   if (state.tags.size) params.set("tags", [...state.tags].join(","));
   if (state.dateFrom) params.set("date_from", state.dateFrom);
   if (state.dateTo) params.set("date_to", state.dateTo);
-  if (state.includeAutomation) params.set("include_automation", "true");
   params.set("limit", String(state.limit));
 
   renderActiveFilters();
@@ -171,7 +170,6 @@ export function renderActiveFilters() {
   if (state.dateFrom || state.dateTo) {
     chips.push({ type: "date", val: "", label: `🗓 ${state.dateFrom || "…"} → ${state.dateTo || "…"}` });
   }
-  if (state.includeAutomation) chips.push({ type: "auto", val: "", label: "⏱ automation runs" });
 
   if (!chips.length) { el.hidden = true; el.innerHTML = ""; return; }
   el.hidden = false;
@@ -185,7 +183,6 @@ export function clearAllFilters() {
   state.source = null; state.repo = null; state.tags.clear();
   state.dateFrom = ""; state.dateTo = "";
   $("#dateFrom").value = ""; $("#dateTo").value = "";
-  state.includeAutomation = false; $("#includeAutomation").checked = false;
   syncFilterUI(); run();
 }
 

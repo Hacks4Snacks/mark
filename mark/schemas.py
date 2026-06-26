@@ -87,7 +87,6 @@ class RenderResponse(BaseModel):
 
 class StatsResponse(BaseModel):
     sessions: int
-    automation: int
     by_source: dict[str, int]
     turns: int
     files: int

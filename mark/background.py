@@ -53,10 +53,7 @@ def _run_reindex(rebuild: bool) -> None:
         result = ingest.ingest_all(rebuild=rebuild, progress=progress)
         added = result.get("added", 0)
         updated = result.get("updated", 0)
-        auto = result.get("automation", 0)
         msg = f"Indexed {added} new, {updated} updated"
-        if auto:
-            msg += f" · {auto} automation runs (hidden by default)"
         with _status_lock:
             _status.update(last_result=result, message=msg)
     except Exception as exc:  # surface, don't crash the server

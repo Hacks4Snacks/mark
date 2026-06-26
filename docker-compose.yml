@@ -25,8 +25,8 @@ services:
       MARK_VSCODE_GLOBAL_STORAGE: /sources/vscode/globalStorage
       MARK_COPILOT_STORE: /sources/copilot/session-store.db
       MARK_SESSION_STATE: /sources/copilot/session-state
-      # Set to 1 to also index/embed background automation runs.
-      # MARK_EMBED_AUTOMATION: "1"
+      # Cap on embedded chunks per session (keyword/FTS indexes all chunks).
+      # MARK_MAX_EMBED_CHUNKS_PER_SESSION: "40"
     volumes:
       - mark-data:/app/data
       # --- your conversation sources, mounted READ-ONLY ---

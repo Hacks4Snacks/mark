@@ -19,10 +19,6 @@ conversation again. It indexes several sources automatically:
 You can also drop in your own notes and files. Everything runs **100% locally**
 — your conversations never leave your machine.
 
-Background automation runs (e.g. "Paperclip Wake Payload" heartbeats) are
-detected and tagged as the `automation` source, **hidden by default** behind a
-sidebar toggle so they don't bury real conversations.
-
 ## Why it's better than Ctrl-F
 
 - **Semantic search** — find conversations *by meaning*, not just exact words
@@ -108,8 +104,7 @@ All optional, via environment variables:
 | `MARK_VSCODE_GLOBAL_STORAGE` | auto-detected | Override `globalStorage` path(s) (Cline, Zoo Code, …) |
 | `MARK_COPILOT_STORE` | `~/.copilot/session-store.db` | Copilot CLI / agent session store |
 | `MARK_SESSION_STATE` | `~/.copilot/session-state` | Per-session event logs (tokens, model, duration) |
-| `MARK_EMBED_AUTOMATION` | `0` | Set `1` to also embed automation runs for semantic search |
-| `MARK_MAX_CHUNKS_PER_SESSION` | `40` | Cap on indexed chunks per session (bounds huge agent tasks) |
+| `MARK_MAX_EMBED_CHUNKS_PER_SESSION` | `40` | Cap on *embedded* chunks per session (keyword/FTS indexes all chunks; bounds the in-memory semantic vector set) |
 | `MARK_PRICING_FILE` | built-in table | JSON of `{model: [in, out, cached]}` USD per 1M tokens |
 | `MARK_RESUME_CMD` | `copilot --resume {id}` | Resume command shown in the UI |
 
@@ -123,14 +118,6 @@ priced separately so long agent sessions aren't over-counted. VS Code sessions
 (which don't log tokens) fall back to a text-based estimate, flagged as such.
 Each session detail also shows its **session id** and a copyable
 `copilot --resume <id>` command.
-
-## Automation runs
-
-**Everything is imported** — nothing is thrown away. Background automation runs
-(Paperclip wake payloads, session-insight tasks, `Continue.`/`OK` system turns)
-are classified as the `automation` source and **hidden by default** behind a
-sidebar toggle, so they don't bury real conversations. Flip *Include automation
-runs* (or click the Automation source chip) to browse them.
 
 ## Use it from your agent (MCP server)
 
@@ -202,7 +189,7 @@ Collections live in the same local SQLite database — nothing leaves your machi
 ```
 VS Code chatSessions/*.json  ─┐
                               ├─ingest─▶  SQLite (sessions, turns, files, tags, cost)
-~/.copilot/session-store.db  ─┘   (+ events.jsonl metrics; automation tagged + hidden)
+~/.copilot/session-store.db  ─┘   (+ events.jsonl metrics)
                                               │
                        ┌──────────────────────┼───────────────────────┐
                    FTS5 index            vector embeddings        local enrichment

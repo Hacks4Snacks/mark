@@ -50,12 +50,14 @@ class WatchedSource(ABC):
     a source never reads its paths from ``config`` directly.
     """
 
-    #: Stable adapter id (e.g. ``"vscode"``). Distinct from the per-session
-    #: ``source`` string — one adapter may emit several (``cli``/``automation``).
+    #: Stable adapter id (e.g. ``"cline"``). Distinct from the per-session
+    #: ``source`` string — one adapter may emit several (``cline``/``zoocode``).
     key: str = ""
 
     #: The ``source`` strings this adapter can write, for display/counting in the
-    #: ``/api/sources`` endpoint. Adapters with dynamic names list the known ones.
+    #: ``/api/sources`` endpoint. One adapter may emit several (e.g. the Cline
+    #: family's ``cline``/``zoocode``/``roo``/``kilocode``); adapters with dynamic
+    #: names list the known ones.
     row_sources: tuple[str, ...] = ()
 
     def default_config(self) -> config.SourceConfig:
