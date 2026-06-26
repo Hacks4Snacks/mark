@@ -603,3 +603,28 @@ def test_cursor_reingest_skips_unchanged_store(tmp_path):
     assert first["added"] == 1
     assert second == {"added": 0, "updated": 0, "skipped": 0}
     assert cached is not None
+
+
+def test_ingest_all_skips_unchanged_source(monkeypatch):
+    """ingest_all skips a source whose own fingerprint is unchanged, so a pass
+    triggered by another (active) source doesn't re-scan idle ones."""
+    from mark import ingest
+    from mark.sources.base import WatchedSource
+
+    calls = {"n": 0}
+
+    class FakeSource(WatchedSource):
+        key = "fake"
+        row_sources = ("fake",)
+
+        def fingerprint(self, cfg) -> str:
+            return "constant-fp"
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            calls["n"] += 1
+            return {"added": 0, "updated": 0, "skipped": 0}
+
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [FakeSource()])
+    ingest.ingest_all(do_embed=False)
+    ingest.ingest_all(do_embed=False)
+    assert calls["n"] == 1  # second pass skipped: fingerprint unchanged

@@ -110,15 +110,29 @@ def ingest_all(
             for row in cur.execute("SELECT id, content_hash FROM sessions")
         }
         _seed_tombstones(cur, existing)
+        src_fps = persist.load_file_signatures(cur, prefix="srcfp:")
         for source in WATCHED_SOURCES:
             cfg = config.resolve_source_config(source.default_config())
             if not cfg.enabled:
                 # Non-destructive: keep already-indexed rows, just stop importing.
                 continue
+            # Skip a source entirely when its own cheap fingerprint is unchanged.
+            # A reindex is triggered by ANY source changing (e.g. an active CLI
+            # session), so without this every idle source would re-open and
+            # re-parse its whole store each pass
+            try:
+                fp = source.fingerprint(cfg)
+            except Exception:
+                fp = ""
+            fp_key = f"srcfp:{source.key}"
+            if not rebuild and fp and src_fps.get(fp_key) == fp:
+                continue
             if progress:
                 progress(f"Reading {cfg.label or source.key}...")
             res = source.ingest(cur, existing, cfg, rebuild=rebuild, progress=progress)
             counts.update(res)
+            if fp:
+                persist.record_file_signature(cur, fp_key, fp)
             conn.commit()
 
     result = {"added": 0, "updated": 0, "skipped": 0}
