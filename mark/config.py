@@ -1,8 +1,3 @@
-"""Configuration and path discovery for mark.
-
-All settings can be overridden via environment variables prefixed with ``MARK_``.
-"""
-
 from __future__ import annotations
 
 import functools
@@ -14,8 +9,6 @@ from pathlib import Path
 from typing import Any
 
 _log = logging.getLogger("mark")
-
-# --- Project locations -------------------------------------------------------
 
 APP_DIR = Path(__file__).resolve().parent
 ROOT_DIR = APP_DIR.parent
@@ -30,20 +23,14 @@ UPLOADS_DIR = Path(
     os.environ.get("MARK_UPLOADS_DIR", DATA_DIR / "uploads")
 ).expanduser()
 
-# --- Server ------------------------------------------------------------------
-
 HOST = os.environ.get("MARK_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MARK_PORT", "8765"))
-
-# --- Ask your history (optional, local LLM via Ollama) -----------------------
 
 # Opt-in RAG: if a local Ollama server is reachable, mark can synthesise
 # answers from your past conversations. Everything stays local — no API keys.
 OLLAMA_URL = os.environ.get("MARK_OLLAMA_URL", "http://localhost:11434").rstrip("/")
 # Empty = auto-pick a reasonable installed model (prefers a small general one).
 OLLAMA_MODEL = os.environ.get("MARK_OLLAMA_MODEL", "").strip()
-
-# --- Sources -----------------------------------------------------------------
 
 # The Copilot CLI / agent session store (a live SQLite DB). mark reads a
 # consistent snapshot of it read-only. Override the path via
@@ -57,8 +44,6 @@ SESSION_STATE_DIR = Path.home() / ".copilot" / "session-state"
 # Command shown in the UI for resuming a Copilot CLI session.
 RESUME_COMMAND = os.environ.get("MARK_RESUME_CMD", "copilot --resume {id}")
 
-# --- Auto-sync ---------------------------------------------------------------
-
 # When on, mark imports new/updated sessions automatically: once on startup,
 # then continuously in the background whenever a session changes or ends. It
 # does this by cheaply fingerprinting the on-disk sources every few seconds and
@@ -67,11 +52,9 @@ AUTO_SYNC = os.environ.get("MARK_AUTO_SYNC", "1") not in ("0", "", "false", "Fal
 # Seconds between source-change checks. Lower = faster pickup, slightly more I/O.
 SYNC_INTERVAL = max(5, int(os.environ.get("MARK_SYNC_INTERVAL", "20")))
 
-# --- Cost estimation ---------------------------------------------------------
-
 # Public list prices in USD per 1M tokens: (input, output, cached_input).
 # Matched by substring against the model name; override the whole table with a
-# JSON file via MARK_PRICING_FILE. These are estimates — edit to taste.
+# JSON file via MARK_PRICING_FILE. These are estimates.
 MODEL_PRICING: dict[str, tuple[float, float, float]] = {
     "claude-opus": (15.0, 75.0, 1.50),
     "claude-sonnet": (3.0, 15.0, 0.30),
@@ -157,8 +140,6 @@ def price_for(model: str | None) -> tuple[float, float, float]:
     return table.get("_default", (3.0, 15.0, 0.30))
 
 
-# --- Embeddings --------------------------------------------------------------
-
 # Preferred transformer model when fastembed is installed.
 EMBED_MODEL = os.environ.get("MARK_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 # Dimension used by the always-available built-in hashing vectorizer fallback.
@@ -176,8 +157,6 @@ MAX_EMBED_CHUNKS_PER_SESSION = int(
 # Cap the size of an agent-created file we snapshot as a viewable attachment.
 # Larger files are recorded (path + size) but their content is not stored.
 MAX_ATTACHMENT_BYTES = int(os.environ.get("MARK_MAX_ATTACHMENT_BYTES", str(512 * 1024)))
-
-# --- Uploads -----------------------------------------------------------------
 
 MAX_UPLOAD_BYTES = int(os.environ.get("MARK_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 # Extensions we will extract text from directly (plus .pdf if pypdf installed).
@@ -295,9 +274,6 @@ CLINE_FAMILY_SOURCES: dict[str, str] = {
     "rooveterinaryinc.roo-cline": "roo",
     "kilocode.kilo-code": "kilocode",
 }
-
-
-# --- Per-source configuration ------------------------------------------------
 
 
 @dataclass

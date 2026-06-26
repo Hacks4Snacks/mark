@@ -1,15 +1,3 @@
-"""Hybrid search over the knowledge base.
-
-Combines two complementary signals and fuses them with Reciprocal Rank Fusion:
-
-* **keyword** — SQLite FTS5 (BM25) over chunk text. Precise term matching.
-* **semantic** — cosine similarity of the query embedding against chunk vectors.
-  Finds conversations by *meaning*, even when the words differ.
-
-Results are returned grouped by session (the unit a user actually wants to
-re-open), each with the best-matching snippet.
-"""
-
 from __future__ import annotations
 
 import html
@@ -32,9 +20,6 @@ _vec_cache: dict[str, Any] = {
     "sessions": None,
     "matrix": None,
 }
-
-
-# --- query helpers -----------------------------------------------------------
 
 
 def _fts_query(q: str) -> str | None:
@@ -149,9 +134,6 @@ def _render_fts_snippet(raw: str) -> str:
     return html.escape(raw).replace("\x02", "<mark>").replace("\x03", "</mark>")
 
 
-# --- filtering ---------------------------------------------------------------
-
-
 def _allowed_sessions(repo, source, tags, date_from, date_to) -> set[str] | None:
     clauses, params = [], []
     if repo:
@@ -177,9 +159,6 @@ def _allowed_sessions(repo, source, tags, date_from, date_to) -> set[str] | None
         return None  # no filtering
     with db.cursor() as cur:
         return {r["id"] for r in cur.execute(sql, params).fetchall()}
-
-
-# --- public API --------------------------------------------------------------
 
 
 def search(
