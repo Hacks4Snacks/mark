@@ -5,6 +5,13 @@ __pycache__/
 venv/
 *.egg-info/
 
+# Build output & tooling caches
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
 # kbank data (local knowledge base — never commit your conversations)
 data/
 !data/.gitkeep
