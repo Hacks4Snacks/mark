@@ -286,6 +286,19 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .toggle input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
 .toggle em { color: var(--faint); font-style: normal; }
 
+/* sources health panel */
+.sources-panel { display: flex; flex-direction: column; gap: 2px; }
+.src-row { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 8px; font-size: 13px; }
+.src-row:hover { background: var(--surface-2); }
+.src-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--good); flex: 0 0 auto; }
+.src-row.missing .src-dot { background: #e3b341; }
+.src-row.off { opacity: .55; }
+.src-row.off .src-dot { background: var(--faint); }
+.src-ic { font-size: 13px; line-height: 1; }
+.src-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-row.off .src-name::after { content: " · off"; color: var(--faint); }
+.src-count { color: var(--faint); font-size: 12px; background: var(--chip); padding: 1px 7px; border-radius: 999px; }
+
 /* session id + resume + usage in detail aside */
 .resume-hint { font-size: 11px; color: var(--faint); margin-bottom: 6px; }
 .copy-row { display: flex; align-items: center; gap: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }

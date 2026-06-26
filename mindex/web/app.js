@@ -36,12 +36,16 @@ const SRC = {
   zoocode: { icon: "\uD83E\uDD93", label: "Zoo Code" },
   roo: { icon: "\uD83E\uDD98", label: "Roo Code" },
   kilocode: { icon: "\uD83D\uDD36", label: "Kilo Code" },
+  chatgpt: { icon: "\u2728", label: "ChatGPT" },
   agent: { icon: "\uD83E\uDDE0", label: "Agent" },
   automation: { icon: "\u23F1\uFE0F", label: "Automation" },
   upload: { icon: "\uD83D\uDCCE", label: "Upload" },
   copilot: { icon: "\uD83D\uDCAC", label: "Copilot" },
 };
 const srcMeta = (s) => SRC[s] || { icon: "\uD83D\uDCAC", label: s || "session" };
+
+// Map a source-adapter key (from /api/sources) to a representative icon.
+const SRC_KEY_ICON = { vscode: "vscode", copilot_cli: "cli", cline: "cline", chatgpt: "chatgpt" };
 
 function fmtDate(iso) {
   if (!iso) return "";
@@ -148,6 +152,32 @@ async function loadFacets() {
     .join("") || `<span class="muted">No topics yet</span>`;
 
   syncFilterUI();
+}
+
+// ---------- sources health panel ----------
+async function loadSources() {
+  let list;
+  try { list = await api("/api/sources"); } catch (_) { return; }
+  $("#sourcesPanel").innerHTML = (list || [])
+    .map((s) => {
+      const status = !s.enabled ? "off" : (s.exists ? "ok" : "missing");
+      let tip;
+      if (s.kind === "import") {
+        tip = "Imported from an export file — add via ＋ Add ▸ File";
+      } else {
+        tip = (s.roots || []).join("\n") || "no path configured";
+        if (!s.enabled) tip += "\n(disabled)";
+        else if (!s.exists) tip += "\n(path not found)";
+      }
+      const ic = srcMeta(SRC_KEY_ICON[s.key] || s.key).icon;
+      return `<div class="src-row ${status}" title="${esc(tip)}">
+        <span class="src-dot"></span>
+        <span class="src-ic">${ic}</span>
+        <span class="src-name">${esc(s.label)}</span>
+        <span class="src-count">${s.indexed}</span>
+      </div>`;
+    })
+    .join("") || `<span class="muted">—</span>`;
 }
 
 function syncFilterUI() {
@@ -386,7 +416,7 @@ async function pollStatus(initial = false) {
 // gentle: only re-run the result list when the user is idle at the top of the
 // list view, so an auto-sync never yanks the page while they're reading.
 async function refreshAll(gentle = false) {
-  const [s] = await Promise.all([loadStats(), loadFacets()]);
+  const [s] = await Promise.all([loadStats(), loadFacets(), loadSources()]);
   const count = s ? s.sessions ?? 0 : undefined;
   if (gentle && count != null && lastSessionCount != null && count > lastSessionCount) {
     const n = count - lastSessionCount;
@@ -442,7 +472,17 @@ function setupDialog() {
         if (!pickedFile) return toast("Choose a file first", true);
         const fd = new FormData();
         fd.append("file", pickedFile);
-        newId = (await api("/api/uploads", { method: "POST", body: fd })).id;
+        const res = await api("/api/uploads", { method: "POST", body: fd });
+        if (res.matched) {
+          dlg.close();
+          const lbl = srcMeta(res.matched).label;
+          const n = res.imported;
+          toast(`Imported ${n} ${lbl} conversation${n === 1 ? "" : "s"}` +
+            (res.skipped ? ` · ${res.skipped} unchanged` : ""));
+          await refreshAll();
+          return;
+        }
+        newId = res.id;
       }
       dlg.close();
       $("#noteTitle").value = ""; $("#noteText").value = "";

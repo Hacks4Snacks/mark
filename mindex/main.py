@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -208,10 +209,23 @@ def api_sources() -> list[dict[str, Any]]:
             {
                 "key": cfg.key,
                 "label": cfg.label or cfg.key,
+                "kind": "watched",
                 "enabled": cfg.enabled,
                 "roots": [str(r) for r in cfg.roots],
                 "exists": any(Path(r).exists() for r in cfg.roots),
                 "indexed": sum(by_source.get(n, 0) for n in s.row_sources),
+            }
+        )
+    for imp in ingest.IMPORT_SOURCES:
+        out.append(
+            {
+                "key": imp.key,
+                "label": imp.label or imp.key,
+                "kind": "import",
+                "enabled": True,
+                "roots": [],
+                "exists": True,
+                "indexed": by_source.get(imp.key, 0),
             }
         )
     return out
@@ -303,7 +317,13 @@ async def api_upload(file: UploadFile = File(...)) -> dict[str, Any]:
         raise HTTPException(status_code=413, detail="file too large")
     if not data:
         raise HTTPException(status_code=400, detail="empty file")
-    sid = uploads.add_file(file.filename or "upload.bin", data, file.content_type)
+    filename = file.filename or "upload.bin"
+    # A recognised export (e.g. ChatGPT conversations.json) is imported as many
+    # sessions; anything else becomes a single searchable document.
+    imported = await run_in_threadpool(ingest.import_export, filename, data)
+    if imported.get("matched"):
+        return imported
+    sid = await run_in_threadpool(uploads.add_file, filename, data, file.content_type)
     return {"id": sid}
 
 

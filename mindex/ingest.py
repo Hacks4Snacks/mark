@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
+from typing import Any
 
-from . import config, db, embeddings
-from .sources import WATCHED_SOURCES
+from . import config, db, embeddings, persist
+from .sources import IMPORT_SOURCES, WATCHED_SOURCES
 from .sources.base import ProgressCb
 
-__all__ = ["ingest_all", "sources_fingerprint"]
+__all__ = ["ingest_all", "sources_fingerprint", "import_export"]
 
 
 # --- embeddings (batched) ----------------------------------------------------
@@ -130,3 +131,58 @@ def ingest_all(
     result = {"added": 0, "updated": 0, "skipped": 0, "automation": 0}
     result.update(counts)
     return result
+
+
+def import_export(
+    filename: str,
+    data: bytes,
+    *,
+    do_embed: bool = True,
+    progress: ProgressCb | None = None,
+) -> dict[str, Any]:
+    """Import a user-supplied export file (ChatGPT, …) into mindex.
+
+    Detects which :data:`IMPORT_SOURCES` adapter recognises the bytes, writes one
+    session per conversation (dedup by content hash), then embeds new chunks.
+    Returns ``{matched, added, updated, skipped, imported}``; ``matched`` is
+    ``None`` when no importer claims the file.
+    """
+    db.init_db()
+    src = next((s for s in IMPORT_SOURCES if s.detect(filename, data)), None)
+    if src is None:
+        return {"matched": None, "added": 0, "updated": 0, "skipped": 0, "imported": 0}
+
+    counts: Counter[str] = Counter()
+    with db.connect() as conn:
+        cur = conn.cursor()
+        existing = {
+            row["id"]: row["content_hash"]
+            for row in cur.execute("SELECT id, content_hash FROM sessions")
+        }
+        n = 0
+        for session in src.parse_export(data):
+            if not session or not session.get("turns"):
+                continue
+            prior = existing.get(session["id"])
+            if prior is not None and prior == session["content_hash"]:
+                counts["skipped"] += 1
+                continue
+            persist.write_session(cur, session, light=True)
+            counts["added" if prior is None else "updated"] += 1
+            n += 1
+            if progress and n % 50 == 0:
+                progress(f"Imported {n} {src.key} conversations…")
+        conn.commit()
+
+    if do_embed:
+        _embed_pending(progress)
+        db.set_meta("embed_model", embeddings.get_embedder().name)
+    db.set_meta("last_ingest", datetime.now(timezone.utc).isoformat())
+
+    return {
+        "matched": src.key,
+        "added": counts["added"],
+        "updated": counts["updated"],
+        "skipped": counts["skipped"],
+        "imported": counts["added"] + counts["updated"],
+    }

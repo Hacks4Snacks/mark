@@ -26,7 +26,7 @@ import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 from urllib.parse import unquote
 
 from .. import config
@@ -77,6 +77,29 @@ class WatchedSource(ABC):
         progress: ProgressCb | None = None,
     ) -> dict[str, int]:
         """Import new/changed sessions; return ``{added, updated, skipped, …}``."""
+
+
+class ImportSource(ABC):
+    """A user-supplied export file imported on demand (e.g. a ChatGPT export).
+
+    Unlike :class:`WatchedSource`, there is no live local store to watch — the
+    user hands mindex an export and each conversation becomes a session via
+    :func:`mindex.persist.write_session`. Implementations work on the raw bytes
+    so they slot into the existing upload action without a temp file.
+    """
+
+    #: Stable adapter id and the per-session ``source`` string it writes.
+    key: str = ""
+    #: Human-friendly name for toasts / the Sources panel.
+    label: str = ""
+
+    @abstractmethod
+    def detect(self, filename: str, data: bytes) -> bool:
+        """True if ``data`` looks like this source's export format."""
+
+    @abstractmethod
+    def parse_export(self, data: bytes) -> Iterable[dict[str, Any]]:
+        """Yield canonical session dicts parsed from the export bytes."""
 
 
 # --- low-level helpers -------------------------------------------------------
