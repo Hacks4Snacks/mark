@@ -1,4 +1,4 @@
-"""SQLite storage layer for mindex.
+"""Canonical SQLite schema for mindex.
 
 A single local database holds Copilot sessions, their turns, uploaded
 documents, extracted metadata, full-text (FTS5) and vector embeddings.
@@ -9,12 +9,6 @@ table. This keeps keyword and semantic search over a single unit.
 """
 
 from __future__ import annotations
-
-import sqlite3
-from contextlib import contextmanager
-from typing import Iterator
-
-from . import config
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -161,52 +155,3 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
     tokenize = 'porter unicode61'
 );
 """
-
-
-def connect() -> sqlite3.Connection:
-    config.ensure_dirs()
-    conn = sqlite3.connect(config.DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
-
-
-def init_db() -> None:
-    with connect() as conn:
-        conn.executescript(SCHEMA)
-        _migrate(conn)
-        conn.commit()
-
-
-def _migrate(conn: sqlite3.Connection) -> None:
-    """Lightweight, idempotent column additions for existing databases."""
-    tag_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tags)")}
-    if "manual" not in tag_cols:
-        conn.execute("ALTER TABLE tags ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
-
-
-@contextmanager
-def cursor() -> Iterator[sqlite3.Cursor]:
-    conn = connect()
-    try:
-        yield conn.cursor()
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def get_meta(key: str, default: str | None = None) -> str | None:
-    with cursor() as cur:
-        row = cur.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
-        return row[0] if row else default
-
-
-def set_meta(key: str, value: str) -> None:
-    with cursor() as cur:
-        cur.execute(
-            "INSERT INTO meta(key, value) VALUES(?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (key, value),
-        )

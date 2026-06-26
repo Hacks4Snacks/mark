@@ -45,6 +45,8 @@ pdf = ["pypdf>=4.0"]
 # Expose the archive to MCP clients (Copilot CLI, Cline, Claude Desktop, …).
 mcp = ["mcp>=1.2"]
 all = ["fastembed>=0.3", "pypdf>=4.0", "mcp>=1.2"]
+# Test/dev tooling (TestClient needs httpx).
+dev = ["pytest>=8.0", "httpx>=0.27"]
 
 [project.scripts]
 mindex = "mindex.main:main"
@@ -55,7 +57,17 @@ Homepage = "https://github.com/graymark/mindex"
 Issues = "https://github.com/graymark/mindex/issues"
 
 [tool.setuptools]
-packages = ["mindex", "mindex.sources"]
+packages = [
+    "mindex",
+    "mindex.api",
+    "mindex.db",
+    "mindex.repositories",
+    "mindex.sources",
+]
 
 [tool.setuptools.package-data]
-mindex = ["web/*"]
+mindex = ["web/*", "web/js/*", "web/js/views/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
