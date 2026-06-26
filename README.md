@@ -125,6 +125,50 @@ are classified as the `automation` source and **hidden by default** behind a
 sidebar toggle, so they don't bury real conversations. Flip *Include automation
 runs* (or click the Automation source chip) to browse them.
 
+## Use it from your agent (MCP server)
+
+mindex can expose your archive to any MCP-aware agent — Copilot CLI, Cline,
+Claude Desktop — so an agent can **recall how you solved something before**.
+Install the extra (adds the `mindex-mcp` command) and register the stdio server:
+
+```bash
+pip install '.[mcp]'
+```
+
+```jsonc
+// e.g. Claude Desktop / Copilot CLI MCP config
+{
+  "mcpServers": {
+    "mindex": { "command": "mindex-mcp" }
+  }
+}
+```
+
+Tools exposed:
+
+- **`search_history`** — find past conversations by meaning or keyword
+  (filters: `mode`, `source`, `repo`).
+- **`get_session`** — fetch a whole conversation as Markdown by id.
+- **`list_recent`** — list your most recent conversations.
+
+Everything runs locally over stdio — no network, no API keys.
+
+## Ask your history (optional, local LLM)
+
+If a local [Ollama](https://ollama.com) server is running, the **✦ Ask** view
+lets you ask questions in natural language. mindex retrieves the most relevant
+past conversations, has a **local** model synthesise a cited answer, and streams
+it back token-by-token — so your archive stays on your machine, no API keys.
+
+```bash
+ollama pull llama3.2     # any installed model works; mindex auto-picks one
+ollama serve
+```
+
+Override the model with `MINDEX_OLLAMA_MODEL` or the endpoint with
+`MINDEX_OLLAMA_URL`. When Ollama isn't reachable, the view simply shows setup
+hints — every other feature works without it.
+
 ## How it works
 
 ```

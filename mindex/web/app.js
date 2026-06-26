@@ -16,6 +16,7 @@ const state = {
   dateTo: "",
   includeAutomation: false,
   view: "list",
+  currentId: null,
   limit: PAGE_SIZE,
 };
 
@@ -181,9 +182,9 @@ function syncFilterUI() {
 }
 
 // ---------- search / browse ----------
-async function doSearch(reset = true) {
+async function doSearch(reset = true, opts = {}) {
   if (reset) state.limit = PAGE_SIZE;
-  showList();
+  if (!opts.keepView) showList();
   const params = new URLSearchParams();
   if (state.q) params.set("q", state.q);
   params.set("mode", state.mode);
@@ -357,10 +358,12 @@ function clearAllFilters() {
 }
 
 // ---------- detail ----------
-async function openSession(id) {
+async function openSession(id, opts = {}) {
   try {
     const s = await api("/api/sessions/" + encodeURIComponent(id));
+    state.currentId = id;
     withTransition(() => renderDetail(s));
+    if (!opts.fromHash) location.hash = "#/session/" + encodeURIComponent(id);
   } catch (e) {
     toast(e.message, true);
   }
@@ -369,6 +372,9 @@ async function openSession(id) {
 function renderDetail(s) {
   state.view = "detail";
   $("#listView").hidden = true;
+  $("#libraryView").hidden = true;
+  $("#usageView").hidden = true;
+  $("#askView").hidden = true;
   const view = $("#detailView");
   view.hidden = false;
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -433,6 +439,8 @@ function renderDetail(s) {
     </form>
   </div>`);
 
+  asideBlocks.push(`<div id="relatedBlock" class="related-block" hidden></div>`);
+
   const attachments = (s.attachments || []);
   if (attachments.length) {
     asideBlocks.push(`<div><h4>Attachments (${attachments.length})</h4><div class="aside-files">${
@@ -462,7 +470,13 @@ function renderDetail(s) {
 
   view.innerHTML = `
     <div class="detail-head">
-      <span class="back" id="backBtn">← Back to results</span>
+      <div class="detail-top">
+        <span class="back" id="backBtn">← Back to results</span>
+        <div class="detail-actions">
+          <button class="btn btn-ghost" id="copyLink" title="Copy a link to this conversation">🔗 Link</button>
+          <a class="btn btn-ghost" id="exportMd" href="/api/sessions/${encodeURIComponent(s.id)}/export.md" download title="Download as Markdown">⤓ Markdown</a>
+        </div>
+      </div>
       <h1>${esc(s.title || "Untitled")}</h1>
       ${s.summary ? `<p class="detail-summary">${esc(s.summary)}</p>` : ""}
       <div class="detail-meta">${meta}</div>
@@ -477,6 +491,11 @@ function renderDetail(s) {
     </div>`;
   $("#backBtn").addEventListener("click", showList);
   $("#dsBack").addEventListener("click", showList);
+  $("#copyLink")?.addEventListener("click", async () => {
+    const url = location.origin + location.pathname + "#/session/" + encodeURIComponent(s.id);
+    try { await navigator.clipboard.writeText(url); toast("Link copied"); }
+    catch (_) { toast("Copy failed", true); }
+  });
   setupReading();
   $$("#detailView .copy-btn").forEach((b) =>
     b.addEventListener("click", async () => {
@@ -509,6 +528,26 @@ function renderDetail(s) {
       } catch (err) { toast(err.message, true); }
     })
   );
+  loadRelated(s.id);
+}
+
+// Semantically nearest sessions, loaded after the detail view paints.
+async function loadRelated(id) {
+  const host = $("#relatedBlock");
+  if (!host) return;
+  let items;
+  try { items = await api(`/api/sessions/${encodeURIComponent(id)}/related`); }
+  catch (_) { return; }
+  if (!items || !items.length) return;
+  host.innerHTML = `<h4>Related</h4><div class="aside-files">${
+    items.map((r) => `<a class="aside-file related" data-id="${esc(r.id)}" title="${esc(r.title || "")}">`
+      + `<span class="rel-src">${srcMeta(r.source).icon}</span>`
+      + `<span class="rel-title">${esc(r.title || "Untitled")}</span></a>`).join("")
+  }</div>`;
+  host.hidden = false;
+  $$("#relatedBlock .related").forEach((a) =>
+    a.addEventListener("click", () => openSession(a.dataset.id))
+  );
 }
 
 function turnHTML(t) {
@@ -526,16 +565,287 @@ function highlightCard() {
   if (kbdIndex >= 0 && cards[kbdIndex]) cards[kbdIndex].scrollIntoView({ block: "nearest" });
 }
 
-function showList() {
-  const fromDetail = state.view === "detail";
+function showList(opts) {
+  const leaving = state.view !== "list";
   teardownReading();
+  state.currentId = null;
   const apply = () => {
     state.view = "list";
     $("#detailView").hidden = true;
+    $("#libraryView").hidden = true;
+    $("#usageView").hidden = true;
+    $("#askView").hidden = true;
     $("#listView").hidden = false;
   };
-  if (fromDetail) withTransition(apply);
+  if (leaving) withTransition(apply);
   else apply();
+  if (leaving && !(opts && opts.fromHash) && location.hash) {
+    history.pushState("", document.title, location.pathname + location.search);
+  }
+}
+
+// ---------- snippet & command library ----------
+const libState = { q: "", language: "", commands: false };
+let snippetData = [];
+
+async function showLibrary(opts = {}) {
+  const leaving = state.view !== "library";
+  state.view = "library";
+  state.currentId = null;
+  teardownReading();
+  const apply = () => {
+    $("#listView").hidden = true;
+    $("#detailView").hidden = true;
+    $("#usageView").hidden = true;
+    $("#askView").hidden = true;
+    $("#libraryView").hidden = false;
+  };
+  if (leaving) withTransition(apply);
+  else apply();
+  if (!opts.fromHash) location.hash = "#/library";
+  if (!$("#libLang").dataset.loaded) await loadSnippetLanguages();
+  loadSnippets();
+}
+
+async function loadSnippetLanguages() {
+  try {
+    const langs = await api("/api/snippets/languages");
+    const sel = $("#libLang");
+    sel.innerHTML = `<option value="">All languages</option>` +
+      langs.map((l) => `<option value="${esc(l.language)}">${esc(l.language)} (${l.count})</option>`).join("");
+    sel.dataset.loaded = "1";
+  } catch (_) { /* non-fatal */ }
+}
+
+async function loadSnippets() {
+  const host = $("#libResults");
+  const params = new URLSearchParams();
+  if (libState.q) params.set("q", libState.q);
+  if (libState.commands) params.set("commands", "true");
+  else if (libState.language) params.set("language", libState.language);
+  host.innerHTML = `<div class="lib-loading muted">Loading…</div>`;
+  try {
+    const data = await api("/api/snippets?" + params);
+    snippetData = data.snippets || [];
+    $("#libCount").textContent = snippetData.length
+      ? `${snippetData.length}${snippetData.length >= 80 ? "+" : ""} snippet${snippetData.length === 1 ? "" : "s"}`
+      : "";
+    if (!snippetData.length) {
+      host.innerHTML = `<div class="empty"><div class="big">⌗</div>No snippets match that filter.</div>`;
+      return;
+    }
+    host.innerHTML = snippetData.map(snippetCardHTML).join("");
+    $$("#libResults .snip-open").forEach((a) => a.addEventListener("click", () => openSession(a.dataset.id)));
+    $$("#libResults .snip-copy").forEach((b) => b.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(snippetData[+b.dataset.idx].content); toast("Copied"); }
+      catch (_) { toast("Copy failed", true); }
+    }));
+  } catch (e) {
+    host.innerHTML = `<div class="empty"><div class="big">⚠️</div>${esc(e.message)}</div>`;
+  }
+}
+
+function snippetCardHTML(s, i) {
+  const lang = s.language || "text";
+  const repo = s.repository ? ` · ${esc(s.repository)}` : "";
+  return `<div class="snip-card">
+    <div class="snip-head">
+      <span class="snip-lang">${esc(lang)}</span>
+      <a class="snip-open" data-id="${esc(s.session_id)}" title="Open conversation">${srcMeta(s.source).icon} ${esc(s.session_title || "Untitled")}${repo}</a>
+      <button class="snip-copy" data-idx="${i}" title="Copy snippet">⧉</button>
+    </div>
+    <pre class="snip-code"><code>${esc(s.content)}</code></pre>
+  </div>`;
+}
+
+// ---------- usage & spend dashboard ----------
+async function showUsage(opts = {}) {
+  const leaving = state.view !== "usage";
+  state.view = "usage";
+  state.currentId = null;
+  teardownReading();
+  const apply = () => {
+    $("#listView").hidden = true;
+    $("#detailView").hidden = true;
+    $("#libraryView").hidden = true;
+    $("#askView").hidden = true;
+    $("#usageView").hidden = false;
+  };
+  if (leaving) withTransition(apply);
+  else apply();
+  if (!opts.fromHash) location.hash = "#/usage";
+  loadUsage();
+}
+
+async function loadUsage() {
+  const host = $("#usageBody");
+  host.innerHTML = `<div class="lib-loading muted">Loading…</div>`;
+  try {
+    const params = $("#usageAuto").checked ? "?include_automation=true" : "";
+    const data = await api("/api/usage" + params);
+    host.innerHTML = renderUsage(data);
+  } catch (e) {
+    host.innerHTML = `<div class="empty"><div class="big">⚠️</div>${esc(e.message)}</div>`;
+  }
+}
+
+function renderUsage(d) {
+  const t = d.totals || {};
+  const cards = [
+    ["Total spend", fmtCost(t.cost || 0)],
+    ["Premium requests", (t.premium || 0).toLocaleString()],
+    ["AIU", (t.aiu || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })],
+    ["Tokens", `${fmtTokens(t.input_tokens)} in · ${fmtTokens(t.output_tokens)} out`],
+    ["Sessions", (t.sessions || 0).toLocaleString()],
+  ];
+  const stats = cards.map(([k, v]) =>
+    `<div class="usage-stat"><div class="us-val">${v}</div><div class="us-key">${k}</div></div>`
+  ).join("");
+  return `
+    <div class="usage-stats">${stats}</div>
+    ${usageColChart(d.by_day || [])}
+    <div class="usage-grid">
+      ${usageBars("By model", d.by_model || [], "model")}
+      ${usageBars("By repository", d.by_repo || [], "repository")}
+      ${usageBars("By source", d.by_source || [], "source")}
+    </div>`;
+}
+
+function usageColChart(byDay) {
+  if (!byDay.length) return "";
+  const max = Math.max(...byDay.map((d) => d.cost)) || 1;
+  const bars = byDay.map((d) => {
+    const h = Math.max(2, Math.round((d.cost / max) * 100));
+    return `<div class="uc-col" title="${d.day} · ${fmtCost(d.cost)} · ${d.sessions} session${d.sessions === 1 ? "" : "s"}"><div class="uc-bar" style="height:${h}%"></div></div>`;
+  }).join("");
+  return `<div class="usage-card">
+    <h4>Spend over time</h4>
+    <div class="uc-chart">${bars}</div>
+    <div class="uc-axis"><span>${esc(byDay[0].day)}</span><span>${esc(byDay[byDay.length - 1].day)}</span></div>
+  </div>`;
+}
+
+function usageBars(title, rows, key) {
+  if (!rows.length) return "";
+  const max = Math.max(...rows.map((r) => r.cost)) || 1;
+  const items = rows.map((r) => {
+    const w = Math.max(2, Math.round((r.cost / max) * 100));
+    const label = key === "source"
+      ? `${srcMeta(r.source).icon} ${esc(srcMeta(r.source).label)}`
+      : esc(String(r[key]));
+    return `<div class="bar-row">
+      <span class="bar-label" title="${esc(String(r[key]))}">${label}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${w}%"></div></div>
+      <span class="bar-val">${fmtCost(r.cost)} <em>${r.sessions}</em></span>
+    </div>`;
+  }).join("");
+  return `<div class="usage-card"><h4>${esc(title)}</h4><div class="bars">${items}</div></div>`;
+}
+
+// ---------- ask your history (optional local LLM) ----------
+let askBusy = false;
+
+async function showAsk(opts = {}) {
+  const leaving = state.view !== "ask";
+  state.view = "ask";
+  state.currentId = null;
+  teardownReading();
+  const apply = () => {
+    $("#listView").hidden = true;
+    $("#detailView").hidden = true;
+    $("#libraryView").hidden = true;
+    $("#usageView").hidden = true;
+    $("#askView").hidden = false;
+  };
+  if (leaving) withTransition(apply);
+  else apply();
+  if (!opts.fromHash) location.hash = "#/ask";
+  checkAskStatus();
+  setTimeout(() => $("#askInput")?.focus(), 60);
+}
+
+async function checkAskStatus() {
+  const note = $("#askStatus");
+  try {
+    const st = await api("/api/ask/status");
+    if (!st.available) {
+      note.hidden = false;
+      note.innerHTML = `No local LLM detected. Install <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>, then run <code>ollama pull llama3.2</code> and keep <code>ollama serve</code> running. Everything stays on your machine — no API keys.`;
+      $("#askModel").textContent = "";
+      $("#askSend").disabled = true;
+    } else {
+      note.hidden = true;
+      $("#askModel").textContent = "via " + st.model;
+      $("#askSend").disabled = false;
+    }
+  } catch (_) { /* leave as-is */ }
+}
+
+async function submitAsk() {
+  if (askBusy) return;
+  const q = $("#askInput").value.trim();
+  if (!q) return;
+  const limit = parseInt($("#askLimit")?.value, 10) || 8;
+  askBusy = true;
+  $("#askSend").disabled = true;
+  const ans = $("#askAnswer");
+  const srcBox = $("#askSources");
+  ans.hidden = false; ans.textContent = ""; ans.classList.add("streaming");
+  srcBox.hidden = true; srcBox.innerHTML = "";
+  let raw = "";
+  try {
+    const resp = await fetch("/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: q, limit }),
+    });
+    if (!resp.ok || !resp.body) throw new Error("Ask failed (" + resp.status + ")");
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop();
+      for (const p of parts) {
+        const line = p.trim();
+        if (!line.startsWith("data:")) continue;
+        const ev = JSON.parse(line.slice(5).trim());
+        if (ev.type === "sources") renderAskSources(ev.sources);
+        else if (ev.type === "token") { raw += ev.text; ans.textContent = raw; ans.scrollTop = ans.scrollHeight; }
+        else if (ev.type === "error") { toast(ev.error, true); raw += "\n\n" + ev.error; ans.textContent = raw; }
+      }
+    }
+    if (raw.trim()) {
+      try {
+        const r = await api("/api/render", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: raw }),
+        });
+        ans.innerHTML = r.html;
+      } catch (_) { /* keep plain text */ }
+    }
+  } catch (e) {
+    toast(e.message, true);
+    ans.textContent = e.message;
+  } finally {
+    ans.classList.remove("streaming");
+    askBusy = false;
+    $("#askSend").disabled = false;
+  }
+}
+
+function renderAskSources(sources) {
+  const box = $("#askSources");
+  if (!sources || !sources.length) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = `<h4>Sources</h4><div class="ask-src-list">${
+    sources.map((s) => `<a class="ask-src" data-id="${esc(s.id)}" title="${esc(s.title || "")}"><b>[${s.n}]</b> <span class="ask-src-icon">${srcMeta(s.source).icon}</span> <span class="ask-src-title">${esc(s.title || "Untitled")}</span></a>`).join("")
+  }</div>`;
+  $$("#askSources .ask-src").forEach((a) => a.addEventListener("click", () => openSession(a.dataset.id)));
 }
 
 // ---------- reading mode (progress bar + sticky header) ----------
@@ -611,7 +921,7 @@ async function refreshAll(gentle = false) {
   if (state.view === "list") {
     const idle =
       document.activeElement !== $("#search") && window.scrollY < 40;
-    if (!gentle || idle) run();
+    if (!gentle || idle) doSearch(true, { keepView: true });
   }
 }
 
@@ -753,6 +1063,26 @@ function setup() {
     catch (e) { toast(e.message, true); }
   });
 
+  $("#libraryBtn").addEventListener("click", () => showLibrary());
+  $("#libSearch").addEventListener("input", debounce(() => {
+    libState.q = $("#libSearch").value.trim(); loadSnippets();
+  }, 200));
+  $("#libLang").addEventListener("change", () => { libState.language = $("#libLang").value; loadSnippets(); });
+  $("#libCommands").addEventListener("change", () => {
+    libState.commands = $("#libCommands").checked;
+    $("#libLang").disabled = libState.commands;
+    loadSnippets();
+  });
+
+  $("#usageBtn").addEventListener("click", () => showUsage());
+  $("#usageAuto").addEventListener("change", loadUsage);
+
+  $("#askBtn").addEventListener("click", () => showAsk());
+  $("#askForm").addEventListener("submit", (e) => { e.preventDefault(); submitAsk(); });
+  $("#askInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitAsk(); }
+  });
+
   document.addEventListener("keydown", (e) => {
     const inSearch = document.activeElement === $("#search");
     if ((e.key === "/" && !inSearch) || (e.metaKey && e.key === "k")) {
@@ -780,7 +1110,33 @@ function setup() {
 async function init() {
   setup();
   await refreshAll();
+  routeFromHash();
   pollStatus(true);
 }
+
+// Deep-link routing: #/session/{id} opens a conversation; #/library opens the library; empty hash shows the list.
+function routeFromHash() {
+  if (location.hash === "#/library") {
+    if (state.view !== "library") showLibrary({ fromHash: true });
+    return;
+  }
+  if (location.hash === "#/usage") {
+    if (state.view !== "usage") showUsage({ fromHash: true });
+    return;
+  }
+  if (location.hash === "#/ask") {
+    if (state.view !== "ask") showAsk({ fromHash: true });
+    return;
+  }
+  const m = location.hash.match(/^#\/session\/(.+)$/);
+  if (m) {
+    const id = decodeURIComponent(m[1]);
+    if (state.view === "detail" && state.currentId === id) return;
+    openSession(id, { fromHash: true });
+  } else if (state.view !== "list") {
+    showList({ fromHash: true });
+  }
+}
+window.addEventListener("hashchange", routeFromHash);
 
 init();

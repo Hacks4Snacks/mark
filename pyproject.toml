@@ -42,10 +42,13 @@ dependencies = [
 semantic = ["fastembed>=0.3"]
 # Extract text from PDF uploads.
 pdf = ["pypdf>=4.0"]
-all = ["fastembed>=0.3", "pypdf>=4.0"]
+# Expose the archive to MCP clients (Copilot CLI, Cline, Claude Desktop, …).
+mcp = ["mcp>=1.2"]
+all = ["fastembed>=0.3", "pypdf>=4.0", "mcp>=1.2"]
 
 [project.scripts]
 mindex = "mindex.main:main"
+mindex-mcp = "mindex.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/graymark/mindex"

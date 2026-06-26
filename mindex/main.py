@@ -14,11 +14,16 @@ from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, ingest, render, search, uploads
+from . import ask, config, db, exporting, ingest, render, search, uploads
 
 # --- background reindex state ------------------------------------------------
 
@@ -297,6 +302,225 @@ def api_session(session_id: str) -> dict[str, Any]:
             lang = name.rsplit(".", 1)[-1] if "." in name else ""
             att["html"] = render.render_markdown(f"```{lang}\n{content}\n```")
     return session
+
+
+@app.get("/api/sessions/{session_id}/related")
+def api_related(session_id: str) -> list[dict[str, Any]]:
+    return search.related_sessions(session_id)
+
+
+@app.get("/api/sessions/{session_id}/export.md")
+def api_export_markdown(session_id: str) -> PlainTextResponse:
+    session = search.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="session not found")
+    body = exporting.session_to_markdown(session)
+    fname = exporting.slug(session.get("title") or "", session_id) + ".md"
+    return PlainTextResponse(
+        body,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# Shell-ish languages treated as runnable "commands" in the library.
+_SHELL_LANGS = (
+    "bash",
+    "sh",
+    "shell",
+    "shellscript",
+    "zsh",
+    "console",
+    "shell-session",
+    "sh-session",
+    "shellsession",
+    "powershell",
+    "ps1",
+)
+
+
+@app.get("/api/snippets/languages")
+def api_snippet_languages() -> list[dict[str, Any]]:
+    with db.cursor() as cur:
+        rows = cur.execute(
+            "SELECT cb.language AS language, COUNT(*) AS count "
+            "FROM code_blocks cb JOIN sessions s ON s.id = cb.session_id "
+            "WHERE s.source != 'automation' AND cb.language IS NOT NULL "
+            "  AND cb.language != '' "
+            "GROUP BY cb.language ORDER BY count DESC, language"
+        ).fetchall()
+    return [{"language": r["language"], "count": r["count"]} for r in rows]
+
+
+@app.get("/api/snippets")
+def api_snippets(
+    q: str = "", language: str = "", commands: bool = False, limit: int = 80
+) -> dict[str, Any]:
+    where = [
+        "s.source != 'automation'",
+        "cb.content IS NOT NULL",
+        "LENGTH(TRIM(cb.content)) > 1",
+    ]
+    params: list[Any] = []
+    if commands:
+        where.append("LOWER(cb.language) IN (%s)" % ",".join("?" * len(_SHELL_LANGS)))
+        params.extend(_SHELL_LANGS)
+    elif language:
+        where.append("cb.language = ?")
+        params.append(language)
+    if q:
+        esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        where.append("cb.content LIKE ? ESCAPE '\\'")
+        params.append(f"%{esc}%")
+    sql = (
+        "SELECT cb.id, cb.session_id, cb.turn_index, cb.language, cb.content, "
+        "  s.title AS session_title, s.source, s.repository, s.updated_at "
+        "FROM code_blocks cb JOIN sessions s ON s.id = cb.session_id "
+        "WHERE "
+        + " AND ".join(where)
+        + " ORDER BY s.updated_at DESC, cb.id DESC LIMIT ?"
+    )
+    params.append(max(1, min(limit, 300)))
+    with db.cursor() as cur:
+        rows = cur.execute(sql, params).fetchall()
+    return {
+        "snippets": [
+            {
+                "id": r["id"],
+                "session_id": r["session_id"],
+                "session_title": r["session_title"],
+                "source": r["source"],
+                "repository": r["repository"],
+                "language": r["language"],
+                "content": r["content"],
+                "turn_index": r["turn_index"],
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ]
+    }
+
+
+@app.get("/api/usage")
+def api_usage(include_automation: bool = False) -> dict[str, Any]:
+    auto = "" if include_automation else " WHERE source != 'automation'"
+    auto_and = "" if include_automation else " AND source != 'automation'"
+    with db.cursor() as cur:
+        t = cur.execute(
+            "SELECT COUNT(*) sessions, COALESCE(SUM(est_cost_usd),0) cost, "
+            "COALESCE(SUM(premium_requests),0) premium, COALESCE(SUM(input_tokens),0) input_tokens, "
+            "COALESCE(SUM(output_tokens),0) output_tokens, COALESCE(SUM(duration_seconds),0) duration, "
+            "COALESCE(SUM(aiu),0) aiu FROM sessions" + auto
+        ).fetchone()
+        by_day = cur.execute(
+            "SELECT substr(COALESCE(updated_at, created_at),1,10) day, COUNT(*) sessions, "
+            "COALESCE(SUM(est_cost_usd),0) cost, COALESCE(SUM(premium_requests),0) premium "
+            "FROM sessions WHERE COALESCE(updated_at, created_at) IS NOT NULL"
+            + auto_and
+            + " GROUP BY day ORDER BY day"
+        ).fetchall()
+        by_model = cur.execute(
+            "SELECT COALESCE(NULLIF(model,''),'(unknown)') model, COUNT(*) sessions, "
+            "COALESCE(SUM(est_cost_usd),0) cost, COALESCE(SUM(premium_requests),0) premium "
+            "FROM sessions"
+            + auto
+            + " GROUP BY model ORDER BY cost DESC, sessions DESC LIMIT 12"
+        ).fetchall()
+        by_repo = cur.execute(
+            "SELECT COALESCE(NULLIF(repository,''),'(none)') repository, COUNT(*) sessions, "
+            "COALESCE(SUM(est_cost_usd),0) cost FROM sessions"
+            + auto
+            + " GROUP BY repository ORDER BY cost DESC, sessions DESC LIMIT 12"
+        ).fetchall()
+        by_source = cur.execute(
+            "SELECT source, COUNT(*) sessions, COALESCE(SUM(est_cost_usd),0) cost, "
+            "COALESCE(SUM(premium_requests),0) premium FROM sessions"
+            + auto
+            + " GROUP BY source ORDER BY cost DESC"
+        ).fetchall()
+    return {
+        "totals": {
+            "sessions": t["sessions"],
+            "cost": round(t["cost"], 2),
+            "premium": int(t["premium"]),
+            "input_tokens": int(t["input_tokens"]),
+            "output_tokens": int(t["output_tokens"]),
+            "duration": t["duration"] or 0,
+            "aiu": round(t["aiu"], 2),
+        },
+        "by_day": [
+            {
+                "day": r["day"],
+                "sessions": r["sessions"],
+                "cost": round(r["cost"], 4),
+                "premium": int(r["premium"]),
+            }
+            for r in by_day
+        ],
+        "by_model": [
+            {
+                "model": r["model"],
+                "sessions": r["sessions"],
+                "cost": round(r["cost"], 2),
+                "premium": int(r["premium"]),
+            }
+            for r in by_model
+        ],
+        "by_repo": [
+            {
+                "repository": r["repository"],
+                "sessions": r["sessions"],
+                "cost": round(r["cost"], 2),
+            }
+            for r in by_repo
+        ],
+        "by_source": [
+            {
+                "source": r["source"],
+                "sessions": r["sessions"],
+                "cost": round(r["cost"], 2),
+                "premium": int(r["premium"]),
+            }
+            for r in by_source
+        ],
+    }
+
+
+class AskIn(BaseModel):
+    question: str
+    limit: int = 6
+
+
+class RenderIn(BaseModel):
+    text: str
+
+
+@app.get("/api/ask/status")
+def api_ask_status() -> dict[str, Any]:
+    return ask.status()
+
+
+@app.post("/api/ask")
+def api_ask(body: AskIn) -> StreamingResponse:
+    question = (body.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="empty question")
+    limit = max(1, min(int(body.limit), 20))
+
+    def gen():
+        for event in ask.stream_answer(question, limit=limit):
+            yield "data: " + json.dumps(event) + "\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/render")
+def api_render(body: RenderIn) -> dict[str, str]:
+    return {"html": render.render_markdown(body.text or "")}
 
 
 def _sync_session_fts_tags(cur, session_id: str) -> None:

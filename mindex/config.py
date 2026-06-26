@@ -31,6 +31,14 @@ UPLOADS_DIR = Path(
 HOST = os.environ.get("MINDEX_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MINDEX_PORT", "8765"))
 
+# --- Ask your history (optional, local LLM via Ollama) -----------------------
+
+# Opt-in RAG: if a local Ollama server is reachable, mindex can synthesise
+# answers from your past conversations. Everything stays local — no API keys.
+OLLAMA_URL = os.environ.get("MINDEX_OLLAMA_URL", "http://localhost:11434").rstrip("/")
+# Empty = auto-pick a reasonable installed model (prefers a small general one).
+OLLAMA_MODEL = os.environ.get("MINDEX_OLLAMA_MODEL", "").strip()
+
 # --- Sources -----------------------------------------------------------------
 
 # The Copilot CLI / agent session store (a live SQLite DB). mindex reads a

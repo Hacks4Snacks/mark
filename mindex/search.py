@@ -266,9 +266,7 @@ def search(
     return _sort_results(results, sort)
 
 
-def _sort_results(
-    results: list[dict[str, Any]], sort: str
-) -> list[dict[str, Any]]:
+def _sort_results(results: list[dict[str, Any]], sort: str) -> list[dict[str, Any]]:
     """Reorder relevance-ranked results when the user picks an explicit sort.
 
     ``recent`` is treated as "keep relevance order" for keyword/semantic queries
@@ -276,7 +274,9 @@ def _sort_results(
     """
     if sort == "oldest":
         # "~" sorts after digits so undated sessions land last, mirroring browse.
-        return sorted(results, key=lambda r: r.get("updated_at") or r.get("created_at") or "~")
+        return sorted(
+            results, key=lambda r: r.get("updated_at") or r.get("created_at") or "~"
+        )
     if sort == "turns":
         return sorted(results, key=lambda r: r.get("turn_count") or 0, reverse=True)
     if sort == "title":
@@ -463,3 +463,62 @@ def get_session(session_id: str) -> dict[str, Any] | None:
     session["document"] = dict(doc) if doc else None
     session["attachments"] = attachments
     return session
+
+
+def related_sessions(session_id: str, limit: int = 8) -> list[dict[str, Any]]:
+    """Semantically nearest other sessions, by best-matching chunk similarity.
+
+    Builds a query vector from the session's own chunk embeddings (their mean),
+    then ranks every other session by its single best-matching chunk. Returns
+    lightweight cards the detail view can link to.
+    """
+    ids, sessions, matrix = _vector_matrix()
+    if matrix.shape[0] == 0:
+        return []
+    own = [i for i, s in enumerate(sessions) if s == session_id]
+    if not own:
+        return []
+    qvec = matrix[own].mean(axis=0)
+    norm = float(np.linalg.norm(qvec))
+    if norm == 0:
+        return []
+    sims = matrix @ (qvec / norm)
+
+    best: dict[str, float] = {}
+    for i, sid in enumerate(sessions):
+        if sid == session_id:
+            continue
+        v = float(sims[i])
+        if v > best.get(sid, -2.0):
+            best[sid] = v
+    if not best:
+        return []
+    ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+    order = [sid for sid, _ in ranked]
+
+    with db.cursor() as cur:
+        rows = {
+            r["id"]: r
+            for r in cur.execute(
+                "SELECT id, title, source, repository, created_at, updated_at "
+                "FROM sessions WHERE id IN (%s) AND source != 'automation'"
+                % ",".join("?" * len(order)),
+                order,
+            ).fetchall()
+        }
+    out: list[dict[str, Any]] = []
+    for sid, score in ranked:
+        r = rows.get(sid)
+        if not r:
+            continue
+        out.append(
+            {
+                "id": sid,
+                "title": r["title"],
+                "source": r["source"],
+                "repository": r["repository"],
+                "updated_at": r["updated_at"] or r["created_at"],
+                "score": round(score, 3),
+            }
+        )
+    return out

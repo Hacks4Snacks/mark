@@ -37,6 +37,9 @@
     </div>
 
     <div class="actions">
+      <button id="libraryBtn" class="btn" title="Browse the snippet &amp; command library" aria-label="Snippet library">⌗ Library</button>
+      <button id="usageBtn" class="btn" title="Usage &amp; spend analytics" aria-label="Usage dashboard">◓ Usage</button>
+      <button id="askBtn" class="btn" title="Ask your history with a local LLM" aria-label="Ask your history">✦ Ask</button>
       <button id="addBtn" class="btn btn-primary" title="Add a note or file" aria-label="Add a note or file">＋ Add</button>
       <button id="reindexBtn" class="btn" title="Re-scan now · auto-syncs new sessions automatically" aria-label="Re-scan history now">⟳</button>
       <button id="themeBtn" class="btn" title="Toggle theme" aria-label="Toggle light or dark theme">◐</button>
@@ -105,6 +108,51 @@
 
       <!-- DETAIL VIEW -->
       <article id="detailView" class="detail" hidden></article>
+
+      <!-- LIBRARY VIEW -->
+      <div id="libraryView" hidden>
+        <div class="list-head">
+          <h2>Snippet &amp; command library</h2>
+          <span id="libCount" class="muted"></span>
+        </div>
+        <div class="lib-controls">
+          <input id="libSearch" type="search" placeholder="Filter by content…" autocomplete="off" spellcheck="false" />
+          <select id="libLang" aria-label="Filter by language"><option value="">All languages</option></select>
+          <label class="toggle lib-cmd"><input type="checkbox" id="libCommands" /> <span>Commands only</span></label>
+        </div>
+        <div id="libResults" class="lib-results"></div>
+      </div>
+
+      <!-- USAGE VIEW -->
+      <div id="usageView" hidden>
+        <div class="list-head">
+          <h2>Usage &amp; spend</h2>
+          <label class="toggle"><input type="checkbox" id="usageAuto" /> <span>Include automation</span></label>
+        </div>
+        <div id="usageBody"></div>
+      </div>
+
+      <!-- ASK VIEW -->
+      <div id="askView" hidden>
+        <div class="list-head">
+          <h2>Ask your history</h2>
+          <span id="askModel" class="muted"></span>
+        </div>
+        <form class="ask-form" id="askForm">
+          <textarea id="askInput" rows="2" placeholder="Ask a question about your past conversations… (Enter to send, Shift+Enter for a new line)" autocomplete="off" spellcheck="false"></textarea>
+          <select id="askLimit" class="ask-limit" title="How many past conversations to draw from" aria-label="Sources to consider">
+            <option value="6">6 sources</option>
+            <option value="8" selected>8 sources</option>
+            <option value="12">12 sources</option>
+            <option value="16">16 sources</option>
+            <option value="20">20 sources</option>
+          </select>
+          <button class="btn btn-primary" id="askSend" type="submit">Ask</button>
+        </form>
+        <div id="askStatus" class="ask-status" hidden></div>
+        <div id="askSources" class="ask-sources" hidden></div>
+        <div id="askAnswer" class="ask-answer md" hidden></div>
+      </div>
     </section>
   </main>
 
