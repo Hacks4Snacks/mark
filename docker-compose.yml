@@ -28,6 +28,9 @@ services:
     # environment:
     #   # Cap on embedded chunks per session (keyword/FTS indexes all chunks).
     #   MARK_MAX_EMBED_CHUNKS_PER_SESSION: "40"
+    #   # Embedding CPU cap: threads the transformer backend uses while indexing.
+    #   # Default = half your cores; "0" uses all (fastest, but hotter/louder).
+    #   MARK_EMBED_THREADS: "4"
     volumes:
       - mark-data:/app/data
       # --- your conversation sources, mounted READ-ONLY onto the in-container

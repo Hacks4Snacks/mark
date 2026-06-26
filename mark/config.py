@@ -145,6 +145,15 @@ EMBED_MODEL = os.environ.get("MARK_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 # Dimension used by the always-available built-in hashing vectorizer fallback.
 HASH_EMBED_DIM = int(os.environ.get("MARK_HASH_DIM", "1024"))
 
+# Cap CPU used by the transformer embedding backend so a first-time index of a
+# large history doesn't peg every core during ingest. fastembed/ONNX otherwise
+# spread inference across all logical CPUs; default to half, leaving headroom for
+# the user's foreground work. Set MARK_EMBED_THREADS=0 to use all cores (fastest).
+EMBED_THREADS = max(
+    0,
+    int(os.environ.get("MARK_EMBED_THREADS", str(max(1, (os.cpu_count() or 2) // 2)))),
+)
+
 # Max characters per search chunk (the window size used to split long turns).
 MAX_CHUNK_CHARS = int(os.environ.get("MARK_MAX_CHUNK_CHARS", "2000"))
 # Keyword (FTS) search indexes every chunk so nothing is lost from search. Only

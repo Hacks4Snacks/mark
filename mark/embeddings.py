@@ -92,7 +92,12 @@ class _FastEmbed(Embedder):
         from fastembed import TextEmbedding  # type: ignore
 
         self.name = config.EMBED_MODEL
-        self._model = TextEmbedding(model_name=config.EMBED_MODEL)
+        # Cap ONNX inference threads so a first-time index doesn't peg every core
+        # (fastembed defaults to all logical CPUs). 0 -> None = use all cores.
+        self._model = TextEmbedding(
+            model_name=config.EMBED_MODEL,
+            threads=config.EMBED_THREADS or None,
+        )
         # Probe dimensionality once.
         probe = next(iter(self._model.embed(["dimension probe"])))
         self.dim = int(np.asarray(probe).shape[-1])
