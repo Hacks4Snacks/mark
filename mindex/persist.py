@@ -158,7 +158,7 @@ def write_session(cur, session: dict[str, Any], *, light: bool = True) -> None:
             (sid, tag, score),
         )
 
-    tag_text = " ".join(t for t, _ in tags)
+    tag_text = " ".join([mt["tag"] for mt in manual_tags] + [t for t, _ in tags])
     for chunk_id, content in chunk_rows:
         cur.execute(
             "INSERT INTO search_index(content, title, tags, chunk_id, session_id, source_type, turn_index) "

@@ -297,6 +297,17 @@ def api_session(session_id: str) -> dict[str, Any]:
     return session
 
 
+def _sync_session_fts_tags(cur, session_id: str) -> None:
+    """Refresh a session's FTS ``tags`` column so manual topics are keyword-searchable."""
+    tag_text = " ".join(
+        r["tag"]
+        for r in cur.execute("SELECT tag FROM tags WHERE session_id = ?", (session_id,))
+    )
+    cur.execute(
+        "UPDATE search_index SET tags = ? WHERE session_id = ?", (tag_text, session_id)
+    )
+
+
 class TagIn(BaseModel):
     tag: str
 
@@ -316,6 +327,7 @@ def api_add_tag(session_id: str, body: TagIn) -> dict[str, Any]:
             "ON CONFLICT(session_id, tag) DO UPDATE SET manual = 1",
             (session_id, tag, 100.0),
         )
+        _sync_session_fts_tags(cur, session_id)
     return {"tag": tag}
 
 
@@ -326,6 +338,7 @@ def api_remove_tag(session_id: str, tag: str) -> dict[str, Any]:
             "DELETE FROM tags WHERE session_id = ? AND tag = ?",
             (session_id, tag.strip().lower()),
         )
+        _sync_session_fts_tags(cur, session_id)
     return {"ok": True}
 
 
