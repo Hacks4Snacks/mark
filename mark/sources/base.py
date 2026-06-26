@@ -160,12 +160,12 @@ def turns_duration(turns: list[dict[str, Any]]) -> float | None:
 
 
 def compute_cost(
-    model,
-    input_tokens,
-    output_tokens,
-    cache_read=0,
-    cache_write=0,
-    input_includes_cache=True,
+    model: str | None,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read: int = 0,
+    cache_write: int = 0,
+    input_includes_cache: bool = True,
 ) -> float:
     pin, pout, pcache = config.price_for(model)
     # The Copilot CLI reports inputTokens INCLUSIVE of cached tokens; Cline-family
