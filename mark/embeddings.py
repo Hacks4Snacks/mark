@@ -1,16 +1,3 @@
-"""Text embeddings with graceful degradation.
-
-mark tries to use a real transformer embedding model for semantic search, but
-never *requires* one. Backends are attempted in order of quality:
-
-1. ``fastembed``  — ONNX transformer (no PyTorch). Best quality.
-2. ``model2vec``  — static distilled embeddings. Light + fast.
-3. built-in       — a stateless hashing vectorizer (NumPy only). Always works,
-                    fully offline, lexical-semantic quality.
-
-Every backend returns L2-normalised ``float32`` vectors so cosine similarity is
-just a dot product, and vectors are stored as raw little-endian blobs.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -27,11 +14,56 @@ _embedder: "Embedder | None" = None
 
 _WORD_RE = re.compile(r"[A-Za-z0-9_]+")
 _STOP = {
-    "the", "a", "an", "and", "or", "but", "if", "then", "this", "that", "these",
-    "those", "is", "are", "was", "were", "be", "been", "to", "of", "in", "on",
-    "for", "with", "as", "at", "by", "it", "its", "i", "you", "we", "they",
-    "can", "will", "would", "should", "could", "do", "does", "did", "not",
-    "from", "so", "my", "your", "me", "he", "she", "them",
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "but",
+    "if",
+    "then",
+    "this",
+    "that",
+    "these",
+    "those",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "to",
+    "of",
+    "in",
+    "on",
+    "for",
+    "with",
+    "as",
+    "at",
+    "by",
+    "it",
+    "its",
+    "i",
+    "you",
+    "we",
+    "they",
+    "can",
+    "will",
+    "would",
+    "should",
+    "could",
+    "do",
+    "does",
+    "did",
+    "not",
+    "from",
+    "so",
+    "my",
+    "your",
+    "me",
+    "he",
+    "she",
+    "them",
 }
 
 
@@ -111,7 +143,9 @@ class _HashEmbed(Embedder):
         # character n-grams give sub-word / typo robustness
         joined = " ".join(words)
         for n in (3, 4, 5):
-            toks += [f"#{joined[i:i + n]}" for i in range(0, max(0, len(joined) - n + 1), 2)]
+            toks += [
+                f"#{joined[i:i + n]}" for i in range(0, max(0, len(joined) - n + 1), 2)
+            ]
         return toks
 
     def _vec(self, text: str) -> np.ndarray:
@@ -157,8 +191,6 @@ def get_embedder() -> Embedder:
 def embed_texts(texts: Sequence[str]) -> np.ndarray:
     return get_embedder().embed(texts)
 
-
-# --- blob (de)serialisation --------------------------------------------------
 
 def to_blob(vec: np.ndarray) -> bytes:
     return np.asarray(vec, dtype=np.float32).tobytes()

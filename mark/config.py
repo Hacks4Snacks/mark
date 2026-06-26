@@ -42,15 +42,13 @@ OLLAMA_MODEL = os.environ.get("MARK_OLLAMA_MODEL", "").strip()
 # --- Sources -----------------------------------------------------------------
 
 # The Copilot CLI / agent session store (a live SQLite DB). mark reads a
-# consistent snapshot of it read-only.
-COPILOT_STORE_PATH = Path(
-    os.environ.get("MARK_COPILOT_STORE", Path.home() / ".copilot" / "session-store.db")
-).expanduser()
+# consistent snapshot of it read-only. Override the path via
+# ``[sources.copilot_cli] roots`` in sources.toml or ``MARK_SOURCE_COPILOT_CLI_ROOTS``.
+COPILOT_STORE_PATH = Path.home() / ".copilot" / "session-store.db"
 
 # Per-session event logs (token usage, model, duration) written by the CLI.
-SESSION_STATE_DIR = Path(
-    os.environ.get("MARK_SESSION_STATE", Path.home() / ".copilot" / "session-state")
-).expanduser()
+# Override via ``[sources.copilot_cli] options.state_dir`` in sources.toml.
+SESSION_STATE_DIR = Path.home() / ".copilot" / "session-state"
 
 # Command shown in the UI for resuming a Copilot CLI session.
 RESUME_COMMAND = os.environ.get("MARK_RESUME_CMD", "copilot --resume {id}")
@@ -220,22 +218,20 @@ def _candidate_storage_roots(subdir: str = "workspaceStorage") -> list[Path]:
 
 
 def vscode_storage_roots() -> list[Path]:
-    """Resolve workspaceStorage directories to scan for chat sessions.
+    """Discover the workspaceStorage directories to scan for chat sessions.
 
-    Honors ``MARK_VSCODE_STORAGE`` (os.pathsep-separated) when set, otherwise
-    returns whichever known platform locations actually exist.
+    Returns whichever known platform locations actually exist. Override via
+    ``[sources.vscode] roots`` in sources.toml or ``MARK_SOURCE_VSCODE_ROOTS``.
     """
-    override = os.environ.get("MARK_VSCODE_STORAGE")
-    if override:
-        return [Path(p).expanduser() for p in override.split(os.pathsep) if p.strip()]
     return [r for r in _candidate_storage_roots() if r.exists()]
 
 
 def vscode_global_storage_roots() -> list[Path]:
-    """Resolve ``User/globalStorage`` directories (Cline, Zoo Code, etc.)."""
-    override = os.environ.get("MARK_VSCODE_GLOBAL_STORAGE")
-    if override:
-        return [Path(p).expanduser() for p in override.split(os.pathsep) if p.strip()]
+    """Discover ``User/globalStorage`` directories (Cline, Zoo Code, etc.).
+
+    Override via ``[sources.cline] roots`` in sources.toml or
+    ``MARK_SOURCE_CLINE_ROOTS``.
+    """
     return [r for r in _candidate_storage_roots("globalStorage") if r.exists()]
 
 
@@ -246,23 +242,20 @@ def _cursor_user_dirs() -> list[Path]:
 
 
 def cursor_global_db_paths() -> list[Path]:
-    """Cursor ``globalStorage/state.vscdb`` files holding composer chat history.
+    """Discover Cursor ``globalStorage/state.vscdb`` files (composer chat history).
 
-    Honors ``MARK_CURSOR_STORAGE`` (os.pathsep-separated db paths) when set,
-    otherwise returns whichever known per-platform locations actually exist.
+    Override via ``[sources.cursor] roots`` in sources.toml or
+    ``MARK_SOURCE_CURSOR_ROOTS``.
     """
-    override = os.environ.get("MARK_CURSOR_STORAGE")
-    if override:
-        return [Path(p).expanduser() for p in override.split(os.pathsep) if p.strip()]
     dbs = [u / "globalStorage" / "state.vscdb" for u in _cursor_user_dirs()]
     return [p for p in dbs if p.exists()]
 
 
 def cursor_workspace_storage_roots() -> list[Path]:
-    """Cursor ``workspaceStorage`` directories (used to map a composer to its repo)."""
-    override = os.environ.get("MARK_CURSOR_WORKSPACE_STORAGE")
-    if override:
-        return [Path(p).expanduser() for p in override.split(os.pathsep) if p.strip()]
+    """Discover Cursor ``workspaceStorage`` dirs (map a composer to its repo).
+
+    Override via ``[sources.cursor] options.workspace_roots`` in sources.toml.
+    """
     return [
         u / "workspaceStorage"
         for u in _cursor_user_dirs()
