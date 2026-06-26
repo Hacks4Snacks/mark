@@ -4,13 +4,19 @@ from __future__ import annotations
 
 from .. import db
 
+# Manual topics are stored normalized (lowercase, collapsed whitespace, capped)
+# so add/remove always agree regardless of caller.
+_MANUAL_TAG_SCORE = 100.0
+
+
+def _norm_tag(tag: str) -> str:
+    return " ".join((tag or "").strip().lower().split())[:40]
+
 
 def exists(session_id: str) -> bool:
     with db.cursor() as cur:
         return (
-            cur.execute(
-                "SELECT 1 FROM sessions WHERE id = ?", (session_id,)
-            ).fetchone()
+            cur.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone()
             is not None
         )
 
@@ -43,7 +49,7 @@ def add_tag(session_id: str, tag: str) -> None:
         cur.execute(
             "INSERT INTO tags(session_id, tag, score, manual) VALUES (?,?,?,1) "
             "ON CONFLICT(session_id, tag) DO UPDATE SET manual = 1",
-            (session_id, tag, 100.0),
+            (session_id, _norm_tag(tag), _MANUAL_TAG_SCORE),
         )
         _sync_fts_tags(cur, session_id)
 
@@ -52,6 +58,6 @@ def remove_tag(session_id: str, tag: str) -> None:
     with db.cursor() as cur:
         cur.execute(
             "DELETE FROM tags WHERE session_id = ? AND tag = ?",
-            (session_id, tag.strip().lower()),
+            (session_id, _norm_tag(tag)),
         )
         _sync_fts_tags(cur, session_id)

@@ -81,7 +81,7 @@ def test_chatgpt_import_into_db(persist_session):
     with db.connect() as conn:
         cur = conn.cursor()
         for session in src.parse_export(_sample_export()):
-            persist.write_session(cur, session, light=True)
+            persist.write_session(cur, session)
         conn.commit()
     res = search.search("refresh token", mode="keyword")
     assert any(r["id"] == "chatgpt-abc" for r in res)

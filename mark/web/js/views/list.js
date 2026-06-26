@@ -4,7 +4,7 @@
 // grouping, the active-filter summary bar, and keyboard navigation.
 
 import { api } from "../api.js";
-import { PAGE_SIZE, showOnly, state } from "../state.js";
+import { PAGE_SIZE, setLayoutWide, showOnly, state } from "../state.js";
 import { syncFilterUI } from "../sidebar.js";
 import {
   $, $$, debounce, esc, fmtCost, fmtDate, fmtDuration, normTitle, srcMeta, withTransition,
@@ -193,6 +193,7 @@ export function showList(opts) {
   state.currentId = null;
   const apply = () => {
     state.view = "list";
+    setLayoutWide(false);
     showOnly("#listView");
   };
   if (leaving) withTransition(apply);

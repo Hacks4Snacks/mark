@@ -42,6 +42,22 @@ export function fmtDate(iso) {
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+export function fmtRelativeTime(iso, prefix = "Updated") {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const diff = Date.now() - d.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return `${prefix} just now`;
+  if (mins < 60) return `${prefix} ${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${prefix} ${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return `${prefix} yesterday`;
+  if (days < 30) return `${prefix} ${days}d ago`;
+  return `${prefix} ${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+}
+
 export const debounce = (fn, ms = 220) => {
   let t;
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };

@@ -59,6 +59,20 @@ def test_collection_crud_and_membership(client):
     remove = client.delete(f"/api/collections/{cid}/members/{sid}")
     assert remove.status_code == 200
 
+    patched = client.patch(
+        f"/api/collections/{cid}",
+        json={
+            "rule": {"q": "body", "source": "upload"},
+            "color": "cyan",
+            "pinned": True,
+        },
+    )
+    assert patched.status_code == 200
+    body = patched.json()
+    assert body["rule"]["q"] == "body"
+    assert body["color"] == "cyan"
+    assert body["pinned"] is True
+
     assert client.delete(f"/api/collections/{cid}").status_code == 200
     assert client.get(f"/api/collections/{cid}").status_code == 404
 

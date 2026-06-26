@@ -4,7 +4,7 @@
 // related sessions, and the reading-progress / sticky-header behaviour.
 
 import { api } from "../api.js";
-import { showOnly, state } from "../state.js";
+import { showOnly, setLayoutWide, state } from "../state.js";
 import { loadFacets } from "../sidebar.js";
 import {
   $, $$, esc, fmtBytes, fmtCost, fmtDate, fmtDuration, fmtTokens, srcMeta, toast, withTransition,
@@ -28,6 +28,7 @@ export async function openSession(id, opts = {}) {
 
 function renderDetail(s) {
   state.view = "detail";
+  setLayoutWide(false);
   showOnly("#detailView");
   const view = $("#detailView");
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -49,7 +50,7 @@ function renderDetail(s) {
 
   // Session id + resume
   const isCli = s.source === "cli";
-  const resumeCmd = `copilot --resume ${s.id}`;
+  const resumeCmd = (state.resumeCmd || "copilot --resume {id}").replace("{id}", s.id);
   asideBlocks.push(`<div><h4>Session</h4>
     ${isCli ? `<div class="resume-hint">Resume in Copilot CLI</div>
       <div class="copy-row"><code>${esc(resumeCmd)}</code><button class="copy-btn" data-copy="${esc(resumeCmd)}" title="Copy">${icon("copy")}</button></div>`

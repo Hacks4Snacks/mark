@@ -14,6 +14,27 @@ from ..schemas import IdResponse, NoteIn, RenderIn, RenderResponse
 
 router = APIRouter()
 
+_READ_CHUNK = 1 << 20  # 1 MiB
+
+
+async def _read_capped(file: UploadFile, cap: int) -> bytes | None:
+    """Read the upload in chunks, aborting once it exceeds ``cap`` bytes.
+
+    Returns the bytes, or ``None`` if the stream is larger than ``cap`` so the
+    caller can reject it without having buffered the whole (possibly huge) body.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_READ_CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > cap:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 @router.post("/api/notes", response_model=IdResponse)
 def api_add_note(note: NoteIn) -> dict[str, Any]:
@@ -25,8 +46,8 @@ def api_add_note(note: NoteIn) -> dict[str, Any]:
 
 @router.post("/api/uploads")
 async def api_upload(file: UploadFile = File(...)) -> dict[str, Any]:
-    data = await file.read()
-    if len(data) > config.MAX_UPLOAD_BYTES:
+    data = await _read_capped(file, config.MAX_UPLOAD_BYTES)
+    if data is None:
         raise HTTPException(status_code=413, detail="file too large")
     if not data:
         raise HTTPException(status_code=400, detail="empty file")

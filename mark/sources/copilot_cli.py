@@ -463,7 +463,7 @@ class CopilotCliSource(WatchedSource):
                     "extra_files": extra_files,
                     "attachments": attachments,
                 }
-                write_session(cur, session, light=True)
+                write_session(cur, session)
                 counts["added" if prior is None else "updated"] += 1
                 seen += 1
                 if progress and seen % 100 == 0:

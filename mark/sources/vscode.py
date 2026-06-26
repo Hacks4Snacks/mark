@@ -352,7 +352,7 @@ class VSCodeSource(WatchedSource):
             if prior is not None and prior == session["content_hash"] and not rebuild:
                 skipped += 1
                 continue
-            write_session(cur, session, light=True)
+            write_session(cur, session)
             added += 1 if prior is None else 0
             updated += 0 if prior is None else 1
             if progress:

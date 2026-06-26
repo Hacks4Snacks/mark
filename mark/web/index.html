@@ -107,12 +107,28 @@
 
       <!-- COLLECTIONS GRID VIEW -->
       <div id="collectionsView" hidden>
-        <div class="list-head">
-          <h2>Collections</h2>
-          <span id="collectionsCount" class="muted"></span>
-          <button id="newCollectionBtn" class="btn btn-primary list-head-action" title="Create a new collection"><span class="bi" data-icon="plus"></span> New collection</button>
+        <div class="coll-page-head">
+          <div class="coll-page-head-text">
+            <h2><span class="coll-page-icon bi" data-icon="layers" data-icon-size="20"></span> Collections</h2>
+            <p class="coll-page-sub">Auto-updating groups of conversations. A collection follows a saved search and its filters — and keeps any sessions you add or remove by hand.</p>
+            <span id="collectionsAggregate" class="coll-aggregate muted" hidden></span>
+          </div>
+          <button id="newCollectionBtn" class="btn btn-primary" title="Create a new collection"><span class="bi" data-icon="plus"></span> New collection</button>
         </div>
-        <p class="view-intro muted">Auto-updating groups of conversations. A collection follows a saved search and its filters, and keeps any sessions you pin or remove by hand.</p>
+        <div class="coll-toolbar">
+          <input id="collGridSearch" type="search" placeholder="Filter collections…" autocomplete="off" spellcheck="false" aria-label="Filter collections" />
+          <div class="segmented coll-kind-toggle" id="collKindToggle" role="tablist" aria-label="Collection kind">
+            <button type="button" data-kind="all" class="active">All</button>
+            <button type="button" data-kind="auto">Auto-updating</button>
+            <button type="button" data-kind="manual">Manual</button>
+          </div>
+          <select id="collGridSort" aria-label="Sort collections">
+            <option value="pinned">Pinned first</option>
+            <option value="name">Name A–Z</option>
+            <option value="sessions">Most sessions</option>
+            <option value="updated">Recently updated</option>
+          </select>
+        </div>
         <div id="collectionsGrid" class="collections-grid"></div>
       </div>
 
@@ -205,7 +221,7 @@
     <form method="dialog" id="collectionForm">
       <div class="dialog-head">
         <strong id="collectionDialogTitle">New collection</strong>
-        <button type="button" class="btn btn-ghost icon-only" id="collClose"><span class="bi" data-icon="x"></span></button>
+        <button type="button" class="btn btn-ghost icon-only" id="collClose" aria-label="Close"><span class="bi" data-icon="x"></span></button>
       </div>
       <div class="coll-pane">
         <div class="coll-row">
@@ -213,7 +229,50 @@
           <input id="collName" placeholder="Collection name" maxlength="80" />
         </div>
         <textarea id="collDescription" rows="2" placeholder="What is this collection about? (optional)"></textarea>
-        <div id="collRuleSummary" class="coll-rule-summary" hidden></div>
+        <div class="coll-dialog-row">
+          <span class="coll-dialog-label">Color</span>
+          <div id="collColorPicker" class="coll-color-picker" role="radiogroup" aria-label="Collection color">
+            <button type="button" class="coll-color-swatch active" data-color="" title="Default" aria-label="Default color"></button>
+            <button type="button" class="coll-color-swatch coll-accent-purple" data-color="purple" title="Purple" aria-label="Purple"></button>
+            <button type="button" class="coll-color-swatch coll-accent-cyan" data-color="cyan" title="Cyan" aria-label="Cyan"></button>
+            <button type="button" class="coll-color-swatch coll-accent-green" data-color="green" title="Green" aria-label="Green"></button>
+            <button type="button" class="coll-color-swatch coll-accent-amber" data-color="amber" title="Amber" aria-label="Amber"></button>
+            <button type="button" class="coll-color-swatch coll-accent-rose" data-color="rose" title="Rose" aria-label="Rose"></button>
+          </div>
+        </div>
+        <label class="toggle coll-pin-toggle"><input type="checkbox" id="collPinned" /> <span>Pin to top</span></label>
+        <div class="coll-rule-editor">
+          <div class="coll-rule-editor-head">
+            <span class="coll-dialog-label">Auto-include rule</span>
+            <button type="button" class="btn btn-ghost coll-rule-clear" id="collRuleClear">Clear rule</button>
+          </div>
+          <input id="collRuleQ" placeholder="Search query (optional)" autocomplete="off" spellcheck="false" />
+          <div class="coll-row">
+            <select id="collRuleSource" aria-label="Source filter">
+              <option value="">Any source</option>
+              <option value="vscode">VS Code</option>
+              <option value="cli">Copilot CLI</option>
+              <option value="cline">Cline</option>
+              <option value="cursor">Cursor</option>
+              <option value="chatgpt">ChatGPT</option>
+              <option value="copilot">Copilot</option>
+              <option value="upload">Upload</option>
+            </select>
+            <input id="collRuleRepo" placeholder="Repository" />
+          </div>
+          <input id="collRuleTags" placeholder="Tags, comma-separated" />
+          <div class="coll-row coll-date-row">
+            <input type="date" id="collRuleFrom" aria-label="From date" />
+            <span class="date-sep" aria-hidden="true"><span class="bi" data-icon="arrow-right" data-icon-size="14"></span></span>
+            <input type="date" id="collRuleTo" aria-label="To date" />
+          </div>
+          <div class="segmented coll-mode-toggle" id="collRuleMode" role="tablist" aria-label="Search mode" hidden>
+            <button type="button" data-mode="hybrid" class="active">Hybrid</button>
+            <button type="button" data-mode="semantic">Semantic</button>
+            <button type="button" data-mode="keyword">Keyword</button>
+          </div>
+          <div id="collRulePreview" class="coll-rule-summary" hidden></div>
+        </div>
       </div>
       <div class="dialog-foot">
         <button type="button" class="btn" id="collCancel">Cancel</button>

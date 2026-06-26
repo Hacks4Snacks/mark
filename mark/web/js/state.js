@@ -17,6 +17,8 @@ export const state = {
   currentId: null,
   currentCollectionId: null,
   limit: PAGE_SIZE,
+  // Copilot CLI "resume" command template (from /api/status; {id} is substituted).
+  resumeCmd: "copilot --resume {id}",
 };
 
 // Every primary view lives in a top-level container; switching simply toggles
@@ -36,4 +38,10 @@ export function showOnly(visibleId) {
     const el = $(id);
     if (el) el.hidden = id !== visibleId;
   }
+}
+
+/** Hide the search sidebar and use a narrower content column (Collections views). */
+export function setLayoutWide(on) {
+  const layout = $(".layout");
+  if (layout) layout.classList.toggle("layout--wide", on);
 }

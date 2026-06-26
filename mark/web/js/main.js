@@ -34,6 +34,7 @@ async function pollStatus(initial = false) {
   try {
     const st = await api("/api/status");
     running = !!st.running;
+    if (st.resume_cmd) state.resumeCmd = st.resume_cmd;
     // The spinning re-scan button is the sole sync indicator (no banner/toast).
     $("#reindexBtn").classList.toggle("spin", running);
     // The index changed (manual reindex or background auto-sync completed).

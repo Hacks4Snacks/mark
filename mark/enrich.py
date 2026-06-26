@@ -267,16 +267,14 @@ def _keywords(text: str, top_k: int = 6) -> list[tuple[str, float]]:
 
 
 def enrich_session(
-    title: str, turns: list[dict[str, Any]], *, light: bool = False
+    title: str, turns: list[dict[str, Any]]
 ) -> tuple[str, list[tuple[str, float]]]:
+    """Fast, embedding-free summary + keyphrases for bulk session indexing."""
     corpus = f"{title}\n" + "\n".join(
         f"{t.get('user_message', '')} {_plaintext(t.get('assistant_response', ''))}"
         for t in turns
     )
-    if light:
-        # No embedding calls — used for bulk indexing of many sessions.
-        return _summarize_fast(turns), _keywords_freq(corpus)
-    return _summarize(turns), _keywords(corpus)
+    return _summarize_fast(turns), _keywords_freq(corpus)
 
 
 def _summarize_fast(turns: list[dict[str, Any]]) -> str:

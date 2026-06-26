@@ -34,6 +34,27 @@ def cursor() -> Iterator[sqlite3.Cursor]:
         conn.close()
 
 
+@contextmanager
+def transaction() -> Iterator[sqlite3.Connection]:
+    """A connection scoped to one unit of work: commit on success, roll back on
+    error, and always close.
+
+    Use this for multi-statement writes that need the raw connection (e.g.
+    ``executemany``/``executescript`` or incremental per-batch commits); prefer
+    :func:`cursor` for single-cursor work. Unlike a bare ``with connect()``,
+    this guarantees the handle is closed rather than leaning on GC.
+    """
+    conn = connect()
+    try:
+        yield conn
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def get_meta(key: str, default: str | None = None) -> str | None:
     with cursor() as cur:
         row = cur.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()

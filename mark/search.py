@@ -257,7 +257,6 @@ def search(
         s = dict(s)
         s["score"] = round(score / max_score, 4)
         s["snippet"] = snippet
-        s["match_turn"] = item.get("turn_index")
         results.append(s)
     return _sort_results(results, sort)
 
@@ -314,7 +313,7 @@ def browse(
 
     with db.cursor() as cur:
         rows = [dict(r) for r in cur.execute(sql, params).fetchall()]
-    _attach_tags(rows)
+    attach_tags(rows)
     for r in rows:
         r["score"] = None
         r["snippet"] = html.escape((r.get("summary") or "")[:240])
@@ -332,11 +331,11 @@ def _load_sessions(ids: list[str]) -> dict[str, dict[str, Any]]:
                 ids,
             ).fetchall()
         ]
-    _attach_tags(rows)
+    attach_tags(rows)
     return {r["id"]: r for r in rows}
 
 
-def _attach_tags(rows: list[dict[str, Any]]) -> None:
+def attach_tags(rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
     ids = [r["id"] for r in rows]

@@ -41,6 +41,8 @@ const PATHS = {
   "arrow-left": '<path d="M19 12H5M12 19l-7-7 7-7"/>',
   "arrow-right": '<path d="M5 12h14M12 5l7 7-7 7"/>',
   dot: '<circle cx="12" cy="12" r="3"/>',
+  star: '<path d="M12 2l2.4 7.4H22l-6 4.6 2.3 7-6.7-4.9L5 21l2.3-7-6-4.6h7.6z"/>',
+  "chevron-down": '<path d="m6 9 6 6 6-6"/>',
 };
 
 // source value -> icon name (label lives in utils.js SRC).

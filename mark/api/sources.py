@@ -22,6 +22,7 @@ def _status_payload() -> dict[str, Any]:
     st["auto_sync"] = config.AUTO_SYNC
     st["sync_interval"] = config.SYNC_INTERVAL
     st["last_ingest"] = db.get_meta("last_ingest")
+    st["resume_cmd"] = config.RESUME_COMMAND
     return st
 
 

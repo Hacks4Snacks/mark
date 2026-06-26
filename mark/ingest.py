@@ -20,7 +20,7 @@ def _embed_pending(progress: ProgressCb | None = None, batch: int = 256) -> int:
     stable across incremental runs.
     """
     emb = embeddings.get_embedder()
-    with db.connect() as conn:
+    with db.transaction() as conn:
         cur = conn.cursor()
         rows = cur.execute(
             "SELECT r.id, r.session_id, r.content FROM ("
@@ -89,7 +89,7 @@ def ingest_all(
         rebuild = True
 
     counts: Counter[str] = Counter()
-    with db.connect() as conn:
+    with db.transaction() as conn:
         cur = conn.cursor()
         if model_changed:
             cur.execute("DELETE FROM embeddings")
@@ -149,7 +149,7 @@ def import_export(
         return {"matched": None, "added": 0, "updated": 0, "skipped": 0, "imported": 0}
 
     counts: Counter[str] = Counter()
-    with db.connect() as conn:
+    with db.transaction() as conn:
         cur = conn.cursor()
         existing = {
             row["id"]: row["content_hash"]
@@ -163,7 +163,7 @@ def import_export(
             if prior is not None and prior == session["content_hash"]:
                 counts["skipped"] += 1
                 continue
-            persist.write_session(cur, session, light=True)
+            persist.write_session(cur, session)
             counts["added" if prior is None else "updated"] += 1
             n += 1
             if progress and n % 50 == 0:

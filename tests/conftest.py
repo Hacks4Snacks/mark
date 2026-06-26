@@ -102,7 +102,7 @@ def persist_session():
         from mark import db, persist
 
         with db.connect() as conn:
-            persist.write_session(conn.cursor(), session, light=True)
+            persist.write_session(conn.cursor(), session)
             conn.commit()
 
     return _persist

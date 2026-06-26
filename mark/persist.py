@@ -27,19 +27,24 @@ def _clean(text: str | None) -> str | None:
     return _BAD_CHARS_RE.sub("", text)
 
 
-def _split(text: str) -> list[str]:
-    """Window text into overlapping chunks bounded by ``MAX_CHUNK_CHARS``."""
-    limit = config.MAX_CHUNK_CHARS
-    if len(text) <= limit:
-        return [text]
-    chunks, start, overlap = [], 0, 200
+def window_chunks(
+    text: str, *, limit: int | None = None, overlap: int = 200
+) -> list[str]:
+    """Split text into overlapping windows bounded by ``limit`` characters.
+
+    Shared by turn indexing here and document uploads so both chunk identically.
+    """
+    cap = limit or config.MAX_CHUNK_CHARS
+    if len(text) <= cap:
+        return [text] if text else []
+    chunks, start = [], 0
     while start < len(text):
-        chunks.append(text[start : start + limit])
-        start += limit - overlap
+        chunks.append(text[start : start + cap])
+        start += cap - overlap
     return chunks
 
 
-def write_session(cur, session: dict[str, Any], *, light: bool = True) -> None:
+def write_session(cur, session: dict[str, Any]) -> None:
     sid = session["id"]
     # Manual topics the user added survive re-ingest (which replaces the row).
     manual_tags = cur.execute(
@@ -125,10 +130,12 @@ def write_session(cur, session: dict[str, Any], *, light: bool = True) -> None:
                 (sid, t["turn_index"], cb["language"], cb["content"]),
             )
         if um and um.strip():
-            user_pieces.extend((t["turn_index"], p) for p in _split("User: " + um.strip()))
+            user_pieces.extend(
+                (t["turn_index"], p) for p in window_chunks("User: " + um.strip())
+            )
         if ar and ar.strip():
             asst_pieces.extend(
-                (t["turn_index"], p) for p in _split("Assistant: " + ar.strip())
+                (t["turn_index"], p) for p in window_chunks("Assistant: " + ar.strip())
             )
 
     # Every chunk is indexed for keyword (FTS) search — no per-session cap, so no
@@ -168,7 +175,7 @@ def write_session(cur, session: dict[str, Any], *, light: bool = True) -> None:
             ),
         )
 
-    summary, tags = enrich.enrich_session(session["title"], turns, light=light)
+    summary, tags = enrich.enrich_session(session["title"], turns)
     if summary:
         cur.execute("UPDATE sessions SET summary = ? WHERE id = ?", (summary, sid))
     # Restore user topics first so they win over any auto tag of the same name.

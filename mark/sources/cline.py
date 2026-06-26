@@ -122,6 +122,7 @@ def _cline_turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         "turn_index": len(turns),
                         "user_message": user,
                         "assistant_response": asst,
+                        "thinking": "",
                         "tools": [],
                         "timestamp": _epoch_ms_to_iso(cur_ts),
                         "files": [],
@@ -412,7 +413,7 @@ class ClineSource(WatchedSource):
             if prior is not None and prior == session["content_hash"] and not rebuild:
                 counts["skipped"] += 1
                 continue
-            write_session(cur, session, light=True)
+            write_session(cur, session)
             counts["added" if prior is None else "updated"] += 1
             seen += 1
             if progress and seen % 50 == 0:

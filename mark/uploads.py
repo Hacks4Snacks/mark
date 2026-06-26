@@ -3,6 +3,7 @@
 An upload becomes a ``session`` row with ``source='upload'`` plus a ``documents``
 row, so it is searched, tagged and summarised exactly like a Copilot session.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -10,22 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config, db, embeddings, enrich
+from .persist import window_chunks
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _chunk_text(text: str) -> list[str]:
-    limit = config.MAX_CHUNK_CHARS
-    text = text.strip()
-    if len(text) <= limit:
-        return [text] if text else []
-    chunks, start, overlap = [], 0, 200
-    while start < len(text):
-        chunks.append(text[start:start + limit])
-        start += limit - overlap
-    return chunks
 
 
 def _extract_text(filename: str, data: bytes) -> str:
@@ -37,7 +27,9 @@ def _extract_text(filename: str, data: bytes) -> str:
             from pypdf import PdfReader  # type: ignore
 
             reader = PdfReader(io.BytesIO(data))
-            return "\n".join((page.extract_text() or "") for page in reader.pages).strip()
+            return "\n".join(
+                (page.extract_text() or "") for page in reader.pages
+            ).strip()
         except Exception:
             return ""
     if ext in config.TEXT_EXTENSIONS or not ext:
@@ -54,27 +46,42 @@ def _extract_text(filename: str, data: bytes) -> str:
 
 
 def _index_document(
-    *, title: str, kind: str, content: str,
-    filename: str | None = None, stored_path: str | None = None,
-    mime: str | None = None, size: int | None = None,
+    *,
+    title: str,
+    kind: str,
+    content: str,
+    filename: str | None = None,
+    stored_path: str | None = None,
+    mime: str | None = None,
+    size: int | None = None,
 ) -> str:
     db.init_db()
     session_id = f"{kind}-{uuid.uuid4().hex}"
     summary, tags = enrich.enrich_text(title, content)
-    chunks = _chunk_text(content) or [title]
+    chunks = window_chunks(content.strip()) or [title]
 
     emb = embeddings.get_embedder()
     vectors = emb.embed(chunks)
     tag_text = " ".join(t for t, _ in tags)
 
-    with db.connect() as conn:
+    with db.transaction() as conn:
         cur = conn.cursor()
         cur.execute(
             """INSERT INTO sessions
                (id, source, title, summary, repository, created_at, updated_at,
                 turn_count, source_path)
                VALUES (?,?,?,?,?,?,?,?,?)""",
-            (session_id, "upload", title, summary, None, _now(), _now(), 1, stored_path),
+            (
+                session_id,
+                "upload",
+                title,
+                summary,
+                None,
+                _now(),
+                _now(),
+                1,
+                stored_path,
+            ),
         )
         cur.execute(
             """INSERT INTO documents
@@ -108,7 +115,9 @@ def _index_document(
 
 def add_note(title: str, text: str) -> str:
     title = (title or "Untitled note").strip()[:200]
-    return _index_document(title=title, kind="note", content=(text or "").strip(), mime="text/markdown")
+    return _index_document(
+        title=title, kind="note", content=(text or "").strip(), mime="text/markdown"
+    )
 
 
 def add_file(filename: str, data: bytes, mime: str | None = None) -> str:
@@ -119,6 +128,11 @@ def add_file(filename: str, data: bytes, mime: str | None = None) -> str:
     stored.write_bytes(data)
     content = _extract_text(safe_name, data)
     return _index_document(
-        title=safe_name, kind="file", content=content,
-        filename=safe_name, stored_path=str(stored), mime=mime, size=len(data),
+        title=safe_name,
+        kind="file",
+        content=content,
+        filename=safe_name,
+        stored_path=str(stored),
+        mime=mime,
+        size=len(data),
     )

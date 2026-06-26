@@ -111,6 +111,7 @@ class StatusResponse(BaseModel):
     auto_sync: bool = False
     sync_interval: int = 0
     last_ingest: str | None = None
+    resume_cmd: str = "copilot --resume {id}"
     # Only present on the POST /api/reindex response.
     started: bool | None = None
 

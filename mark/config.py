@@ -5,11 +5,15 @@ All settings can be overridden via environment variables prefixed with ``MARK_``
 
 from __future__ import annotations
 
+import functools
+import logging
 import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+_log = logging.getLogger("mark")
 
 # --- Project locations -------------------------------------------------------
 
@@ -95,17 +99,38 @@ MODEL_PRICING: dict[str, tuple[float, float, float]] = {
 }
 
 
-def _load_pricing() -> dict[str, tuple[float, float, float]]:
-    path = os.environ.get("MARK_PRICING_FILE")
-    if not path:
-        return MODEL_PRICING
-    try:
-        import json
+@functools.lru_cache(maxsize=8)
+def _load_pricing_file(
+    path: str, _mtime: float
+) -> dict[str, tuple[float, float, float]]:
+    """Parse a custom pricing JSON, cached by (path, mtime).
 
-        raw = json.loads(Path(path).expanduser().read_text())
+    Falls back to the built-in table (with a warning) if the file is unreadable
+    or malformed, so a typo never silently yields wrong-but-plausible costs.
+    """
+    import json
+
+    try:
+        raw = json.loads(Path(path).read_text())
         return {k: tuple(v) for k, v in raw.items()}  # type: ignore[misc]
-    except Exception:
+    except (OSError, ValueError) as exc:
+        _log.warning(
+            "MARK_PRICING_FILE %s ignored (%s); using built-in prices", path, exc
+        )
         return MODEL_PRICING
+
+
+def _load_pricing() -> dict[str, tuple[float, float, float]]:
+    raw_path = os.environ.get("MARK_PRICING_FILE")
+    if not raw_path:
+        return MODEL_PRICING
+    path = Path(raw_path).expanduser()
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        _log.warning("MARK_PRICING_FILE %s not found; using built-in prices", path)
+        return MODEL_PRICING
+    return _load_pricing_file(str(path), mtime)
 
 
 def price_for(model: str | None) -> tuple[float, float, float]:
@@ -299,21 +324,32 @@ def _sources_file_path() -> Path:
     ).expanduser()
 
 
-def load_sources_file() -> dict[str, Any]:
-    """Parse the optional ``[sources.<key>]`` TOML overrides; {} when absent/bad."""
-    path = _sources_file_path()
-    if not path.exists():
-        return {}
+@functools.lru_cache(maxsize=8)
+def _load_sources_file(path: str, _mtime: float) -> dict[str, Any]:
     try:
         import tomllib
     except ModuleNotFoundError:  # Python < 3.11
         return {}
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     srcs = data.get("sources")
     return srcs if isinstance(srcs, dict) else {}
+
+
+def load_sources_file() -> dict[str, Any]:
+    """Parse the optional ``[sources.<key>]`` TOML overrides; {} when absent/bad.
+
+    Cached by (path, mtime) so the background sync loop never re-reads and
+    re-parses the file on every fingerprint tick.
+    """
+    path = _sources_file_path()
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return {}
+    return _load_sources_file(str(path), mtime)
 
 
 def _env_flag(val: str | None, default: bool) -> bool:

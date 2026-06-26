@@ -34,7 +34,7 @@ def api_search(
         date_from=date_from,
         date_to=date_to,
         sort=sort,
-        limit=min(limit, 500),
+        limit=max(1, min(limit, 500)),
     )
     return {"query": q, "mode": mode, "count": len(results), "results": results}
 

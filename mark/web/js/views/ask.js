@@ -4,7 +4,7 @@
 // global Ask view and collection-scoped Ask.
 
 import { api } from "../api.js";
-import { showOnly, state } from "../state.js";
+import { showOnly, setLayoutWide, state } from "../state.js";
 import { $, $$, esc, srcMeta, toast, withTransition } from "../utils.js";
 import { icon } from "../icons.js";
 import { openSession, teardownReading } from "./detail.js";
@@ -23,7 +23,7 @@ export async function showAsk(opts = {}) {
   state.view = "ask";
   state.currentId = null;
   teardownReading();
-  const apply = () => showOnly("#askView");
+  const apply = () => { setLayoutWide(false); showOnly("#askView"); };
   if (leaving) withTransition(apply);
   else apply();
   if (!opts.fromHash) location.hash = "#/ask";

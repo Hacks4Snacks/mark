@@ -108,13 +108,15 @@ All optional, via environment variables:
 | `MARK_HOST` | `127.0.0.1` | Bind address (localhost only) |
 | `MARK_DATA_DIR` | `./data` | Where the SQLite DB and uploads live |
 | `MARK_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | fastembed model |
-| `MARK_VSCODE_STORAGE` | auto-detected | Override VS Code `workspaceStorage` path(s) |
-| `MARK_VSCODE_GLOBAL_STORAGE` | auto-detected | Override `globalStorage` path(s) (Cline, Zoo Code, ...) |
-| `MARK_COPILOT_STORE` | `~/.copilot/session-store.db` | Copilot CLI / agent session store |
-| `MARK_SESSION_STATE` | `~/.copilot/session-state` | Per-session event logs (tokens, model, duration) |
 | `MARK_MAX_EMBED_CHUNKS_PER_SESSION` | `40` | Cap on *embedded* chunks per session (keyword/FTS indexes all chunks; bounds the in-memory semantic vector set) |
 | `MARK_PRICING_FILE` | built-in table | JSON of `{model: [in, out, cached]}` USD per 1M tokens |
 | `MARK_RESUME_CMD` | `copilot --resume {id}` | Resume command shown in the UI |
+
+**Sources** — which chat stores to scan — are configured separately. By default
+mark auto-discovers them; to override paths, enable/disable a source, or add
+label overrides, use `~/.mark/sources.toml` (see
+[`sources.example.toml`](sources.example.toml)) or the
+`MARK_SOURCE_<NAME>_ENABLED` / `MARK_SOURCE_<NAME>_ROOTS` environment variables.
 
 ## Usage, duration & cost
 

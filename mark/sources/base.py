@@ -102,8 +102,6 @@ def _uri_to_path(obj: Any) -> str | None:
         for key in ("fsPath", "path", "external"):
             val = obj.get(key)
             if isinstance(val, str) and val:
-                if obj.get("scheme") in (None, "file") or val.startswith("/"):
-                    return unquote(val)
                 return unquote(val)
         if "uri" in obj:
             return _uri_to_path(obj["uri"])

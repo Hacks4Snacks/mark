@@ -121,6 +121,7 @@ def _turns(msgs: list[tuple[str, str, Any]]) -> list[dict[str, Any]]:
                 "turn_index": len(turns),
                 "user_message": user,
                 "assistant_response": asst,
+                "thinking": "",
                 "tools": [],
                 "timestamp": _iso(t["ts"]),
                 "files": [],

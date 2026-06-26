@@ -3,7 +3,7 @@
 // Snippet & command library: browse code blocks extracted from every session.
 
 import { api } from "../api.js";
-import { showOnly, state } from "../state.js";
+import { showOnly, setLayoutWide, state } from "../state.js";
 import { $, $$, esc, srcMeta, toast, withTransition } from "../utils.js";
 import { icon } from "../icons.js";
 import { openSession, teardownReading } from "./detail.js";
@@ -16,7 +16,7 @@ export async function showLibrary(opts = {}) {
   state.view = "library";
   state.currentId = null;
   teardownReading();
-  const apply = () => showOnly("#libraryView");
+  const apply = () => { setLayoutWide(false); showOnly("#libraryView"); };
   if (leaving) withTransition(apply);
   else apply();
   if (!opts.fromHash) location.hash = "#/library";

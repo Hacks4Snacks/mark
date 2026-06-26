@@ -1,3 +1,11 @@
+"""Collections service: rule evaluation + effective membership math.
+
+Persistence lives in :mod:`mark.repositories.collections`; this module composes
+those CRUD/query functions with the search layer to resolve a collection's
+effective members — ``(rule ∪ manual includes) − manual excludes`` — and to
+shape the cards/overview the API returns.
+"""
+
 from __future__ import annotations
 
 import html
@@ -6,9 +14,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from . import db, search
-
-_UPDATABLE = {"name", "description", "icon", "color", "rule", "pinned"}
+from . import search
+from .repositories import collections as repo
 
 
 def _now() -> str:
@@ -38,15 +45,15 @@ def _rule_is_empty(rule: dict[str, Any] | None) -> bool:
 
 def _rule_session_ids(rule: dict[str, Any]) -> list[str]:
     q = (rule.get("q") or "").strip()
-    common: dict[str, Any] = dict(
-        repo=rule.get("repo") or None,
-        source=rule.get("source") or None,
-        tags=rule.get("tags") or None,
-        date_from=rule.get("date_from") or None,
-        date_to=rule.get("date_to") or None,
-        sort=rule.get("sort") or "recent",
-        limit=int(rule.get("limit") or 500),
-    )
+    common: dict[str, Any] = {
+        "repo": rule.get("repo") or None,
+        "source": rule.get("source") or None,
+        "tags": rule.get("tags") or None,
+        "date_from": rule.get("date_from") or None,
+        "date_to": rule.get("date_to") or None,
+        "sort": rule.get("sort") or "recent",
+        "limit": int(rule.get("limit") or 500),
+    }
     if q:
         results = search.search(q, mode=rule.get("mode") or "hybrid", **common)
     else:
@@ -55,38 +62,33 @@ def _rule_session_ids(rule: dict[str, Any]) -> list[str]:
 
 
 def _manual_members(cid: str) -> tuple[set[str], set[str]]:
-    with db.cursor() as cur:
-        rows = cur.execute(
-            "SELECT session_id, state FROM collection_members WHERE collection_id = ?",
-            (cid,),
-        ).fetchall()
-    includes = {r["session_id"] for r in rows if r["state"] == "include"}
-    excludes = {r["session_id"] for r in rows if r["state"] == "exclude"}
+    includes: set[str] = set()
+    excludes: set[str] = set()
+    for sid, state in repo.member_states(cid):
+        (excludes if state == "exclude" else includes).add(sid)
     return includes, excludes
 
 
-def resolve_member_ids(coll: dict[str, Any]) -> set[str]:
-    """Effective member ids: (rule ∪ includes) − excludes."""
-    rule = _parse_rule(coll.get("rule"))
-    ids: set[str] = (
-        set(_rule_session_ids(rule)) if rule and not _rule_is_empty(rule) else set()
-    )
-    includes, excludes = _manual_members(coll["id"])
+def _resolve_ids(
+    rule: dict[str, Any] | None, includes: set[str], excludes: set[str]
+) -> set[str]:
+    """Effective ids from a parsed rule plus manual include/exclude sets."""
+    ids = set(_rule_session_ids(rule)) if rule and not _rule_is_empty(rule) else set()
     ids |= includes
     ids -= excludes
     return ids
 
 
+def resolve_member_ids(coll: dict[str, Any]) -> set[str]:
+    """Effective member ids: (rule ∪ includes) − excludes."""
+    rule = _parse_rule(coll.get("rule"))
+    includes, excludes = _manual_members(coll["id"])
+    return _resolve_ids(rule, includes, excludes)
+
+
 def list_collections() -> list[dict[str, Any]]:
-    with db.cursor() as cur:
-        rows = [
-            dict(r)
-            for r in cur.execute(
-                "SELECT * FROM collections ORDER BY pinned DESC, updated_at DESC"
-            ).fetchall()
-        ]
     out: list[dict[str, Any]] = []
-    for r in rows:
+    for r in repo.list_rows():
         r["rule"] = _parse_rule(r.get("rule"))
         r["pinned"] = bool(r.get("pinned"))
         r["count"] = len(resolve_member_ids(r))
@@ -95,11 +97,9 @@ def list_collections() -> list[dict[str, Any]]:
 
 
 def get_collection(cid: str) -> dict[str, Any] | None:
-    with db.cursor() as cur:
-        row = cur.execute("SELECT * FROM collections WHERE id = ?", (cid,)).fetchone()
-    if not row:
+    c = repo.get_row(cid)
+    if not c:
         return None
-    c = dict(row)
     c["rule"] = _parse_rule(c.get("rule"))
     c["pinned"] = bool(c.get("pinned"))
     return c
@@ -114,66 +114,37 @@ def create(
     pinned: bool = False,
 ) -> str:
     cid = uuid4().hex
-    now = _now()
-    rule_json = json.dumps(rule) if rule else None
-    with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO collections(id, name, description, icon, color, rule, pinned, "
-            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            (
-                cid,
-                (name or "").strip() or "Untitled collection",
-                description,
-                icon,
-                color,
-                rule_json,
-                1 if pinned else 0,
-                now,
-                now,
-            ),
-        )
+    repo.insert(
+        cid,
+        (name or "").strip() or "Untitled collection",
+        description,
+        icon,
+        color,
+        json.dumps(rule) if rule else None,
+        1 if pinned else 0,
+        _now(),
+    )
     return cid
 
 
 def update(cid: str, fields: dict[str, Any]) -> bool:
-    sets: list[str] = []
-    params: list[Any] = []
+    prepared: dict[str, Any] = {}
     for key, value in fields.items():
-        if key not in _UPDATABLE:
-            continue
         if key == "rule":
             value = json.dumps(value) if value else None
         elif key == "pinned":
             value = 1 if value else 0
-        sets.append(f"{key} = ?")
-        params.append(value)
-    if not sets:
-        return get_collection(cid) is not None
-    sets.append("updated_at = ?")
-    params.append(_now())
-    params.append(cid)
-    with db.cursor() as cur:
-        cur.execute(f"UPDATE collections SET {', '.join(sets)} WHERE id = ?", params)
-        return cur.rowcount > 0
+        prepared[key] = value
+    return repo.update(cid, prepared, _now())
 
 
 def delete(cid: str) -> bool:
-    with db.cursor() as cur:
-        cur.execute("DELETE FROM collections WHERE id = ?", (cid,))
-        return cur.rowcount > 0
+    return repo.delete(cid)
 
 
 def set_member(cid: str, session_id: str, state: str = "include") -> None:
     state = "exclude" if state == "exclude" else "include"
-    now = _now()
-    with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO collection_members(collection_id, session_id, state, added_at) "
-            "VALUES (?,?,?,?) ON CONFLICT(collection_id, session_id) "
-            "DO UPDATE SET state = excluded.state, added_at = excluded.added_at",
-            (cid, session_id, state, now),
-        )
-        cur.execute("UPDATE collections SET updated_at = ? WHERE id = ?", (now, cid))
+    repo.set_member(cid, session_id, state, _now())
 
 
 def remove_member(cid: str, session_id: str) -> None:
@@ -187,28 +158,27 @@ def remove_member(cid: str, session_id: str) -> None:
     if has_rule:
         set_member(cid, session_id, "exclude")
         return
-    now = _now()
-    with db.cursor() as cur:
-        cur.execute(
-            "DELETE FROM collection_members WHERE collection_id = ? AND session_id = ?",
-            (cid, session_id),
-        )
-        cur.execute("UPDATE collections SET updated_at = ? WHERE id = ?", (now, cid))
+    repo.delete_member(cid, session_id, _now())
 
 
 def collections_for_session(session_id: str) -> list[dict[str, Any]]:
-    """Which collections currently *contain* this session (rule or manual)."""
+    """Which collections currently *contain* this session (rule or manual).
+
+    Resolves each collection's rule + manual sets exactly once per collection.
+    """
     out: list[dict[str, Any]] = []
-    for c in list_collections():
-        member = session_id in resolve_member_ids(c)
-        includes, excludes = _manual_members(c["id"])
+    for row in repo.list_rows():
+        cid = row["id"]
+        rule = _parse_rule(row.get("rule"))
+        includes, excludes = _manual_members(cid)
+        member_ids = _resolve_ids(rule, includes, excludes)
         out.append(
             {
-                "id": c["id"],
-                "name": c["name"],
-                "icon": c.get("icon"),
-                "color": c.get("color"),
-                "member": member,
+                "id": cid,
+                "name": row["name"],
+                "icon": row.get("icon"),
+                "color": row.get("color"),
+                "member": session_id in member_ids,
                 "manual_include": session_id in includes,
                 "manual_exclude": session_id in excludes,
             }
@@ -217,21 +187,8 @@ def collections_for_session(session_id: str) -> list[dict[str, Any]]:
 
 
 def _load_member_cards(ids: set[str]) -> list[dict[str, Any]]:
-    id_list = list(ids)
-    if not id_list:
-        return []
-    placeholders = ",".join("?" * len(id_list))
-    with db.cursor() as cur:
-        rows = [
-            dict(r)
-            for r in cur.execute(
-                f"SELECT * FROM sessions WHERE id IN ({placeholders}) "
-                "ORDER BY COALESCE(updated_at, created_at) IS NULL, "
-                "COALESCE(updated_at, created_at) DESC",
-                id_list,
-            ).fetchall()
-        ]
-    search._attach_tags(rows)
+    rows = repo.session_rows(list(ids))
+    search.attach_tags(rows)
     for r in rows:
         r["score"] = None
         r["snippet"] = html.escape((r.get("summary") or "")[:240])
@@ -271,36 +228,8 @@ def overview(cid: str) -> dict[str, Any]:
     ids = list(resolve_member_ids(coll))
     if not ids:
         return _empty_overview()
-    ph = ",".join("?" * len(ids))
-    with db.cursor() as cur:
-        t = cur.execute(
-            "SELECT COUNT(*) sessions, COALESCE(SUM(est_cost_usd),0) cost, "
-            "COALESCE(SUM(premium_requests),0) premium, COALESCE(SUM(input_tokens),0) input_tokens, "
-            "COALESCE(SUM(output_tokens),0) output_tokens, COALESCE(SUM(duration_seconds),0) duration, "
-            "MIN(COALESCE(created_at, updated_at)) date_min, MAX(COALESCE(updated_at, created_at)) date_max "
-            f"FROM sessions WHERE id IN ({ph})",
-            ids,
-        ).fetchone()
-        files = cur.execute(
-            f"SELECT COUNT(DISTINCT file_path) n FROM session_files WHERE session_id IN ({ph})",
-            ids,
-        ).fetchone()["n"]
-        by_source = cur.execute(
-            f"SELECT source, COUNT(*) sessions FROM sessions WHERE id IN ({ph}) "
-            "GROUP BY source ORDER BY sessions DESC",
-            ids,
-        ).fetchall()
-        topics = cur.execute(
-            f"SELECT tag, COUNT(*) n FROM tags WHERE session_id IN ({ph}) "
-            "GROUP BY tag ORDER BY n DESC, tag LIMIT 12",
-            ids,
-        ).fetchall()
-        by_day = cur.execute(
-            "SELECT substr(COALESCE(updated_at, created_at),1,10) day, COUNT(*) sessions, "
-            f"COALESCE(SUM(est_cost_usd),0) cost FROM sessions WHERE id IN ({ph}) "
-            "AND COALESCE(updated_at, created_at) IS NOT NULL GROUP BY day ORDER BY day",
-            ids,
-        ).fetchall()
+    agg = repo.member_aggregates(ids)
+    t = agg["totals"]
     return {
         "totals": {
             "sessions": t["sessions"],
@@ -309,16 +238,16 @@ def overview(cid: str) -> dict[str, Any]:
             "input_tokens": int(t["input_tokens"]),
             "output_tokens": int(t["output_tokens"]),
             "duration": t["duration"] or 0,
-            "files": int(files or 0),
+            "files": int(agg["files"] or 0),
         },
         "date_min": t["date_min"],
         "date_max": t["date_max"],
         "by_source": [
-            {"source": r["source"], "sessions": r["sessions"]} for r in by_source
+            {"source": r["source"], "sessions": r["sessions"]} for r in agg["by_source"]
         ],
-        "topics": [{"tag": r["tag"], "count": r["n"]} for r in topics],
+        "topics": [{"tag": r["tag"], "count": r["n"]} for r in agg["topics"]],
         "by_day": [
             {"day": r["day"], "sessions": r["sessions"], "cost": round(r["cost"], 4)}
-            for r in by_day
+            for r in agg["by_day"]
         ],
     }
