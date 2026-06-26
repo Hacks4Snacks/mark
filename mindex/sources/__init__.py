@@ -12,12 +12,14 @@ from .base import ImportSource, ProgressCb, WatchedSource
 from .chatgpt import ChatGptSource
 from .cline import ClineSource
 from .copilot_cli import CopilotCliSource
+from .cursor import CursorSource
 from .vscode import VSCodeSource
 
 WATCHED_SOURCES: list[WatchedSource] = [
     VSCodeSource(),
     CopilotCliSource(),
     ClineSource(),
+    CursorSource(),
 ]
 
 #: On-demand importers for user-supplied export files (cloud assistants).
@@ -34,5 +36,6 @@ __all__ = [
     "VSCodeSource",
     "CopilotCliSource",
     "ClineSource",
+    "CursorSource",
     "ChatGptSource",
 ]

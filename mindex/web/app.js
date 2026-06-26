@@ -77,6 +77,7 @@ const SRC = {
   zoocode: { icon: "\uD83E\uDD93", label: "Zoo Code" },
   roo: { icon: "\uD83E\uDD98", label: "Roo Code" },
   kilocode: { icon: "\uD83D\uDD36", label: "Kilo Code" },
+  cursor: { icon: "\uD83D\uDD32", label: "Cursor" },
   chatgpt: { icon: "\u2728", label: "ChatGPT" },
   agent: { icon: "\uD83E\uDDE0", label: "Agent" },
   automation: { icon: "\u23F1\uFE0F", label: "Automation" },

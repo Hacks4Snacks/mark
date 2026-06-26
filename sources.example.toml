@@ -32,7 +32,16 @@ enabled = true
 # Add label overrides for extensions mindex doesn't know yet (ext-id = label):
 # options.extensions = { "some.new-cline-fork" = "myagent" }
 
+# --- Cursor (Composer / chat history) ----------------------------------------
+[sources.cursor]
+enabled = true
+# roots are the globalStorage state.vscdb files holding composer history;
+# options.workspace_roots are the workspaceStorage dirs used for repo mapping:
+# roots = ["~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"]
+# options = { workspace_roots = ["~/Library/Application Support/Cursor/User/workspaceStorage"] }
+
 # --- Environment overrides (highest precedence) ------------------------------
 # MINDEX_SOURCE_VSCODE_ENABLED=0           disable a source for one run
 # MINDEX_SOURCE_CLINE_ROOTS=/a/path:/b     os.pathsep-separated roots
+# MINDEX_SOURCE_CURSOR_ENABLED=0           skip Cursor for one run
 # MINDEX_SOURCES_FILE=/path/to/sources.toml   use a non-default config location

@@ -190,22 +190,22 @@ TEXT_EXTENSIONS = {
 }
 
 
+def _editor_config_base() -> Path:
+    """Per-platform base directory holding VS Code-family editor profiles."""
+    home = Path.home()
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support"
+    if sys.platform.startswith("win"):
+        return Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
+    # linux and friends
+    return Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
+
+
 def _candidate_storage_roots(subdir: str = "workspaceStorage") -> list[Path]:
     """Known VS Code (stable/Insiders) ``User/<subdir>`` locations per platform."""
-    home = Path.home()
-    roots: list[Path] = []
+    base = _editor_config_base()
     variants = ["Code", "Code - Insiders", "VSCodium"]
-
-    if sys.platform == "darwin":
-        base = home / "Library" / "Application Support"
-    elif sys.platform.startswith("win"):
-        base = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
-    else:  # linux and friends
-        base = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
-
-    for v in variants:
-        roots.append(base / v / "User" / subdir)
-    return roots
+    return [base / v / "User" / subdir for v in variants]
 
 
 def vscode_storage_roots() -> list[Path]:
@@ -226,6 +226,37 @@ def vscode_global_storage_roots() -> list[Path]:
     if override:
         return [Path(p).expanduser() for p in override.split(os.pathsep) if p.strip()]
     return [r for r in _candidate_storage_roots("globalStorage") if r.exists()]
+
+
+def _cursor_user_dirs() -> list[Path]:
+    """Cursor (stable + Nightly) ``User`` directories per platform."""
+    base = _editor_config_base()
+    return [base / v / "User" for v in ("Cursor", "Cursor Nightly")]
+
+
+def cursor_global_db_paths() -> list[Path]:
+    """Cursor ``globalStorage/state.vscdb`` files holding composer chat history.
+
+    Honors ``MINDEX_CURSOR_STORAGE`` (os.pathsep-separated db paths) when set,
+    otherwise returns whichever known per-platform locations actually exist.
+    """
+    override = os.environ.get("MINDEX_CURSOR_STORAGE")
+    if override:
+        return [Path(p).expanduser() for p in override.split(os.pathsep) if p.strip()]
+    dbs = [u / "globalStorage" / "state.vscdb" for u in _cursor_user_dirs()]
+    return [p for p in dbs if p.exists()]
+
+
+def cursor_workspace_storage_roots() -> list[Path]:
+    """Cursor ``workspaceStorage`` directories (used to map a composer to its repo)."""
+    override = os.environ.get("MINDEX_CURSOR_WORKSPACE_STORAGE")
+    if override:
+        return [Path(p).expanduser() for p in override.split(os.pathsep) if p.strip()]
+    return [
+        u / "workspaceStorage"
+        for u in _cursor_user_dirs()
+        if (u / "workspaceStorage").exists()
+    ]
 
 
 # Friendly source labels for known Cline-family coding-agent extensions.
