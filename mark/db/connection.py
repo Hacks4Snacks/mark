@@ -1,10 +1,3 @@
-"""Low-level SQLite connection handling and ``meta`` key/value helpers.
-
-A fresh connection is opened per logical unit of work; the database is a
-single local file, so this keeps threading simple (WAL + busy-timeout) without
-a connection pool.
-"""
-
 from __future__ import annotations
 
 import sqlite3

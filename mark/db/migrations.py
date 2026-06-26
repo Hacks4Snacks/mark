@@ -1,14 +1,3 @@
-"""Versioned, forward-only schema migrations keyed off ``PRAGMA user_version``.
-
-The canonical schema in :mod:`mark.db.schema` is created with ``IF NOT
-EXISTS`` on every startup, so migrations here only handle *evolving* an existing
-database (adding columns, backfilling, reshaping). Each migration is a callable
-that takes a connection and must be idempotent; the list index + 1 is its
-version number. ``run_migrations`` applies every migration whose version is
-greater than the database's current ``user_version`` and then records the new
-version, so a fresh database fast-forwards to the latest version with no work.
-"""
-
 from __future__ import annotations
 
 import sqlite3

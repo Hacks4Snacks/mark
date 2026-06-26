@@ -1,5 +1,3 @@
-"""Single-session endpoints: detail, related, export, and manual topics."""
-
 from __future__ import annotations
 
 import json

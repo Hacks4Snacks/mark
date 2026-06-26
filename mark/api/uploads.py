@@ -1,5 +1,3 @@
-"""Manual content: notes, file uploads / export imports, and ad-hoc rendering."""
-
 from __future__ import annotations
 
 from typing import Any

@@ -1,5 +1,3 @@
-"""Collection CRUD, membership edits, and collection-scoped Ask."""
-
 from __future__ import annotations
 
 import json

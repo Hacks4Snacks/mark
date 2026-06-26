@@ -1,13 +1,3 @@
-"""Canonical SQLite schema for mark.
-
-A single local database holds Copilot sessions, their turns, uploaded
-documents, extracted metadata, full-text (FTS5) and vector embeddings.
-
-Searchable text lives in ``chunks`` — one row per turn or document segment —
-which is mirrored into the ``search_index`` FTS5 table and the ``embeddings``
-table. This keeps keyword and semantic search over a single unit.
-"""
-
 from __future__ import annotations
 
 SCHEMA = """

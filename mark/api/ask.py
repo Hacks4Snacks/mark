@@ -1,5 +1,3 @@
-"""Optional local-LLM "Ask your history" endpoints."""
-
 from __future__ import annotations
 
 import json

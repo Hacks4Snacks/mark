@@ -1,10 +1,3 @@
-"""HTTP API surface, organised as one ``APIRouter`` per domain.
-
-:data:`api_router` aggregates every domain router; the FastAPI app in
-:mod:`mark.app` includes it before mounting the static UI so ``/api/*``
-always wins over the ``/`` static mount.
-"""
-
 from __future__ import annotations
 
 from fastapi import APIRouter
