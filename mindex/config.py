@@ -87,6 +87,11 @@ MODEL_PRICING: dict[str, tuple[float, float, float]] = {
     "claude-opus": (15.0, 75.0, 1.50),
     "claude-sonnet": (3.0, 15.0, 0.30),
     "claude-haiku": (0.80, 4.0, 0.08),
+    # Bare aliases so versioned names (e.g. Cursor's "claude-4.5-opus-high-
+    # thinking", "claude-4-sonnet") still price to the right tier.
+    "opus": (15.0, 75.0, 1.50),
+    "sonnet": (3.0, 15.0, 0.30),
+    "haiku": (0.80, 4.0, 0.08),
     "gpt-5-mini": (0.25, 2.0, 0.025),
     "gpt-5": (1.25, 10.0, 0.125),
     "gpt-4o-mini": (0.15, 0.60, 0.075),

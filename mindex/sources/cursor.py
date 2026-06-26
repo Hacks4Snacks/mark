@@ -18,9 +18,13 @@ which is how a session gets its repository attribution.
 
 The global store can be many gigabytes, so this adapter never copies it: it reads
 read-only (honoring the WAL) and uses primary-key lookups. Unchanged conversations
-are skipped from a cheap metadata hash before any message bubbles are read. Token
-counts in the store are inflated by agentic context re-sends, so metrics are
-estimated from message text (``tokens_estimated``) rather than trusted verbatim.
+are skipped from a cheap metadata hash before any message bubbles are read. The
+model is read from ``composerData.modelConfig.modelName``; per-bubble ``tokenCount``
+supplies real usage. Because agentic turns re-send the whole conversation, the
+cumulative ``inputTokens`` are treated as prompt-cache reads (only the single
+largest context is billed as a fresh write) while ``outputTokens`` are billed
+verbatim; ``isRefunded`` bubbles are excluded. Conversations with no recorded
+tokens fall back to a text-length estimate (``tokens_estimated``).
 """
 
 from __future__ import annotations
@@ -38,10 +42,12 @@ from .base import (
     _URL_RE,
     ProgressCb,
     WatchedSource,
+    _compute_cost,
     _derive_title,
     _epoch_ms_to_iso,
     _estimate_metrics,
     _friendly_repo,
+    _turns_duration,
     _uri_to_path,
 )
 
@@ -237,6 +243,73 @@ def _composer_hash(data: dict[str, Any], headers: list[dict[str, Any]]) -> str:
     return hashlib.sha256(sig.encode("utf-8")).hexdigest()
 
 
+def _model_name(data: dict[str, Any]) -> str | None:
+    """Real model from ``modelConfig.modelName``; ``default``/empty → None."""
+    mc = data.get("modelConfig")
+    name = (mc.get("modelName") if isinstance(mc, dict) else None) or ""
+    name = name.strip()
+    return None if not name or name.lower() == "default" else name
+
+
+def _token_totals(bubbles: list[dict[str, Any]]) -> tuple[int, int, int, int]:
+    """Sum (input, output, peak_input, billable_requests) over usable bubbles.
+
+    ``inputTokens`` is the whole re-sent context (cumulative across agentic
+    turns); ``outputTokens`` is the fresh generation. ``isRefunded`` bubbles were
+    credited back, so they are excluded.
+    """
+    sum_in = sum_out = peak = requests = 0
+    for b in bubbles:
+        if not isinstance(b, dict) or b.get("isRefunded"):
+            continue
+        tc = b.get("tokenCount")
+        if not isinstance(tc, dict):
+            continue
+        ti = int(tc.get("inputTokens") or 0)
+        to = int(tc.get("outputTokens") or 0)
+        sum_in += ti
+        sum_out += to
+        peak = max(peak, ti)
+        if to > 0:
+            requests += 1
+    return sum_in, sum_out, peak, requests
+
+
+def _cursor_metrics(
+    data: dict[str, Any],
+    bubbles: list[dict[str, Any]],
+    turns: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Real model + cache-aware token cost, or a text estimate when absent."""
+    model = _model_name(data)
+    sum_in, sum_out, peak, requests = _token_totals(bubbles)
+    if sum_in == 0 and sum_out == 0:
+        metrics = _estimate_metrics(turns)
+        metrics["model"] = model
+        return metrics
+    # Agentic turns re-send the conversation each request, so the cumulative
+    # inputTokens are almost entirely prompt-cache reads; only the single largest
+    # context is billed as a fresh write. Output tokens are billed verbatim.
+    cost = _compute_cost(
+        model,
+        sum_in,
+        sum_out,
+        cache_read=max(0, sum_in - peak),
+        cache_write=peak,
+        input_includes_cache=True,
+    )
+    return {
+        "duration_seconds": _turns_duration(turns),
+        "model": model,
+        "input_tokens": sum_in,
+        "output_tokens": sum_out,
+        "premium_requests": requests or None,
+        "aiu": None,
+        "est_cost_usd": cost,
+        "tokens_estimated": 0,
+    }
+
+
 def _load_bubbles(
     con: sqlite3.Connection, composer_id: str, data: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -265,6 +338,7 @@ def _build_session(
     data: dict[str, Any],
     composer_id: str,
     turns: list[dict[str, Any]],
+    bubbles: list[dict[str, Any]],
     content_hash: str,
     repo: dict[str, str | None],
     db_path: Path,
@@ -289,7 +363,7 @@ def _build_session(
         "source_path": f"{db_path}::{composer_id}",
         "content_hash": content_hash,
         "turns": turns,
-        "metrics": _estimate_metrics(turns),
+        "metrics": _cursor_metrics(data, bubbles, turns),
     }
 
 
@@ -380,6 +454,7 @@ class CursorSource(WatchedSource):
                         data,
                         composer_id,
                         turns,
+                        bubbles,
                         content_hash,
                         wsmap.get(composer_id, {}),
                         Path(store),
