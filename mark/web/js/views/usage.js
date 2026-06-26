@@ -6,7 +6,7 @@
 
 import { api } from "../api.js";
 import { showOnly, setLayoutDash, state } from "../state.js";
-import { $, $$, esc, fmtCost, fmtTokens, fmtDuration, withTransition } from "../utils.js";
+import { $, $$, esc, fmtCost, fmtTokens, fmtDuration, withTransition, srcMeta } from "../utils.js";
 import { icon } from "../icons.js";
 import { areaChart, sparkline, spendBarChart, PLOT } from "../charts.js";
 import { teardownReading } from "./detail.js";
@@ -14,12 +14,12 @@ import { doSearch } from "./list.js";
 import { syncFilterUI } from "../sidebar.js";
 
 const HINTS = {
-  cost: "Estimated from public model list prices. Sources that don't report token usage are approximated from text length, and local models count as free — treat this as a ballpark, not a bill.",
-  sessions: "Conversations included in these totals (automation runs are excluded unless you toggle them on).",
-  premium: "Premium (paid-model) requests counted against a GitHub Copilot plan's monthly allowance. Sources that don't report this are omitted.",
-  aiu: "AI Units — GitHub Copilot's metering unit for premium models: each request counts as the model's multiplier (e.g. 1× or 3×) in AIU.",
-  tokens: "Input and output tokens summed across sessions that report usage. Estimated counts are included where exact numbers aren't available.",
-  time: "Total wall-clock time spanned by your sessions, from first to last activity in each conversation.",
+  cost: "Estimated from public model list prices and summed across every source. Sources that don't report token usage are approximated from text length, and local models count as free — treat this as a ballpark, not a bill.",
+  sessions: "Conversations included in these totals, counted across all sources.",
+  premium: "Premium (paid-model) requests counted against a plan's monthly allowance. Only sources that meter them contribute — see the badge for which; the rest report none.",
+  aiu: "AI Units — GitHub Copilot's metering unit for premium models (each request counts as its multiplier, e.g. 1×/3×). Only Copilot reports AIU, so this total reflects Copilot usage alone.",
+  tokens: "Input and output tokens summed across all sources that report usage; estimated where exact counts aren't available.",
+  time: "Total session wall-clock time. Some sources don't record duration, so those sessions aren't counted here — see the badge.",
 };
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -81,6 +81,13 @@ function shortCost(v) {
   if (v >= 1000) return "$" + (v / 1000).toFixed(1).replace(/\.0$/, "") + "k";
   if (v >= 1) return "$" + Math.round(v);
   return "$" + v.toFixed(1).replace(/\.0$/, "");
+}
+function bigNum(v) {
+  v = v || 0;
+  if (v >= 1e9) return (v / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
+  if (v >= 1e6) return Math.round(v / 1e6) + "M";
+  if (v >= 1e3) return Math.round(v / 1e3) + "k";
+  return String(Math.round(v));
 }
 const dayName = (t) => `${MON[new Date(t).getUTCMonth()]} ${new Date(t).getUTCDate()}`;
 const monthName = (t) => `${MON[new Date(t).getUTCMonth()]} ’${String(new Date(t).getUTCFullYear()).slice(2)}`;
@@ -184,39 +191,66 @@ function infoSpan(hint) {
     : "";
 }
 
+// Badge showing which sources actually contribute a source-specific metric
+// (premium / aiu / duration). Empty when every source reports it, or none do.
+function scopeChip(key) {
+  const all = _d?.by_source || [];
+  if (!all.length) return "";
+  const withIt = all.filter((s) => (s[key] || 0) > 0);
+  if (!withIt.length || withIt.length === all.length) return "";
+  const names = withIt.map((s) => srcMeta(s.source).label);
+  let body;
+  if (withIt.length <= 2) {
+    const ics = withIt.map((s) => srcMeta(s.source).icon).join("");
+    const txt = withIt.length === 1 ? `${names[0]} only` : names.join(" \u00b7 ");
+    body = `${ics}<span class="us-scope-t">${esc(txt)}</span>`;
+  } else {
+    body = `<span class="us-scope-t">${withIt.length} of ${all.length} sources</span>`;
+  }
+  return `<div class="us-scope" title="Reported by ${esc(names.join(", "))}">${body}</div>`;
+}
+
 function tiles(t) {
   const live = [
-    ["dollar", "Total spend", fmtCost(t.cost || 0), "cost", HINTS.cost],
-    ["message", "Sessions", (t.sessions || 0).toLocaleString(), "sessions", HINTS.sessions],
-    ["star", "Premium requests", (t.premium || 0).toLocaleString(), "premium", HINTS.premium],
-  ].map(([ic, key, val, metric, hint]) => trendTile(ic, key, val, metric, hint));
+    ["dollar", "Total spend", fmtCost(t.cost || 0), "cost", HINTS.cost, ""],
+    ["message", "Sessions", (t.sessions || 0).toLocaleString(), "sessions", HINTS.sessions, ""],
+    ["star", "Premium requests", (t.premium || 0).toLocaleString(), "premium", HINTS.premium, "premium"],
+  ].map(([ic, key, val, metric, hint, scope]) => trendTile(ic, key, val, metric, hint, scope));
   const stat = [
-    ["gauge", "AIU", (t.aiu || 0).toLocaleString(undefined, { maximumFractionDigits: 0 }), HINTS.aiu],
-    ["cpu", "Tokens", `${fmtTokens(t.input_tokens)}<span class="us-sub">in</span> · ${fmtTokens(t.output_tokens)}<span class="us-sub">out</span>`, HINTS.tokens],
-    ["clock", "Time in sessions", fmtDuration(t.duration) || "0s", HINTS.time],
-  ].map(([ic, key, val, hint]) => staticTile(ic, key, val, hint));
+    ["gauge", "AIU", (t.aiu || 0).toLocaleString(undefined, { maximumFractionDigits: 0 }), HINTS.aiu, "aiu"],
+    ["cpu", "Tokens", `${bigNum(t.input_tokens)}<span class="us-sub">in</span> · ${bigNum(t.output_tokens)}<span class="us-sub">out</span>`, HINTS.tokens, ""],
+    ["clock", "Time in sessions", fmtDuration(t.duration) || "0s", HINTS.time, "duration"],
+  ].map(([ic, key, val, hint, scope]) => staticTile(ic, key, val, hint, scope));
   return `<div class="usage-stats">${live.join("")}${stat.join("")}</div>`;
 }
 
-function trendTile(ic, key, val, metric, hint) {
+function fmtDelta(dl) {
+  const up = dl >= 0;
+  const mag = Math.abs(dl);
+  const text = mag >= 1000 ? `${Math.round(1 + mag / 100)}×` : `${mag}%`;
+  return `<span class="us-delta ${up ? "up" : "down"}" title="vs. the previous 30 days">${icon(up ? "trend-up" : "trend-down", { size: 12 })}${text}</span>`;
+}
+
+function trendTile(ic, key, val, metric, hint, scope = "") {
   const vals = _series.map((r) => r[metric]);
   const spark = sparkline(lastN(vals, 45), { color: METRICS[metric].color });
   const dl = periodDelta(vals);
-  const delta = dl == null ? "" :
-    `<span class="us-delta ${dl >= 0 ? "up" : "down"}" title="vs. the previous period">${icon(dl >= 0 ? "trend-up" : "trend-down", { size: 12 })}${Math.abs(dl)}%</span>`;
+  const delta = dl == null ? "" : fmtDelta(dl);
   return `<div class="usage-stat has-spark">
     <div class="us-top"><span class="us-ic">${icon(ic, { size: 14 })}</span>${delta}</div>
     <div class="us-val">${val}</div>
     <div class="us-key">${esc(key)} ${infoSpan(hint)}</div>
+    ${scope ? scopeChip(scope) : ""}
     <div class="us-spark">${spark}</div>
   </div>`;
 }
 
-function staticTile(ic, key, val, hint) {
+function staticTile(ic, key, val, hint, scope = "") {
   return `<div class="usage-stat">
     <div class="us-top"><span class="us-ic">${icon(ic, { size: 14 })}</span></div>
     <div class="us-val">${val}</div>
     <div class="us-key">${esc(key)} ${infoSpan(hint)}</div>
+    ${scope ? scopeChip(scope) : ""}
   </div>`;
 }
 
@@ -255,7 +289,7 @@ function insights(d) {
     out.push(insight("gauge", "Avg / session", fmtCost(t.cost / t.sessions), `${fmtTokens(avgTok)} tokens each`));
   }
   const burn = recentDailyAvg(_series.map((r) => r.cost));
-  if (burn != null) out.push(insight("activity", "Recent daily avg", fmtCost(burn), "spend over the last 30 days"));
+  if (burn != null) out.push(insight("activity", "Recent daily avg", fmtCost(burn), "spend · last 30 days"));
 
   return out.length ? `<div class="usage-insights">${out.join("")}</div>` : "";
 }

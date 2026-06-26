@@ -38,7 +38,10 @@ def usage() -> dict[str, Any]:
         ).fetchall()
         by_source = cur.execute(
             "SELECT source, COUNT(*) sessions, COALESCE(SUM(est_cost_usd),0) cost, "
-            f"COALESCE(SUM(premium_requests),0) premium FROM sessions WHERE {vclause}"
+            "COALESCE(SUM(premium_requests),0) premium, COALESCE(SUM(aiu),0) aiu, "
+            "COALESCE(SUM(input_tokens),0) input_tokens, "
+            "COALESCE(SUM(output_tokens),0) output_tokens, "
+            f"COALESCE(SUM(duration_seconds),0) duration FROM sessions WHERE {vclause}"
             " GROUP BY source ORDER BY cost DESC",
             vparams,
         ).fetchall()
@@ -84,6 +87,10 @@ def usage() -> dict[str, Any]:
                 "sessions": r["sessions"],
                 "cost": round(r["cost"], 2),
                 "premium": int(r["premium"]),
+                "aiu": round(r["aiu"], 2),
+                "input_tokens": int(r["input_tokens"]),
+                "output_tokens": int(r["output_tokens"]),
+                "duration": r["duration"] or 0,
             }
             for r in by_source
         ],
