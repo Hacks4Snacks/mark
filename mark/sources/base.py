@@ -1,7 +1,7 @@
 """Shared foundation for source adapters.
 
 A *source* turns some on-disk store of AI conversations into the canonical
-**session dict** consumed by :func:`mindex.persist.write_session`. This module
+**session dict** consumed by :func:`mark.persist.write_session`. This module
 holds the adapter base class plus the generic helpers (URI/path handling, token
 and cost estimation, timestamp math) that more than one adapter needs.
 
@@ -38,14 +38,14 @@ _URL_RE = re.compile(r"https?://[^\s)>\]]+")
 
 
 class WatchedSource(ABC):
-    """A live, local store that mindex discovers and auto-syncs.
+    """A live, local store that mark discovers and auto-syncs.
 
     Implementations own discovery, parsing and their own cheap change signature.
     They must not write to the database directly other than through
-    :func:`mindex.persist.write_session`, so the persistence/search/UI layers
+    :func:`mark.persist.write_session`, so the persistence/search/UI layers
     stay source-agnostic.
 
-    Discovery is driven by a :class:`mindex.config.SourceConfig` (the effective
+    Discovery is driven by a :class:`mark.config.SourceConfig` (the effective
     enable flag, root paths and options after defaults/file/env are merged), so
     a source never reads its paths from ``config`` directly.
     """
@@ -83,8 +83,8 @@ class ImportSource(ABC):
     """A user-supplied export file imported on demand (e.g. a ChatGPT export).
 
     Unlike :class:`WatchedSource`, there is no live local store to watch — the
-    user hands mindex an export and each conversation becomes a session via
-    :func:`mindex.persist.write_session`. Implementations work on the raw bytes
+    user hands mark an export and each conversation becomes a session via
+    :func:`mark.persist.write_session`. Implementations work on the raw bytes
     so they slot into the existing upload action without a temp file.
     """
 

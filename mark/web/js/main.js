@@ -126,7 +126,7 @@ function setupDialog() {
       }
       dlg.close();
       $("#noteTitle").value = ""; $("#noteText").value = "";
-      toast("Saved to mindex");
+      toast("Saved to Mark");
       await refreshAll();
       if (newId) openSession(newId);
     } catch (e) {
@@ -138,12 +138,12 @@ function setupDialog() {
 // ---------- wire up ----------
 function setup() {
   // theme
-  const saved = localStorage.getItem("mindex-theme");
+  const saved = localStorage.getItem("mark-theme");
   if (saved) document.documentElement.dataset.theme = saved;
   $("#themeBtn").addEventListener("click", () => {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
-    localStorage.setItem("mindex-theme", next);
+    localStorage.setItem("mark-theme", next);
   });
 
   $("#search").addEventListener("input", (e) => { state.q = e.target.value.trim(); run(); });

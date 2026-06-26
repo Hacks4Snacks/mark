@@ -1,17 +1,17 @@
-"""mindex MCP server — expose your AI-chat archive to MCP clients.
+"""Mark MCP server — expose your AI-chat archive to MCP clients.
 
 Lets Copilot CLI, Cline, Claude Desktop, and other MCP-aware agents search and
 retrieve your past coding conversations as tools, so an agent can recall how you
 solved something before. Runs over stdio; everything stays local — no network,
 no API keys.
 
-Run:  ``mindex-mcp``  (after ``pip install '.[mcp]'``)
+Run:  ``mark-mcp``  (after ``pip install '.[mcp]'``)
 
 Register with an MCP client, e.g. Claude Desktop / Copilot CLI config::
 
     {
       "mcpServers": {
-        "mindex": { "command": "mindex-mcp" }
+        "mark": { "command": "mark-mcp" }
       }
     }
 """
@@ -25,7 +25,7 @@ from mcp.server.fastmcp import FastMCP
 
 from . import db, exporting, search
 
-mcp = FastMCP("mindex")
+mcp = FastMCP("mark")
 
 _TAG_RE = re.compile(r"<[^>]+>")
 

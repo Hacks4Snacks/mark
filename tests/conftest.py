@@ -2,7 +2,7 @@
 
 Every test runs against a throwaway SQLite database in a temp dir and uses the
 always-available built-in hashing embedder, so the suite is fast, deterministic,
-and fully offline (no model downloads, no touching the user's real ~/.mindex).
+and fully offline (no model downloads, no touching the user's real ~/.mark).
 """
 
 from __future__ import annotations
@@ -15,10 +15,10 @@ import pytest
 @pytest.fixture(autouse=True)
 def tmp_db(tmp_path, monkeypatch):
     """Point config at a fresh temp DB, force the builtin embedder, init schema."""
-    from mindex import config, db, embeddings, search
+    from mark import config, db, embeddings, search
 
     monkeypatch.setattr(config, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "mindex.db")
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "mark.db")
     monkeypatch.setattr(config, "UPLOADS_DIR", tmp_path / "uploads")
     # Deterministic, offline embeddings.
     monkeypatch.setattr(embeddings, "_embedder", embeddings._HashEmbed())
@@ -36,8 +36,8 @@ def tmp_db(tmp_path, monkeypatch):
 @pytest.fixture
 def client(monkeypatch):
     """A FastAPI TestClient whose lifespan does NOT import real local sources."""
-    from mindex import background
-    from mindex.app import create_app
+    from mark import background
+    from mark.app import create_app
 
     monkeypatch.setattr(background, "start", lambda: None)
     monkeypatch.setattr(background, "stop", lambda: None)
@@ -99,7 +99,7 @@ def persist_session():
     """Persist a canonical session dict into the test database."""
 
     def _persist(session):
-        from mindex import db, persist
+        from mark import db, persist
 
         with db.connect() as conn:
             persist.write_session(conn.cursor(), session, light=True)

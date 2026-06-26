@@ -2,10 +2,12 @@
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
+# Distribution is published as "markive" (bare "mark" is taken on PyPI); the
+# tool, command, import package, and brand are all "Mark".
 [project]
-name = "mindex"
+name = "markive"
 version = "0.1.0"
-description = "A local, private knowledge base for your AI coding sessions (Copilot, Cline, Zoo Code, …) with hybrid semantic search."
+description = "Mark — Multi-session AI Recall Keeper: a local, private, searchable archive of your AI coding chats with hybrid semantic search."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -18,6 +20,8 @@ keywords = [
     "vscode",
     "chat-history",
     "ai",
+    "recall",
+    "memory",
 ]
 classifiers = [
     "Environment :: Web Environment",
@@ -49,24 +53,27 @@ all = ["fastembed>=0.3", "pypdf>=4.0", "mcp>=1.2"]
 dev = ["pytest>=8.0", "httpx>=0.27"]
 
 [project.scripts]
-mindex = "mindex.main:main"
-mindex-mcp = "mindex.mcp_server:main"
+mark = "mark.main:main"
+mark-mcp = "mark.mcp_server:main"
+# Aliases matching the distribution name, in case `mark` clashes on PATH.
+markive = "mark.main:main"
+markive-mcp = "mark.mcp_server:main"
 
 [project.urls]
-Homepage = "https://github.com/graymark/mindex"
-Issues = "https://github.com/graymark/mindex/issues"
+Homepage = "https://github.com/graymark/markive"
+Issues = "https://github.com/graymark/markive/issues"
 
 [tool.setuptools]
 packages = [
-    "mindex",
-    "mindex.api",
-    "mindex.db",
-    "mindex.repositories",
-    "mindex.sources",
+    "mark",
+    "mark.api",
+    "mark.db",
+    "mark.repositories",
+    "mark.sources",
 ]
 
 [tool.setuptools.package-data]
-mindex = ["web/*", "web/js/*", "web/js/views/*"]
+mark = ["web/*", "web/js/*", "web/js/views/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

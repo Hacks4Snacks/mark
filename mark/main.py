@@ -1,7 +1,7 @@
-"""Console entry point: launch the mindex web app with uvicorn.
+"""Console entry point: launch the mark web app with uvicorn.
 
-The FastAPI application itself lives in :mod:`mindex.app`; this module only
-handles process startup so ``mindex.main:main`` and ``python -m mindex`` stay
+The FastAPI application itself lives in :mod:`mark.app`; this module only
+handles process startup so ``mark.main:main`` and ``python -m mark`` stay
 stable launch paths.
 """
 
@@ -17,7 +17,7 @@ def main() -> None:
     import uvicorn
 
     config.ensure_dirs()
-    print(f"mindex → http://{config.HOST}:{config.PORT}")
+    print(f"Mark → http://{config.HOST}:{config.PORT}")
     uvicorn.run(app, host=config.HOST, port=config.PORT)
 
 

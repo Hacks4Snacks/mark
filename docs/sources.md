@@ -2,7 +2,7 @@
 
 Status: **Proposed** · Owner: graymark · Last updated: 2026-06-25
 
-This document proposes restructuring mindex's ingestion around a **source-adapter
+This document proposes restructuring mark's ingestion around a **source-adapter
 registry** with a **declarative, per-source configuration** layer. It is the
 consolidation of a design discussion and supersedes any ad-hoc notes.
 
@@ -10,7 +10,7 @@ consolidation of a design discussion and supersedes any ad-hoc notes.
 
 ## 1. Motivation
 
-mindex began as a Copilot-CLI indexer and grew, organically, to cover several
+mark began as a Copilot-CLI indexer and grew, organically, to cover several
 kinds of agent conversation:
 
 - VS Code chat (`workspaceStorage/*/chatSessions/*.json`)
@@ -21,13 +21,13 @@ We want it to keep growing — toward **ChatGPT**, **Gemini**, **Ollama**, and
 whatever comes next — without the ingest layer turning into a pile of special
 cases. Three problems block that today:
 
-1. **Monolithic ingest.** `mindex/ingest.py` is ~1,300 lines mixing generic
+1. **Monolithic ingest.** `mark/ingest.py` is ~1,300 lines mixing generic
    helpers, three source readers, persistence, embedding, and orchestration.
    Two of the three readers already share a signature; VS Code is inlined
    separately. The contract is implicit.
 2. **No enable/disable.** A source can only be "turned off" by pointing its path
    at nothing. There is no `enabled = false`.
-3. **Scattered, flat paths.** Each source has a bespoke `MINDEX_*` env override.
+3. **Scattered, flat paths.** Each source has a bespoke `MARK_*` env override.
    Structured per-source data (a *list* of roots + a label + options) does not
    fit cleanly in flat env strings, and the known locations + the Cline-family
    name map are baked into code.
@@ -57,15 +57,15 @@ cases. Three problems block that today:
 
 | Concern | Today | Location |
 | --- | --- | --- |
-| VS Code reader | `parse_session()` + inlined loop | `mindex/ingest.py` `parse_session` |
-| Copilot CLI reader | `ingest_copilot_store(cur, existing, *, rebuild, progress) -> counts` | `mindex/ingest.py` |
-| Cline-family reader | `ingest_cline_family(cur, existing, *, rebuild, progress) -> counts` | `mindex/ingest.py` |
-| Persistence (shared) | `_write_session(cur, session, *, light)` | `mindex/ingest.py` |
-| Change detection | `sources_fingerprint()` hand-rolls each source's stat scan | `mindex/ingest.py` |
-| Orchestration | `ingest_all(*, rebuild, do_embed, progress)` | `mindex/ingest.py` |
-| Paths | per-source `MINDEX_*` env + platform candidates | `mindex/config.py` |
-| Variant→label map | `CLINE_FAMILY_SOURCES` dict in code | `mindex/config.py` |
-| Manual files | uploads become `source='upload'` sessions | `mindex/uploads.py` |
+| VS Code reader | `parse_session()` + inlined loop | `mark/ingest.py` `parse_session` |
+| Copilot CLI reader | `ingest_copilot_store(cur, existing, *, rebuild, progress) -> counts` | `mark/ingest.py` |
+| Cline-family reader | `ingest_cline_family(cur, existing, *, rebuild, progress) -> counts` | `mark/ingest.py` |
+| Persistence (shared) | `_write_session(cur, session, *, light)` | `mark/ingest.py` |
+| Change detection | `sources_fingerprint()` hand-rolls each source's stat scan | `mark/ingest.py` |
+| Orchestration | `ingest_all(*, rebuild, do_embed, progress)` | `mark/ingest.py` |
+| Paths | per-source `MARK_*` env + platform candidates | `mark/config.py` |
+| Variant→label map | `CLINE_FAMILY_SOURCES` dict in code | `mark/config.py` |
+| Manual files | uploads become `source='upload'` sessions | `mark/uploads.py` |
 
 The two `ingest_*` functions already share the signature
 `(cur, existing, *, rebuild, progress) -> {added, updated, skipped}`. **The
@@ -96,7 +96,7 @@ graph TD
 
 A module-level `SOURCES` registry of adapter instances. `ingest_all` and
 `sources_fingerprint` become generic loops over it. Adding a source = drop a
-module in `mindex/sources/` + append to the registry.
+module in `mark/sources/` + append to the registry.
 
 We deliberately **do not** use setuptools entry points. The registry can be
 upgraded to entry-point discovery later without changing any adapter, if the
@@ -173,7 +173,7 @@ class SourceConfig:
 `config.sources()` merges each adapter's defaults ← TOML ← env and returns the
 effective `SourceConfig` per adapter.
 
-Example `~/.mindex/sources.toml`:
+Example `~/.mark/sources.toml`:
 
 ```toml
 [sources.copilot_cli]
@@ -214,17 +214,17 @@ rows, not new columns.
 | --- | --- | --- |
 | Adapter defaults | always present | zero-config; known platform locations |
 | `sources.toml` | key is set | durable per-source enable/paths/options |
-| `MINDEX_*` env | set | one-offs, CI, Docker mounts |
+| `MARK_*` env | set | one-offs, CI, Docker mounts |
 
 - **Back-compat:** existing env vars keep working by mapping onto the structure
-  (`MINDEX_COPILOT_STORE` → `copilot_cli.roots[0]`, `MINDEX_VSCODE_STORAGE` →
-  `vscode.roots`, `MINDEX_VSCODE_GLOBAL_STORAGE` → `cline.roots`, …). Deprecated
+  (`MARK_COPILOT_STORE` → `copilot_cli.roots[0]`, `MARK_VSCODE_STORAGE` →
+  `vscode.roots`, `MARK_VSCODE_GLOBAL_STORAGE` → `cline.roots`, …). Deprecated
   gently; no breakage.
 - **Validation:** paths are `expanduser()`-ed and resolved; missing paths are
   skipped silently (current behavior); files are scanned **read-only**; the TOML
   is data-only (no code execution). A malformed file fails safe to defaults and
   logs a warning.
-- **Location:** `MINDEX_SOURCES_FILE` overrides, else `DATA_DIR/sources.toml`.
+- **Location:** `MARK_SOURCES_FILE` overrides, else `DATA_DIR/sources.toml`.
 
 ## 7. Confirmed behavior decisions
 
@@ -246,7 +246,7 @@ and a prune affordance.
 ## 9. Proposed file layout
 
 ```
-mindex/
+mark/
   sources/
     __init__.py        # SOURCES registry + iteration helpers
     base.py            # Protocols, SourceConfig, shared session-dict helpers
@@ -267,7 +267,7 @@ counting, fence/URL regexes) move to `sources/base.py`. Persistence
 ## 10. Migration plan (phased, each independently shippable)
 
 1. **Extract adapters behind `WatchedSource`.** Move the three readers into
-   `mindex/sources/`, conform VS Code to the same method shape, make
+   `mark/sources/`, conform VS Code to the same method shape, make
    `ingest_all` / `sources_fingerprint` loop the registry. **Verification:**
    snapshot `/api/stats` `by_source` + total counts before and after a
    `rebuild=True`; assert identical. Pure mechanical relocation.
@@ -292,8 +292,8 @@ counting, fence/URL regexes) move to `sources/base.py`. Persistence
   a synced copy of another machine's `~/.copilot`)? `roots` covers most cases;
   full instance-keying is deferred.
 - Should **per-source pricing** overrides live in `sources.toml` too, eventually
-  folding in `MINDEX_PRICING_FILE`?
-- Do we want a CLI (`mindex sources list/enable/disable`) in addition to the API?
+  folding in `MARK_PRICING_FILE`?
+- Do we want a CLI (`mark sources list/enable/disable`) in addition to the API?
 
 ## 13. Decision log
 

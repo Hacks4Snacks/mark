@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 
-from mindex.sources import IMPORT_SOURCES, WATCHED_SOURCES
-from mindex.sources.chatgpt import ChatGptSource
+from mark.sources import IMPORT_SOURCES, WATCHED_SOURCES
+from mark.sources.chatgpt import ChatGptSource
 
 
 def _sample_export() -> bytes:
@@ -70,7 +70,7 @@ def test_chatgpt_parse_export():
 
 def test_chatgpt_import_into_db(persist_session):
     """The importer's output persists and becomes searchable."""
-    from mindex import db, persist, search
+    from mark import db, persist, search
 
     src = ChatGptSource()
     with db.connect() as conn:

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from mindex import db
-from mindex.db import migrations
+from mark import db
+from mark.db import migrations
 
 
 def test_user_version_advances_to_latest():

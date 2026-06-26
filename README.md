@@ -1,8 +1,12 @@
-<p align="center"><img src="mindex/web/favicon.svg" width="72" alt="mindex logo" /></p>
+<p align="center"><img src="mark/web/favicon.svg" width="72" alt="Mark logo" /></p>
 
-# mindex — your searchable AI chat archive
+# Mark — Multi-session AI Recall Keeper
 
-mindex turns the AI coding history already stored on your machine into a
+> Your searchable, private archive of every AI coding chat.
+>
+> Published on PyPI as **`markive`** (the command is **`mark`**).
+
+Mark turns the AI coding history already stored on your machine into a
 **beautiful, searchable knowledge base**, so you never lose a useful
 conversation again. It indexes several sources automatically:
 
@@ -37,20 +41,23 @@ Pick whichever fits you — all three run **100% locally**:
 
 ```bash
 # 1) Run without installing (needs uv: https://docs.astral.sh/uv/)
-uvx --from . 'mindex[semantic]'
+uvx --from . 'markive[semantic]'
 
 # 2) Install as a command (pipx keeps it isolated)
-pipx install '.[semantic]'      # then just run:  mindex
+pipx install '.[semantic]'      # then just run:  mark
 
 # 3) One-shot dev launcher (creates a venv for you)
 ./run.sh
 ```
 
+> Once published, you can also `pipx install 'markive[semantic]'` from PyPI.
+
 Then open <http://127.0.0.1:8765>. The first launch indexes your history in the
 background (watch the banner). Click **⟳** any time to pick up new sessions.
-Data lives in `~/.mindex/` (override with `MINDEX_DATA_DIR`).
+Data lives in `~/.mark/` (override with `MARK_DATA_DIR`).
 
-> Plain pip: `pip install '.[semantic]'` then `mindex` (or `python -m mindex`).
+> Plain pip: `pip install '.[semantic]'` then `mark` (or `python -m mark`). The
+> `markive`/`markive-mcp` commands are aliases in case `mark` clashes on PATH.
 > Without the `[semantic]` extra it still works, using a built-in vectorizer.
 
 ## Run in Docker
@@ -76,7 +83,7 @@ below). The server binds to `127.0.0.1` on the host only.
 
 ## Semantic engine
 
-mindex tries, in order: [`fastembed`](https://github.com/qdrant/fastembed)
+Mark tries, in order: [`fastembed`](https://github.com/qdrant/fastembed)
 (ONNX transformer) → [`model2vec`](https://github.com/MinishLab/model2vec)
 (static embeddings) → a built-in NumPy vectorizer that always works offline.
 Install the optional upgrades for best quality:
@@ -93,25 +100,25 @@ All optional, via environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `MINDEX_PORT` | `8765` | Server port |
-| `MINDEX_HOST` | `127.0.0.1` | Bind address (localhost only) |
-| `MINDEX_DATA_DIR` | `./data` | Where the SQLite DB and uploads live |
-| `MINDEX_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | fastembed model |
-| `MINDEX_VSCODE_STORAGE` | auto-detected | Override VS Code `workspaceStorage` path(s) |
-| `MINDEX_VSCODE_GLOBAL_STORAGE` | auto-detected | Override `globalStorage` path(s) (Cline, Zoo Code, …) |
-| `MINDEX_COPILOT_STORE` | `~/.copilot/session-store.db` | Copilot CLI / agent session store |
-| `MINDEX_SESSION_STATE` | `~/.copilot/session-state` | Per-session event logs (tokens, model, duration) |
-| `MINDEX_EMBED_AUTOMATION` | `0` | Set `1` to also embed automation runs for semantic search |
-| `MINDEX_MAX_CHUNKS_PER_SESSION` | `40` | Cap on indexed chunks per session (bounds huge agent tasks) |
-| `MINDEX_PRICING_FILE` | built-in table | JSON of `{model: [in, out, cached]}` USD per 1M tokens |
-| `MINDEX_RESUME_CMD` | `copilot --resume {id}` | Resume command shown in the UI |
+| `MARK_PORT` | `8765` | Server port |
+| `MARK_HOST` | `127.0.0.1` | Bind address (localhost only) |
+| `MARK_DATA_DIR` | `./data` | Where the SQLite DB and uploads live |
+| `MARK_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | fastembed model |
+| `MARK_VSCODE_STORAGE` | auto-detected | Override VS Code `workspaceStorage` path(s) |
+| `MARK_VSCODE_GLOBAL_STORAGE` | auto-detected | Override `globalStorage` path(s) (Cline, Zoo Code, …) |
+| `MARK_COPILOT_STORE` | `~/.copilot/session-store.db` | Copilot CLI / agent session store |
+| `MARK_SESSION_STATE` | `~/.copilot/session-state` | Per-session event logs (tokens, model, duration) |
+| `MARK_EMBED_AUTOMATION` | `0` | Set `1` to also embed automation runs for semantic search |
+| `MARK_MAX_CHUNKS_PER_SESSION` | `40` | Cap on indexed chunks per session (bounds huge agent tasks) |
+| `MARK_PRICING_FILE` | built-in table | JSON of `{model: [in, out, cached]}` USD per 1M tokens |
+| `MARK_RESUME_CMD` | `copilot --resume {id}` | Resume command shown in the UI |
 
 ## Usage, duration & cost
 
 Every Copilot CLI session is enriched from its `events.jsonl` with **real**
 metrics — model, wall-clock duration, input/output/cache token counts, premium
-requests, and AIU. mindex turns those token counts into an **estimated USD cost**
-using a public-price table (editable via `MINDEX_PRICING_FILE`); cache reads are
+requests, and AIU. Mark turns those token counts into an **estimated USD cost**
+using a public-price table (editable via `MARK_PRICING_FILE`); cache reads are
 priced separately so long agent sessions aren't over-counted. VS Code sessions
 (which don't log tokens) fall back to a text-based estimate, flagged as such.
 Each session detail also shows its **session id** and a copyable
@@ -127,9 +134,9 @@ runs* (or click the Automation source chip) to browse them.
 
 ## Use it from your agent (MCP server)
 
-mindex can expose your archive to any MCP-aware agent — Copilot CLI, Cline,
+Mark can expose your archive to any MCP-aware agent — Copilot CLI, Cline,
 Claude Desktop — so an agent can **recall how you solved something before**.
-Install the extra (adds the `mindex-mcp` command) and register the stdio server:
+Install the extra (adds the `mark-mcp` command) and register the stdio server:
 
 ```bash
 pip install '.[mcp]'
@@ -139,7 +146,7 @@ pip install '.[mcp]'
 // e.g. Claude Desktop / Copilot CLI MCP config
 {
   "mcpServers": {
-    "mindex": { "command": "mindex-mcp" }
+    "mark": { "command": "mark-mcp" }
   }
 }
 ```
@@ -156,17 +163,17 @@ Everything runs locally over stdio — no network, no API keys.
 ## Ask your history (optional, local LLM)
 
 If a local [Ollama](https://ollama.com) server is running, the **✦ Ask** view
-lets you ask questions in natural language. mindex retrieves the most relevant
+lets you ask questions in natural language. Mark retrieves the most relevant
 past conversations, has a **local** model synthesise a cited answer, and streams
 it back token-by-token — so your archive stays on your machine, no API keys.
 
 ```bash
-ollama pull llama3.2     # any installed model works; mindex auto-picks one
+ollama pull llama3.2     # any installed model works; mark auto-picks one
 ollama serve
 ```
 
-Override the model with `MINDEX_OLLAMA_MODEL` or the endpoint with
-`MINDEX_OLLAMA_URL`. When Ollama isn't reachable, the view simply shows setup
+Override the model with `MARK_OLLAMA_MODEL` or the endpoint with
+`MARK_OLLAMA_URL`. When Ollama isn't reachable, the view simply shows setup
 hints — every other feature works without it.
 
 ## Collections

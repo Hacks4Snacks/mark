@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from mindex import config
-from mindex.sources import base
+from mark import config
+from mark.sources import base
 
 
 def test_price_for_substring_and_aliases():

@@ -1,7 +1,7 @@
 """HTTP API surface, organised as one ``APIRouter`` per domain.
 
 :data:`api_router` aggregates every domain router; the FastAPI app in
-:mod:`mindex.app` includes it before mounting the static UI so ``/api/*``
+:mod:`mark.app` includes it before mounting the static UI so ``/api/*``
 always wins over the ``/`` static mount.
 """
 

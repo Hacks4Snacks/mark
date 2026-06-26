@@ -1,6 +1,6 @@
 """Text embeddings with graceful degradation.
 
-mindex tries to use a real transformer embedding model for semantic search, but
+mark tries to use a real transformer embedding model for semantic search, but
 never *requires* one. Backends are attempted in order of quality:
 
 1. ``fastembed``  — ONNX transformer (no PyTorch). Best quality.

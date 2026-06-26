@@ -1,8 +1,8 @@
 """Source-adapter registry.
 
 Each adapter discovers and parses one on-disk store of AI conversations and
-produces the canonical session dict consumed by :func:`mindex.persist.write_session`.
-``mindex.ingest`` loops over :data:`WATCHED_SOURCES` for both change detection
+produces the canonical session dict consumed by :func:`mark.persist.write_session`.
+``mark.ingest`` loops over :data:`WATCHED_SOURCES` for both change detection
 and importing, so adding a source is one new module plus one line here.
 """
 

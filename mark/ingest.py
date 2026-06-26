@@ -1,7 +1,7 @@
-"""Orchestration: index every registered source into the mindex database.
+"""Orchestration: index every registered source into the mark database.
 
-The per-source readers live in :mod:`mindex.sources`; persistence lives in
-:mod:`mindex.persist`. This module just loops the source registry for change
+The per-source readers live in :mod:`mark.sources`; persistence lives in
+:mod:`mark.persist`. This module just loops the source registry for change
 detection (:func:`sources_fingerprint`) and importing (:func:`ingest_all`), then
 embeds any new chunks.
 """
@@ -79,7 +79,7 @@ def ingest_all(
     do_embed: bool = True,
     progress: ProgressCb | None = None,
 ) -> dict[str, int]:
-    """Index every registered source into mindex.
+    """Index every registered source into mark.
 
     Returns counts of added/updated/skipped sessions (plus automation).
     """
@@ -140,7 +140,7 @@ def import_export(
     do_embed: bool = True,
     progress: ProgressCb | None = None,
 ) -> dict[str, Any]:
-    """Import a user-supplied export file (ChatGPT, …) into mindex.
+    """Import a user-supplied export file (ChatGPT, …) into mark.
 
     Detects which :data:`IMPORT_SOURCES` adapter recognises the bytes, writes one
     session per conversation (dedup by content hash), then embeds new chunks.

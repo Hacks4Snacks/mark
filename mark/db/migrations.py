@@ -1,6 +1,6 @@
 """Versioned, forward-only schema migrations keyed off ``PRAGMA user_version``.
 
-The canonical schema in :mod:`mindex.db.schema` is created with ``IF NOT
+The canonical schema in :mod:`mark.db.schema` is created with ``IF NOT
 EXISTS`` on every startup, so migrations here only handle *evolving* an existing
 database (adding columns, backfilling, reshaping). Each migration is a callable
 that takes a connection and must be idempotent; the list index + 1 is its

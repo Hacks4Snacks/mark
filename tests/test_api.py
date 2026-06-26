@@ -20,7 +20,7 @@ def test_read_endpoints_ok(client):
 
 def test_render_endpoint():
     # Uses the module directly so it doesn't need the client fixture's lifespan.
-    from mindex import render
+    from mark import render
 
     html = render.render_markdown("# Title\n\nsome **bold** text")
     assert "<h1>" in html and "<strong>" in html

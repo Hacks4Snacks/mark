@@ -5,7 +5,7 @@ These VS Code extensions store each task under
 ``api_conversation_history.json`` (the message stream), optional
 ``task_metadata.json`` (model usage) and ``history_item.json`` (token/cost
 totals). Any extension exposing that shape is auto-detected; the friendly source
-label comes from :data:`mindex.config.CLINE_FAMILY_SOURCES`.
+label comes from :data:`mark.config.CLINE_FAMILY_SOURCES`.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Canonical SQLite schema for mindex.
+"""Canonical SQLite schema for mark.
 
 A single local database holds Copilot sessions, their turns, uploaded
 documents, extracted metadata, full-text (FTS5) and vector embeddings.

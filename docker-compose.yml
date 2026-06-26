@@ -1,7 +1,7 @@
-# mindex — container orchestration.
+# mark — container orchestration.
 #
-# Mounts your local conversation stores READ-ONLY and points mindex at them.
-# The derived index (mindex.db) lives in the named volume `mindex-data`.
+# Mounts your local conversation stores READ-ONLY and points mark at them.
+# The derived index (mark.db) lives in the named volume `mark-data`.
 #
 # Start:   docker compose up --build -d   →  http://127.0.0.1:8765
 # Reindex: open the UI and click ⟳ (or `docker compose restart`)
@@ -13,22 +13,22 @@
 #   • Windows          → %APPDATA%/Code/User/... (use WSL paths under Docker)
 
 services:
-  mindex:
+  mark:
     build: .
-    image: mindex:latest
-    container_name: mindex
+    image: mark:latest
+    container_name: mark
     # Bind to localhost on the host only — this is a personal app.
     ports:
       - "127.0.0.1:8765:8765"
     environment:
-      MINDEX_VSCODE_STORAGE: /sources/vscode/workspaceStorage
-      MINDEX_VSCODE_GLOBAL_STORAGE: /sources/vscode/globalStorage
-      MINDEX_COPILOT_STORE: /sources/copilot/session-store.db
-      MINDEX_SESSION_STATE: /sources/copilot/session-state
+      MARK_VSCODE_STORAGE: /sources/vscode/workspaceStorage
+      MARK_VSCODE_GLOBAL_STORAGE: /sources/vscode/globalStorage
+      MARK_COPILOT_STORE: /sources/copilot/session-store.db
+      MARK_SESSION_STATE: /sources/copilot/session-state
       # Set to 1 to also index/embed background automation runs.
-      # MINDEX_EMBED_AUTOMATION: "1"
+      # MARK_EMBED_AUTOMATION: "1"
     volumes:
-      - mindex-data:/app/data
+      - mark-data:/app/data
       # --- your conversation sources, mounted READ-ONLY ---
       - "${HOME}/Library/Application Support/Code/User/workspaceStorage:/sources/vscode/workspaceStorage:ro"
       - "${HOME}/Library/Application Support/Code/User/globalStorage:/sources/vscode/globalStorage:ro"
@@ -36,4 +36,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  mindex-data:
+  mark-data:

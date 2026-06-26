@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mindex import search, uploads
+from mark import search, uploads
 
 
 def test_write_session_round_trip(make_session, persist_session):

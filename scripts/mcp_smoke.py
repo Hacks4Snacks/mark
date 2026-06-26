@@ -1,4 +1,4 @@
-"""End-to-end smoke test for the mindex MCP server over stdio."""
+"""End-to-end smoke test for the mark MCP server over stdio."""
 
 import asyncio
 
@@ -7,7 +7,7 @@ from mcp.client.stdio import stdio_client
 
 
 async def main() -> None:
-    params = StdioServerParameters(command="python3", args=["-m", "mindex.mcp_server"])
+    params = StdioServerParameters(command="python3", args=["-m", "mark.mcp_server"])
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()

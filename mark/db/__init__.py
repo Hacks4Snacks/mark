@@ -1,11 +1,11 @@
-"""SQLite storage layer for mindex.
+"""SQLite storage layer for mark.
 
 This package is split into:
 
-* :mod:`mindex.db.connection` — opening connections, the ``cursor`` context
+* :mod:`mark.db.connection` — opening connections, the ``cursor`` context
   manager, and ``meta`` key/value helpers.
-* :mod:`mindex.db.schema` — the canonical ``CREATE TABLE`` DDL.
-* :mod:`mindex.db.migrations` — forward-only migrations keyed off
+* :mod:`mark.db.schema` — the canonical ``CREATE TABLE`` DDL.
+* :mod:`mark.db.migrations` — forward-only migrations keyed off
   ``PRAGMA user_version``.
 
 The public surface (``connect``, ``cursor``, ``init_db``, ``get_meta``,

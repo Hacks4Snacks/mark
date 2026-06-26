@@ -1,6 +1,6 @@
 """Optional "ask your history" — local RAG over the archive via Ollama.
 
-Opt-in and fully local: when a local Ollama server is running, mindex retrieves
+Opt-in and fully local: when a local Ollama server is running, mark retrieves
 the most relevant past conversations and has a local model synthesise an answer
 with citations. No data leaves the machine; no API keys.
 
@@ -20,7 +20,7 @@ _STATUS_TIMEOUT = 2.5
 _GEN_TIMEOUT = 180
 
 _SYSTEM = (
-    "You are mindex, answering a question about the user's OWN past AI coding "
+    "You are Mark, answering a question about the user's OWN past AI coding "
     "conversations. Use ONLY the provided context excerpts, and answer ONLY the "
     "specific question asked — do not summarise or comment on excerpts that are "
     "unrelated to the question. Cite the sources you actually rely on with their "

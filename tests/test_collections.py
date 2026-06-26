@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mindex import collections as coll
+from mark import collections as coll
 
 
 def test_manual_only_membership(make_session, persist_session):
