@@ -39,8 +39,8 @@ services:
       - "${HOME}/Library/Application Support/Code/User/globalStorage:/home/mark/.config/Code/User/globalStorage:ro"
       - "${HOME}/.copilot:/home/mark/.copilot:ro"
       # --- Cursor (optional): composer/chat history + repo mapping ---
-      # - "${HOME}/Library/Application Support/Cursor/User/globalStorage:/home/mark/.config/Cursor/User/globalStorage:ro"
-      # - "${HOME}/Library/Application Support/Cursor/User/workspaceStorage:/home/mark/.config/Cursor/User/workspaceStorage:ro"
+      - "${HOME}/Library/Application Support/Cursor/User/globalStorage:/home/mark/.config/Cursor/User/globalStorage:ro"
+      - "${HOME}/Library/Application Support/Cursor/User/workspaceStorage:/home/mark/.config/Cursor/User/workspaceStorage:ro"
       # --- Advanced config (optional): enable/disable sources, label overrides,
       #     extra roots. Same format as a local ~/.mark/sources.toml; see
       #     sources.example.toml. Use in-container paths for any `roots` you set. ---

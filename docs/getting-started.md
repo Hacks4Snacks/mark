@@ -68,11 +68,11 @@ per-OS customisation and tuning.
 
 ## Where your data lives
 
-| Path | Contents |
-| --- | --- |
-| `~/.mark/mark.db` | The SQLite index (sessions, turns, files, tags, cost, embeddings) |
-| `~/.mark/uploads/` | Files you add through the UI |
-| `~/.mark/sources.toml` | *Optional* source overrides (see [Sources](sources.md)) |
+| Path                   | Contents                                                          |
+|------------------------|-------------------------------------------------------------------|
+| `~/.mark/mark.db`      | The SQLite index (sessions, turns, files, tags, cost, embeddings) |
+| `~/.mark/uploads/`     | Files you add through the UI                                      |
+| `~/.mark/sources.toml` | *Optional* source overrides (see [Sources](sources.md))           |
 
 Override the base directory with `MARK_DATA_DIR`. Your original chat stores are
 **never modified** — Mark only reads them, and for live databases it reads a

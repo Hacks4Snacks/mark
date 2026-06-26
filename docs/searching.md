@@ -8,11 +8,11 @@ sessions.
 
 The toggle next to the search bar picks how a query is matched:
 
-| Mode | What it does | Reach for it when… |
-| --- | --- | --- |
-| **Hybrid** (default) | Fuses keyword precision with semantic recall | Almost always — it's the best general default |
-| **Semantic** | Pure "find by meaning" via vector embeddings | You remember the *idea* but not the words |
-| **Keyword** | Classic exact-term FTS5 / BM25 search | You know an exact identifier, error string, or command |
+| Mode                 | What it does                                 | Reach for it when…                                     |
+|----------------------|----------------------------------------------|--------------------------------------------------------|
+| **Hybrid** (default) | Fuses keyword precision with semantic recall | Almost always — it's the best general default          |
+| **Semantic**         | Pure "find by meaning" via vector embeddings | You remember the *idea* but not the words              |
+| **Keyword**          | Classic exact-term FTS5 / BM25 search        | You know an exact identifier, error string, or command |
 
 **Why hybrid wins.** Searching `how I fixed the auth timeout` will surface a
 session even if you actually wrote *"token expiry bug"* — semantic recall finds
@@ -45,12 +45,12 @@ Use **Clear filters** to reset everything in one click.
 
 The **Sort** dropdown controls ordering:
 
-| Option | Behaviour |
-| --- | --- |
+| Option          | Behaviour                                                                                                       |
+|-----------------|-----------------------------------------------------------------------------------------------------------------|
 | **Most recent** | Newest first when browsing. For an active query this keeps **relevance order**, so the best matches stay on top |
-| **Oldest** | Oldest first; undated sessions sort last |
-| **Longest** | By turn count — the meatiest conversations first |
-| **Title A–Z** | Alphabetical |
+| **Oldest**      | Oldest first; undated sessions sort last                                                                        |
+| **Longest**     | By turn count — the meatiest conversations first                                                                |
+| **Title A–Z**   | Alphabetical                                                                                                    |
 
 ## Reading a result
 
@@ -94,11 +94,11 @@ pip install 'markive[semantic]'
 
 ### Tuning embeddings
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `MARK_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | fastembed model id |
-| `MARK_EMBED_THREADS` | half your cores | CPU cap for the transformer backend (`0` = all cores, fastest) |
-| `MARK_MAX_EMBED_CHUNKS_PER_SESSION` | `40` | Cap on embedded chunks per session |
+| Variable                            | Default                  | Purpose                                                        |
+|-------------------------------------|--------------------------|----------------------------------------------------------------|
+| `MARK_EMBED_MODEL`                  | `BAAI/bge-small-en-v1.5` | fastembed model id                                             |
+| `MARK_EMBED_THREADS`                | half your cores          | CPU cap for the transformer backend (`0` = all cores, fastest) |
+| `MARK_MAX_EMBED_CHUNKS_PER_SESSION` | `40`                     | Cap on embedded chunks per session                             |
 
 > **Keyword search always indexes every chunk** — nothing is lost from FTS. Only
 > *embeddings* are capped per session, because semantic search loads vectors into

@@ -11,20 +11,20 @@ These pages go deeper than the [project README](../README.md). Start with
 
 ## Contents
 
-| Guide | What it covers |
-| --- | --- |
-| [Getting started](getting-started.md) | Install, first launch, where data lives, the UI at a glance |
-| [Sources & syncing](sources.md) | Which chat stores Mark indexes, auto-discovery, `sources.toml`, manual re-scan |
-| [Searching & filtering](searching.md) | Hybrid / semantic / keyword modes, the sidebar facets, sorting, related sessions |
-| [Collections](collections.md) | Auto-updating groups, pinning/excluding, overviews, ask-a-collection |
-| [Usage & cost analytics](usage-and-cost.md) | How spend, duration and tokens are computed; custom pricing |
-| [Ask your history](ask.md) | Optional local-LLM Q&A over your archive via Ollama |
-| [Snippet & command library](library.md) | Browse every code block and shell command Mark extracted |
-| [Managing your archive](managing-your-archive.md) | Add notes & files, import exports, hide/delete, tags, export to Markdown |
-| [MCP server](mcp.md) | Expose your archive to Copilot CLI, Cline, Claude Desktop and other agents |
-| [Running in Docker](docker.md) | The Compose setup, read-only mounts, customising per-OS |
-| [Configuration reference](configuration.md) | Every `MARK_*` environment variable in one table |
-| [FAQ & troubleshooting](faq.md) | Common questions, privacy, performance, fixes |
+| Guide                                             | What it covers                                                                   |
+|---------------------------------------------------|----------------------------------------------------------------------------------|
+| [Getting started](getting-started.md)             | Install, first launch, where data lives, the UI at a glance                      |
+| [Sources & syncing](sources.md)                   | Which chat stores Mark indexes, auto-discovery, `sources.toml`, manual re-scan   |
+| [Searching & filtering](searching.md)             | Hybrid / semantic / keyword modes, the sidebar facets, sorting, related sessions |
+| [Collections](collections.md)                     | Auto-updating groups, pinning/excluding, overviews, ask-a-collection             |
+| [Usage & cost analytics](usage-and-cost.md)       | How spend, duration and tokens are computed; custom pricing                      |
+| [Ask your history](ask.md)                        | Optional local-LLM Q&A over your archive via Ollama                              |
+| [Snippet & command library](library.md)           | Browse every code block and shell command Mark extracted                         |
+| [Managing your archive](managing-your-archive.md) | Add notes & files, import exports, hide/delete, tags, export to Markdown         |
+| [MCP server](mcp.md)                              | Expose your archive to Copilot CLI, Cline, Claude Desktop and other agents       |
+| [Running in Docker](docker.md)                    | The Compose setup, read-only mounts, customising per-OS                          |
+| [Configuration reference](configuration.md)       | Every `MARK_*` environment variable in one table                                 |
+| [FAQ & troubleshooting](faq.md)                   | Common questions, privacy, performance, fixes                                    |
 
 ## Core principles
 

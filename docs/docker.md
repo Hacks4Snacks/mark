@@ -32,11 +32,11 @@ The shipped file is preset for **macOS + VS Code (Stable)**. Only edit the **hos
 (left)** side of each mount; keep the **container (right)** side as
 `/home/mark/...` — that's where Mark looks.
 
-| Setup | Change the host path to |
-| --- | --- |
-| VS Code Insiders | `Code - Insiders` instead of `Code` |
-| Linux | `${HOME}/.config/Code/User/...` |
-| Windows | `%APPDATA%/Code/User/...` (use WSL paths under Docker) |
+| Setup            | Change the host path to                                |
+|------------------|--------------------------------------------------------|
+| VS Code Insiders | `Code - Insiders` instead of `Code`                    |
+| Linux            | `${HOME}/.config/Code/User/...`                        |
+| Windows          | `%APPDATA%/Code/User/...` (use WSL paths under Docker) |
 
 Cursor mounts are included and optional — remove them if you don't use Cursor.
 

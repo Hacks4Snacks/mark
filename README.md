@@ -41,7 +41,6 @@ so your conversations never leave your machine.
 - [Collections](#collections)
 - [Snippet & command library](#snippet--command-library)
 - [Manage your archive](#manage-your-archive)
-- [How it works](#how-it-works)
 - [Privacy](#privacy)
 - [Contributing](#contributing)
 - [License](#license)
@@ -133,11 +132,11 @@ targets for any `roots` you set.
 
 ## Search modes
 
-| Mode                 | What it does                                       |
-|----------------------|----------------------------------------------------|
-| **Hybrid** (default) | Best of both: keyword precision + semantic recall  |
-| **Semantic**         | Pure "find by meaning" via embeddings              |
-| **Keyword**          | Classic exact-term FTS5 search                     |
+| Mode                 | What it does                                      |
+|----------------------|---------------------------------------------------|
+| **Hybrid** (default) | Best of both: keyword precision + semantic recall |
+| **Semantic**         | Pure "find by meaning" via embeddings             |
+| **Keyword**          | Classic exact-term FTS5 search                    |
 
 ## Semantic engine
 

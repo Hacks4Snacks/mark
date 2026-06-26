@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
-from ..persist import write_session
+from ..persist import load_file_signatures, record_file_signature, write_session
 from .base import (
     FENCE_RE,
     URL_RE,
@@ -346,6 +346,24 @@ def _composer_keys(con: sqlite3.Connection) -> Iterable[str]:
         yield key
 
 
+def _vscdb_signature(store: Path) -> str:
+    """Cheap stat-only signature of a Cursor store (DB + WAL/SHM sidecars).
+
+    Changes whenever Cursor writes to the store; an unchanged signature means no
+    composer changed, so the whole store can be skipped without opening it or
+    re-parsing every composer blob.
+    """
+    parts: list[str] = []
+    for suffix in ("", "-wal", "-shm"):
+        p = Path(f"{store}{suffix}")
+        try:
+            st = p.stat()
+            parts.append(f"{st.st_mtime_ns}:{st.st_size}")
+        except OSError:
+            parts.append("-")
+    return "|".join(parts)
+
+
 class CursorSource(WatchedSource):
     key = "cursor"
     row_sources = ("cursor",)
@@ -391,12 +409,27 @@ class CursorSource(WatchedSource):
     ) -> dict[str, int]:
         """Index Cursor composer conversations from the globalStorage store(s)."""
         counts = {"added": 0, "updated": 0, "skipped": 0}
+        sigs = load_file_signatures(cur, prefix="cursor:")
+        stores = [Path(s) for s in cfg.roots if Path(s).exists()]
+        store_sig = {str(s): _vscdb_signature(s) for s in stores}
+        # Store-level change-skip: a Cursor store is a single SQLite DB. When its
+        # file signature is unchanged we skip opening it and re-JSON-parsing every
+        # composer — the dominant per-cycle cost when Cursor is idle but another
+        # source triggered the reindex.
+        if (
+            not rebuild
+            and stores
+            and all(sigs.get(f"cursor:{s}") == store_sig[str(s)] for s in stores)
+        ):
+            return counts
+
         wsmap = load_workspace_map(self._workspace_roots(cfg))
         seen = 0
-        for store in cfg.roots:
-            if not Path(store).exists():
+        for store in stores:
+            sp = str(store)
+            if not rebuild and sigs.get(f"cursor:{sp}") == store_sig[sp]:
                 continue
-            con = _ro_connect(Path(store))
+            con = _ro_connect(store)
             if con is None:
                 continue
             try:
@@ -438,4 +471,5 @@ class CursorSource(WatchedSource):
                         progress(f"Indexed {seen} Cursor conversations...")
             finally:
                 con.close()
+            record_file_signature(cur, f"cursor:{sp}", store_sig[sp])
         return counts

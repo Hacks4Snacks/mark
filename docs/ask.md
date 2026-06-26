@@ -43,10 +43,10 @@ If you don't specify a model, Mark auto-picks a small, fast, general-purpose one
 from what you have installed (it prefers `llama3.2`, then `llama3.1`, `qwen2.5`,
 `mistral`, `gemma`, `phi`, …). Override it explicitly:
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `MARK_OLLAMA_MODEL` | *(auto-pick)* | Force a specific Ollama model |
-| `MARK_OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint |
+| Variable            | Default                  | Purpose                       |
+|---------------------|--------------------------|-------------------------------|
+| `MARK_OLLAMA_MODEL` | *(auto-pick)*            | Force a specific Ollama model |
+| `MARK_OLLAMA_URL`   | `http://localhost:11434` | Ollama endpoint               |
 
 ```bash
 export MARK_OLLAMA_MODEL=qwen2.5

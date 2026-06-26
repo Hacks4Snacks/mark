@@ -6,12 +6,12 @@ page explains what's supported, how to override paths, and how syncing works.
 
 ## Supported sources
 
-| Source key | What it indexes | Where it lives (auto-detected) |
-| --- | --- | --- |
-| `vscode` | VS Code inline/agent chats | `…/Code/User/workspaceStorage` (Stable, Insiders, VSCodium) |
+| Source key    | What it indexes                                              | Where it lives (auto-detected)                               |
+|---------------|--------------------------------------------------------------|--------------------------------------------------------------|
+| `vscode`      | VS Code inline/agent chats                                   | `…/Code/User/workspaceStorage` (Stable, Insiders, VSCodium)  |
 | `copilot_cli` | Copilot CLI / agent-store conversations + real token metrics | `~/.copilot/session-store.db` (+ `~/.copilot/session-state`) |
-| `cline` | Cline-family agent task histories | `…/Code/User/globalStorage` |
-| `cursor` | Cursor Composer / chat history | `…/Cursor/User/globalStorage/state.vscdb` |
+| `cline`       | Cline-family agent task histories                            | `…/Code/User/globalStorage`                                  |
+| `cursor`      | Cursor Composer / chat history                               | `…/Cursor/User/globalStorage/state.vscdb`                    |
 
 Plus **import** sources (one-off uploads rather than watched paths):
 
@@ -24,12 +24,12 @@ Plus **import** sources (one-off uploads rather than watched paths):
 The `cline` adapter auto-detects several Cline-derived extensions and labels each
 with its own source name:
 
-| Extension id | Labelled as |
-| --- | --- |
-| `saoudrizwan.claude-dev` | `cline` |
-| `zoocodeorganization.zoo-code` | `zoocode` |
-| `rooveterinaryinc.roo-cline` | `roo` |
-| `kilocode.kilo-code` | `kilocode` |
+| Extension id                   | Labelled as |
+|--------------------------------|-------------|
+| `saoudrizwan.claude-dev`       | `cline`     |
+| `zoocodeorganization.zoo-code` | `zoocode`   |
+| `rooveterinaryinc.roo-cline`   | `roo`       |
+| `kilocode.kilo-code`           | `kilocode`  |
 
 Unknown forks are still indexed — they get a label derived from their extension
 id. To name one explicitly, add an override (see below).
@@ -80,11 +80,11 @@ options.extensions = { "some.new-cline-fork" = "myagent" }
 
 For one-off runs without editing a file:
 
-| Variable | Effect |
-| --- | --- |
-| `MARK_SOURCE_<NAME>_ENABLED=0` | Disable a source for one run |
-| `MARK_SOURCE_<NAME>_ROOTS=/a:/b` | Override roots (`os.pathsep`-separated) |
-| `MARK_SOURCES_FILE=/path/to/sources.toml` | Use a non-default config location |
+| Variable                                  | Effect                                  |
+|-------------------------------------------|-----------------------------------------|
+| `MARK_SOURCE_<NAME>_ENABLED=0`            | Disable a source for one run            |
+| `MARK_SOURCE_<NAME>_ROOTS=/a:/b`          | Override roots (`os.pathsep`-separated) |
+| `MARK_SOURCES_FILE=/path/to/sources.toml` | Use a non-default config location       |
 
 `<NAME>` is the upper-cased source key, e.g. `MARK_SOURCE_VSCODE_ENABLED=0` or
 `MARK_SOURCE_CURSOR_ROOTS=…`.
@@ -99,10 +99,10 @@ Mark keeps your archive current on its own:
   something actually changed (a session ends, updates, or appears).
 - **Manually**, click the **⟳** button to force a re-scan immediately.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `MARK_AUTO_SYNC` | `1` | Set `0` to disable background syncing (manual re-scan only) |
-| `MARK_SYNC_INTERVAL` | `20` | Seconds between change checks (minimum 5) |
+| Variable             | Default | Purpose                                                     |
+|----------------------|---------|-------------------------------------------------------------|
+| `MARK_AUTO_SYNC`     | `1`     | Set `0` to disable background syncing (manual re-scan only) |
+| `MARK_SYNC_INTERVAL` | `20`    | Seconds between change checks (minimum 5)                   |
 
 Source databases are read **read-only**; for live stores (like the Copilot CLI
 DB) Mark reads a consistent snapshot. Your original history is never modified.

@@ -35,11 +35,11 @@ if your data lives elsewhere.)
 
 ## Tools exposed
 
-| Tool | Purpose | Key arguments |
-| --- | --- | --- |
+| Tool             | Purpose                                       | Key arguments                                                                     |
+|------------------|-----------------------------------------------|-----------------------------------------------------------------------------------|
 | `search_history` | Find past conversations by meaning or keyword | `query`, `mode` (`hybrid`/`semantic`/`keyword`), `limit` (1–25), `source`, `repo` |
-| `get_session` | Fetch a whole conversation as Markdown by id | `session_id` |
-| `list_recent` | List your most recent conversations | `limit` (1–50), `source`, `repo` |
+| `get_session`    | Fetch a whole conversation as Markdown by id  | `session_id`                                                                      |
+| `list_recent`    | List your most recent conversations           | `limit` (1–50), `source`, `repo`                                                  |
 
 ### `search_history`
 

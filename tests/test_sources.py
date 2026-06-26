@@ -557,3 +557,49 @@ def test_copilot_cli_reingest_skips_snapshot_when_unchanged(tmp_path):
         conn.commit()
     assert first["added"] == 1
     assert second == {"added": 0, "updated": 0, "skipped": 1}
+
+
+def test_cursor_reingest_skips_unchanged_store(tmp_path):
+    """A second scan of an unchanged Cursor store is skipped at the store level,
+    without opening it or re-parsing any composer blob."""
+    from mark import config, db
+    from mark.sources.cursor import CursorSource
+
+    store = tmp_path / "state.vscdb"
+    con = sqlite3.connect(store)
+    con.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    data = {
+        "composerId": "abc",
+        "name": "Auth help",
+        "createdAt": 1700000000000,
+        "lastUpdatedAt": 1700000100000,
+        "conversation": [
+            {"type": 1, "text": "how do I fix the auth token timeout"},
+            {"type": 2, "text": _ASSISTANT_REPLY},
+        ],
+    }
+    con.execute(
+        "INSERT INTO cursorDiskKV VALUES (?,?)", ("composerData:abc", json.dumps(data))
+    )
+    con.commit()
+    con.close()
+
+    cfg = config.SourceConfig(
+        key="cursor",
+        roots=[store],
+        options={"workspace_roots": [str(tmp_path / "ws")]},
+    )
+    src = CursorSource()
+    with db.connect() as conn:
+        cur = conn.cursor()
+        first = src.ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        second = src.ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        cached = cur.execute(
+            "SELECT signature FROM source_file_stat WHERE path = ?",
+            (f"cursor:{store}",),
+        ).fetchone()
+    assert first["added"] == 1
+    assert second == {"added": 0, "updated": 0, "skipped": 0}
+    assert cached is not None

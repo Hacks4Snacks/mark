@@ -26,8 +26,8 @@ installed:
 pip install 'markive[pdf]'
 ```
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
+| Variable                | Default  | Purpose               |
+|-------------------------|----------|-----------------------|
 | `MARK_MAX_UPLOAD_BYTES` | `25 MiB` | Largest file accepted |
 
 Uploaded files are stored under `~/.mark/uploads/`.
@@ -74,8 +74,8 @@ When an agent created or edited a file during a session, Mark records it and —
 to a size cap — snapshots its content so you can view and **download** it later,
 even if the original file has since changed or been removed.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
+| Variable                    | Default   | Purpose                                                              |
+|-----------------------------|-----------|----------------------------------------------------------------------|
 | `MARK_MAX_ATTACHMENT_BYTES` | `512 KiB` | Largest agent file snapshotted; larger files record path + size only |
 
 On download, Mark serves the file from disk if it still exists, otherwise from the
@@ -90,11 +90,11 @@ ideal for sharing a solution or pasting into a doc.
 
 ## What lives where
 
-| Path | Contents |
-| --- | --- |
-| `~/.mark/mark.db` | The index: sessions, turns, files, tags, cost, embeddings, tombstones |
-| `~/.mark/uploads/` | Files you uploaded |
-| `~/.mark/sources.toml` | Optional source overrides |
+| Path                   | Contents                                                              |
+|------------------------|-----------------------------------------------------------------------|
+| `~/.mark/mark.db`      | The index: sessions, turns, files, tags, cost, embeddings, tombstones |
+| `~/.mark/uploads/`     | Files you uploaded                                                    |
+| `~/.mark/sources.toml` | Optional source overrides                                             |
 
 Everything is local. To start fresh, stop Mark and delete `~/.mark/` (or the
 directory set by `MARK_DATA_DIR`).
