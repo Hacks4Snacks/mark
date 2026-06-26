@@ -12,14 +12,15 @@ if [ ! -d "$VENV" ]; then
 fi
 # shellcheck disable=SC1091
 source "$VENV/bin/activate"
+VENV_PY="$VENV/bin/python"
 
-pip install -q --upgrade pip >/dev/null
-pip install -q -r requirements.txt
+"$VENV_PY" -m pip install -q --upgrade pip >/dev/null
+"$VENV_PY" -m pip install -q -r requirements.txt
 
 # Best-effort semantic-search upgrade. Falls back to the built-in vectorizer.
 if [ "${MARK_SKIP_SEMANTIC:-0}" != "1" ]; then
-  pip install -q -r requirements-optional.txt 2>/dev/null \
+  "$VENV_PY" -m pip install -q -r requirements-optional.txt 2>/dev/null \
     || echo "mark: optional semantic deps unavailable for this Python — using built-in vectorizer."
 fi
 
-exec python -m mark
+exec "$VENV_PY" -m mark
