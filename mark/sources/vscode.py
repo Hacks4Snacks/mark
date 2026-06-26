@@ -143,13 +143,121 @@ def _parse_turn(req: dict[str, Any], index: int) -> dict[str, Any]:
 # --- session parsing ---------------------------------------------------------
 
 
+def _is_request(obj: Any) -> bool:
+    """A turn object carries both a ``requestId`` and the user ``message``."""
+    return isinstance(obj, dict) and "requestId" in obj and "message" in obj
+
+
+def _add_request(
+    req: dict[str, Any],
+    order: list[str],
+    by_id: dict[str, dict[str, Any]],
+    anon: list[dict[str, Any]],
+) -> str | None:
+    """Register a request (turn), returning the id that subsequently streamed
+    response parts should attach to. A re-emit keeps the richer response and
+    refreshes the rest of the metadata.
+    """
+    rid = req.get("requestId")
+    if not isinstance(rid, str):
+        anon.append(dict(req))
+        return None
+    if rid not in by_id:
+        stored = dict(req)
+        stored["response"] = list(req.get("response") or [])
+        by_id[rid] = stored
+        order.append(rid)
+    else:
+        stored = by_id[rid]
+        incoming = list(req.get("response") or [])
+        if len(incoming) > len(stored.get("response") or []):
+            stored["response"] = incoming
+        for key, val in req.items():
+            if key != "response":
+                stored[key] = val
+    return rid
+
+
+def _reconstruct_jsonl(text: str) -> dict[str, Any] | None:
+    """Rebuild a session object from VS Code's append-only JSONL chat log.
+
+    Each line is ``{"kind": k, "v": …}``. ``kind 0`` is a full snapshot (often
+    written up front with an empty ``requests`` list). ``kind 2`` either appends
+    finalized request objects (``requestId`` + ``message``) or streams a batch
+    of response parts for the request currently in flight. ``kind 1`` carries
+    positional scalar deltas we don't replay — the user prompt always lives on
+    the request object and the assistant answer arrives as ``kind 2`` response
+    batches, so both are recovered without tracking the writer's cursor.
+    """
+    base: dict[str, Any] | None = None
+    order: list[str] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    anon: list[dict[str, Any]] = []
+    current: str | None = None  # request currently receiving response parts
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(evt, dict):
+            continue
+        kind, v = evt.get("kind"), evt.get("v")
+        if kind == 0 and isinstance(v, dict):
+            if base is None:
+                base = v
+            for r in v.get("requests") or []:
+                if _is_request(r):
+                    _add_request(r, order, by_id, anon)
+            current = None  # snapshot turns are already complete
+        elif kind == 2 and isinstance(v, list) and v:
+            if _is_request(v[0]):
+                for r in v:
+                    if _is_request(r):
+                        current = _add_request(r, order, by_id, anon)
+            elif current is not None and current in by_id:
+                # A streamed batch of response parts for the in-flight request.
+                by_id[current]["response"].extend(v)
+    if base is None and not order:
+        return None
+    base = dict(base or {})
+    base["requests"] = [by_id[i] for i in order] + anon
+    if not base.get("lastMessageDate"):
+        stamps = [
+            r.get("timestamp")
+            for r in base["requests"]
+            if isinstance(r.get("timestamp"), (int, float))
+        ]
+        if stamps:
+            base["lastMessageDate"] = max(stamps)
+    return base
+
+
+def _load_session_data(path: Path, raw: bytes) -> dict[str, Any] | None:
+    """Load a session object from either the legacy whole-file JSON or the newer
+    append-only JSONL event log."""
+    text = raw.decode("utf-8", "replace")
+    if path.suffix != ".jsonl":
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict) and "requests" in data and "kind" not in data:
+            return data
+    return _reconstruct_jsonl(text)
+
+
 def parse_session(
     path: Path, wsmap: dict[str, dict[str, str | None]]
 ) -> dict[str, Any] | None:
     try:
         raw = path.read_bytes()
-        data = json.loads(raw)
-    except (OSError, json.JSONDecodeError):
+    except OSError:
+        return None
+    data = _load_session_data(path, raw)
+    if not isinstance(data, dict):
         return None
 
     requests = data.get("requests") or []
@@ -158,8 +266,10 @@ def parse_session(
     if not turns:
         return None
 
-    workspace_id = path.parent.parent.name
-    repo = wsmap.get(workspace_id, {})
+    workspace_id: str | None = path.parent.parent.name
+    if path.parent.name == "emptyWindowChatSessions":
+        workspace_id = None  # started without a folder open → no repository
+    repo = wsmap.get(workspace_id or "", {})
     session_id = data.get("sessionId") or path.stem
 
     return {
@@ -182,8 +292,18 @@ def parse_session(
 
 
 def iter_session_paths(roots: list[Path]) -> Iterable[Path]:
+    seen_empty: set[Path] = set()
     for root in roots:
+        # Workspace-scoped chats. Newer VS Code writes an append-only ``.jsonl``
+        # event log; older builds wrote a single ``.json`` document — scan both.
         yield from root.glob("*/chatSessions/*.json")
+        yield from root.glob("*/chatSessions/*.jsonl")
+        # Chats started with no folder open live beside workspaceStorage.
+        empty = root.parent / "globalStorage" / "emptyWindowChatSessions"
+        if empty not in seen_empty and empty.is_dir():
+            seen_empty.add(empty)
+            yield from empty.glob("*.json")
+            yield from empty.glob("*.jsonl")
 
 
 class VSCodeSource(WatchedSource):

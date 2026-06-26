@@ -58,7 +58,8 @@ async function pollStatus(initial = false) {
 async function refreshAll(gentle = false) {
   const [s] = await Promise.all([loadStats(), loadFacets()]);
   const count = s ? s.sessions ?? 0 : undefined;
-  if (gentle && count != null && lastSessionCount != null && count > lastSessionCount) {
+  const changed = count != null && lastSessionCount != null && count !== lastSessionCount;
+  if (gentle && changed && count > lastSessionCount) {
     const n = count - lastSessionCount;
     toast(`Synced ${n} new session${n === 1 ? "" : "s"}`);
   }
@@ -66,7 +67,9 @@ async function refreshAll(gentle = false) {
   if (state.view === "list") {
     const idle =
       document.activeElement !== $("#search") && window.scrollY < 40;
-    if (!gentle || idle) doSearch(true, { keepView: true });
+    // Auto-sync (gentle) only redraws when the visible set actually changed and
+    // the user is idle at the top of the list; an explicit refresh always does.
+    if (!gentle || (changed && idle)) doSearch(true, { keepView: true });
   }
 }
 

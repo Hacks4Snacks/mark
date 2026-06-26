@@ -5,7 +5,7 @@
 
 import { api } from "./api.js";
 import { state } from "./state.js";
-import { $, $$, esc, fmtCost, srcMeta } from "./utils.js";
+import { $, $$, esc, srcMeta } from "./utils.js";
 
 export async function loadStats() {
   const s = await api("/api/stats");
@@ -15,15 +15,10 @@ export async function loadStats() {
     { n: s.files ?? 0, l: "files" },
     { n: s.tags ?? 0, l: "topics" },
   ];
-  const cost = s.total_cost_usd != null
-    ? `<div class="stat-card cost" style="grid-column:1/-1">
-         <div class="n">~${fmtCost(s.total_cost_usd)}</div>
-         <div class="l">est. spend · ${s.premium_requests || 0} premium reqs</div>
-       </div>`
-    : "";
+  // Spend now lives on the dedicated Usage page, so the sidebar stays a clean
+  // set of count cards.
   $("#statCards").innerHTML =
-    cards.map((c) => `<div class="stat-card"><div class="n">${c.n}</div><div class="l">${c.l}</div></div>`).join("") +
-    cost;
+    cards.map((c) => `<div class="stat-card"><div class="n">${c.n}</div><div class="l">${c.l}</div></div>`).join("");
   return s;
 }
 

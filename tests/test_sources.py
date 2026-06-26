@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from mark.sources import IMPORT_SOURCES, WATCHED_SOURCES
+from mark.sources import IMPORT_SOURCES, WATCHED_SOURCES, vscode
 from mark.sources.chatgpt import ChatGptSource
 
 
@@ -24,7 +24,10 @@ def _sample_export() -> bytes:
                 "message": {
                     "author": {"role": "user"},
                     "create_time": 1700000000,
-                    "content": {"content_type": "text", "parts": ["How do I refresh a token?"]},
+                    "content": {
+                        "content_type": "text",
+                        "parts": ["How do I refresh a token?"],
+                    },
                 },
             },
             "n2": {
@@ -36,7 +39,9 @@ def _sample_export() -> bytes:
                     "create_time": 1700000050,
                     "content": {
                         "content_type": "text",
-                        "parts": ["Call the refresh endpoint:\n```bash\ncurl /refresh\n```"],
+                        "parts": [
+                            "Call the refresh endpoint:\n```bash\ncurl /refresh\n```"
+                        ],
                     },
                 },
             },
@@ -91,3 +96,94 @@ def test_source_registry_is_well_formed():
         cfg = s.default_config()
         assert cfg.key == s.key
     assert any(i.key == "chatgpt" for i in IMPORT_SOURCES)
+
+
+def _write_jsonl(path, events):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+
+
+def test_vscode_jsonl_reconstructs_streamed_turns(tmp_path):
+    """Newer VS Code chats are an append log: a kind=0 snapshot (empty), kind=2
+    request appends, and kind=2 response-part batches streamed afterwards."""
+    path = tmp_path / "workspaceStorage" / "ws1" / "chatSessions" / "s.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {
+                "kind": 0,
+                "v": {
+                    "version": 3,
+                    "sessionId": "sess-xyz",
+                    "creationDate": 1772045863205,
+                    "responderUsername": "GitHub Copilot",
+                    "requests": [],
+                },
+            },
+            {
+                "kind": 2,
+                "v": [
+                    {
+                        "requestId": "request_1",
+                        "timestamp": 1772045870000,
+                        "message": {"text": "how do I refresh a token?"},
+                        "response": [
+                            {"kind": "mcpServersStarting", "didStartServerIds": []}
+                        ],
+                    }
+                ],
+            },
+            # Assistant answer streams as a standalone response-part batch.
+            {
+                "kind": 2,
+                "v": [
+                    {
+                        "kind": None,
+                        "id": "p1",
+                        "value": "Call the refresh endpoint and handle 401.",
+                    }
+                ],
+            },
+            {"kind": 1, "v": "positional scalar we intentionally ignore"},
+        ],
+    )
+    s = vscode.parse_session(path, {})
+    assert s is not None
+    assert s["id"] == "sess-xyz"
+    assert len(s["turns"]) == 1
+    turn = s["turns"][0]
+    assert turn["user_message"] == "how do I refresh a token?"
+    assert "refresh endpoint" in turn["assistant_response"]
+
+
+def test_vscode_legacy_json_still_parses(tmp_path):
+    """The old whole-file ``.json`` format must keep working unchanged."""
+    path = tmp_path / "workspaceStorage" / "ws1" / "chatSessions" / "s.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "sessionId": "legacy-1",
+                "creationDate": 1772045863205,
+                "requests": [
+                    {"message": {"text": "hello"}, "response": [{"value": "hi there"}]}
+                ],
+            }
+        )
+    )
+    s = vscode.parse_session(path, {})
+    assert s is not None and s["id"] == "legacy-1"
+    assert s["turns"][0]["assistant_response"] == "hi there"
+
+
+def test_vscode_discovers_jsonl_and_empty_window(tmp_path):
+    """Discovery must find ``.json``/``.jsonl`` workspace chats and empty-window chats."""
+    ws = tmp_path / "workspaceStorage"
+    (ws / "w1" / "chatSessions").mkdir(parents=True)
+    (ws / "w1" / "chatSessions" / "a.json").write_text("{}")
+    (ws / "w1" / "chatSessions" / "b.jsonl").write_text("{}")
+    ew = tmp_path / "globalStorage" / "emptyWindowChatSessions"
+    ew.mkdir(parents=True)
+    (ew / "c.jsonl").write_text("{}")
+    found = {p.name for p in vscode.iter_session_paths([ws])}
+    assert {"a.json", "b.jsonl", "c.jsonl"} <= found

@@ -133,10 +133,15 @@ def ingest_all(
             vac.execute("VACUUM")
         finally:
             vac.close()
-    db.set_meta("last_ingest", datetime.now(timezone.utc).isoformat())
 
     result = {"added": 0, "updated": 0, "skipped": 0}
     result.update(counts)
+    # Only advance the change marker when the visible index actually changed.
+    # Otherwise the UI's live-refresh fires on no-op syncs: the Copilot CLI's
+    # live WAL database, a touched mtime, or an unchanged re-scan all churn the
+    # source fingerprint without adding or updating a single session.
+    if result.get("added") or result.get("updated"):
+        db.set_meta("last_ingest", datetime.now(timezone.utc).isoformat())
     return result
 
 

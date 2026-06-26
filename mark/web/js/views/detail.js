@@ -96,7 +96,7 @@ function renderDetail(s) {
   const attachments = (s.attachments || []);
   if (attachments.length) {
     asideBlocks.push(`<div><h4>Attachments (${attachments.length})</h4><div class="aside-files">${
-      attachments.map((a, i) => `<a class="aside-file" href="#att-${i}" title="${esc(a.filename || "")}">📎 ${esc(a.filename || "file")}</a>`).join("")
+      attachments.map((a, i) => `<a class="aside-file" href="#att-${i}" data-att="${i}" title="${esc(a.filename || "")}">📎 ${esc(a.filename || "file")}</a>`).join("")
     }</div></div>`);
   }
 
@@ -158,6 +158,14 @@ function renderDetail(s) {
     b.addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(b.dataset.copy); toast("Copied"); }
       catch (_) { toast("Copy failed", true); }
+    })
+  );
+  // Jump to (and expand) an attachment without touching the hash router.
+  $$("#detailView .aside-file[data-att]").forEach((a) =>
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      const el = $("#att-" + a.dataset.att);
+      if (el) { el.open = true; el.scrollIntoView({ behavior: "smooth", block: "start" }); }
     })
   );
   $("#topicAdd")?.addEventListener("submit", async (e) => {

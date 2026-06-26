@@ -13,6 +13,9 @@ import { showAsk } from "./views/ask.js";
 import { openCollection, showCollections } from "./views/collections.js";
 
 export function routeFromHash() {
+  // In-page anchors (e.g. "#att-2" to jump to an attachment) are not app
+  // routes; ignore them so they never fall through to the list view.
+  if (location.hash && !location.hash.startsWith("#/")) return;
   if (location.hash === "#/library") {
     if (state.view !== "library") showLibrary({ fromHash: true });
     return;

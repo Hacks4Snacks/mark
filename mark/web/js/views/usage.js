@@ -33,17 +33,25 @@ export async function loadUsage() {
 function renderUsage(d) {
   const t = d.totals || {};
   const cards = [
-    ["Total spend", fmtCost(t.cost || 0)],
-    ["Premium requests", (t.premium || 0).toLocaleString()],
-    ["AIU", (t.aiu || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })],
-    ["Tokens", `${fmtTokens(t.input_tokens)} in · ${fmtTokens(t.output_tokens)} out`],
-    ["Sessions", (t.sessions || 0).toLocaleString()],
+    ["Total spend", fmtCost(t.cost || 0),
+      "Estimated from public model list prices. Sources that don't report token usage are approximated from text length, and local models count as free — treat this as a ballpark, not a bill."],
+    ["Premium requests", (t.premium || 0).toLocaleString(),
+      "Premium (paid-model) requests counted against a GitHub Copilot plan's monthly allowance. Sources that don't report this are omitted."],
+    ["AIU", (t.aiu || 0).toLocaleString(undefined, { maximumFractionDigits: 0 }),
+      "AI Units — GitHub Copilot's metering unit for premium models: each request counts as the model's multiplier (e.g. 1× or 3×) in AIU."],
+    ["Tokens", `${fmtTokens(t.input_tokens)} in · ${fmtTokens(t.output_tokens)} out`,
+      "Input and output tokens summed across sessions that report usage. Estimated counts are included where exact numbers aren't available."],
+    ["Sessions", (t.sessions || 0).toLocaleString(),
+      "Conversations included in these totals (automation runs are excluded unless you toggle them on)."],
   ];
-  const stats = cards.map(([k, v]) =>
-    `<div class="usage-stat"><div class="us-val">${v}</div><div class="us-key">${k}</div></div>`
+  const stats = cards.map(([k, v, hint]) =>
+    `<div class="usage-stat"><div class="us-val">${v}</div><div class="us-key">${esc(k)}${
+      hint ? ` <span class="us-info" tabindex="0" role="img" aria-label="${esc(hint)}" title="${esc(hint)}">ⓘ</span>` : ""
+    }</div></div>`
   ).join("");
   return `
     <div class="usage-stats">${stats}</div>
+    <p class="usage-caption">Spend and token figures are best-effort estimates — not every source reports usage, so totals can undercount. Hover ⓘ for details.</p>
     ${usageColChart(d.by_day || [])}
     <div class="usage-grid">
       ${usageBars("By model", d.by_model || [], "model")}
