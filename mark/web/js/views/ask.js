@@ -23,7 +23,7 @@ export async function showAsk(opts = {}) {
   state.view = "ask";
   state.currentId = null;
   teardownReading();
-  const apply = () => { setLayoutWide(false); showOnly("#askView"); };
+  const apply = () => { setLayoutWide(true); showOnly("#askView"); };
   if (leaving) withTransition(apply);
   else apply();
   if (!opts.fromHash) location.hash = "#/ask";

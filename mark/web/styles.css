@@ -618,11 +618,11 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .ask-ex { text-align: left; background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px; padding: 9px 14px; color: var(--text); font-size: 13px; cursor: pointer; transition: all var(--speed); }
 .ask-ex:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); transform: translateY(-1px); box-shadow: var(--shadow); }
 .ask-form { display: flex; gap: 10px; align-items: stretch; margin-bottom: 14px; }
-#askInput { flex: 1; resize: vertical; min-height: 46px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px; padding: 12px 14px; color: var(--text); font-size: 14px; font-family: inherit; line-height: 1.5; }
+#askInput { flex: 1 1 0; min-width: 0; resize: vertical; min-height: 46px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px; padding: 12px 14px; color: var(--text); font-size: 14px; font-family: inherit; line-height: 1.5; }
 #askInput:focus { outline: none; border-color: var(--accent); }
-.ask-form .btn { align-self: stretch; padding: 0 22px; }
-.ask-limit { align-self: stretch; background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px; padding: 0 12px; color: var(--muted); font-size: 13px; cursor: pointer; }
-.ask-limit:focus { outline: none; border-color: var(--accent); }
+.ask-form .btn { flex: none; align-self: stretch; padding: 0 22px; white-space: nowrap; }
+.ask-form .ask-limit { flex: none; width: auto; min-width: 7.5em; align-self: stretch; background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px; padding: 0 12px; color: var(--muted); font-size: 13px; cursor: pointer; }
+.ask-form .ask-limit:focus { outline: none; border-color: var(--accent); }
 .ask-status { border: 1px solid var(--border); background: var(--surface-2); border-radius: 11px; padding: 14px 16px; color: var(--muted); font-size: 13px; line-height: 1.6; margin-bottom: 16px; }
 .ask-status a { color: var(--accent); }
 .ask-status code { font-family: var(--mono); font-size: 12px; background: var(--chip); padding: 1px 6px; border-radius: 5px; }

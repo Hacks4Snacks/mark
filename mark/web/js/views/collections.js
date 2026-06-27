@@ -26,6 +26,14 @@ let memberSort = "recent";
 
 const collIconOf = (c) => (c && c.icon) || "\u25A6";
 
+// Collections store either a Lucide-style icon name (e.g. "flame") or a short emoji/symbol.
+function collIconHTML(raw, { size = 22 } = {}) {
+  const val = (raw || "").trim();
+  if (!val) return esc("\u25A6");
+  if (/^[a-z][a-z0-9-]*$/.test(val)) return icon(val, { size });
+  return esc(val);
+}
+
 function collAccentClass(color) {
   return color && COLL_COLORS.has(color) ? `coll-accent-${color}` : "";
 }
@@ -238,7 +246,7 @@ function collectionCardHTML(c) {
   const preview = auto ? `<div class="coll-card-rules">${rulePreviewHTML(c.rule, 2)}</div>` : "";
   return `<div class="coll-card ${accent}${pinned ? " coll-card-pinned" : ""}" data-id="${esc(c.id)}">
     <button type="button" class="coll-pin-btn${pinned ? " on" : ""}" data-id="${esc(c.id)}" data-pinned="${pinned ? "1" : "0"}" title="${pinned ? "Unpin" : "Pin to top"}" aria-label="${pinned ? "Unpin collection" : "Pin collection"}">${icon("star", { size: 14 })}</button>
-    <div class="coll-card-icon">${esc(collIconOf(c))}</div>
+    <div class="coll-card-icon">${collIconHTML(c.icon)}</div>
     <div class="coll-card-body">
       <h3>${esc(c.name)}</h3>
       ${c.description ? `<p class="coll-card-desc">${esc(c.description)}</p>` : ""}
@@ -356,7 +364,7 @@ function renderCollection(c) {
           <button class="btn btn-ghost" id="collDelete" title="Delete this collection">${icon("trash")} Delete</button>
         </div>
       </div>
-      <h1><span class="coll-title-icon ${accent}">${esc(collIconOf(c))}</span> ${esc(c.name)}</h1>
+      <h1><span class="coll-title-icon ${accent}">${collIconHTML(c.icon)}</span> ${esc(c.name)}</h1>
       ${c.description ? `<p class="detail-summary">${esc(c.description)}</p>` : ""}
     </div>
 
@@ -702,7 +710,7 @@ export async function openCollMenu(anchor, sessionId) {
     ? items.map((c) =>
       `<button class="cm-item${c.member ? " on" : ""}" data-id="${esc(c.id)}">
         <span class="cm-mark">${c.member ? icon("check", { size: 14 }) : icon("plus", { size: 14 })}</span>
-        ${collMenuDot(c)}<span class="cm-name">${c.pinned ? icon("star", { size: 12 }) : ""}${esc(collIconOf(c))} ${esc(c.name)}</span>
+        ${collMenuDot(c)}<span class="cm-name">${c.pinned ? icon("star", { size: 12 }) : ""}${collIconHTML(c.icon, { size: 14 })} ${esc(c.name)}</span>
       </button>`
     ).join("")
     : `<div class="cm-empty muted">No collections yet</div>`;

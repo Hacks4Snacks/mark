@@ -12,6 +12,10 @@
   <img alt="Runs locally" src="https://img.shields.io/badge/data-100%25%20local-success.svg" />
 </p>
 
+<p align="center">
+  <img src="docs/images/search.png" width="820" alt="Mark — searching your AI coding history" />
+</p>
+
 Mark turns the AI coding history already stored on your machine into a
 **beautiful, searchable knowledge base**, so you never lose a useful
 conversation again. It indexes several sources automatically:
@@ -28,6 +32,7 @@ so your conversations never leave your machine.
 ## Contents
 
 - [Why it's better than Ctrl-F](#why-its-better-than-ctrl-f)
+- [Screenshots](#screenshots)
 - [Quick start](#quick-start)
 - [Requirements](#requirements)
 - [Documentation](#documentation)
@@ -56,6 +61,14 @@ so your conversations never leave your machine.
 - **Faceted browse:** filter by repository, topic, source, and recency.
 - **Files, code & tools:** see which files a session touched, the code blocks,
   and which tools ran.
+
+## Screenshots
+
+|                                                                           |                                                                                        |
+|---------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
+| [![Search & library](docs/images/search.png)](docs/images/search.png)     | [![Semantic search](docs/images/semantic-search.png)](docs/images/semantic-search.png) |
+| [![Usage & cost dashboard](docs/images/usage.png)](docs/images/usage.png) | [![Collections](docs/images/collections.png)](docs/images/collections.png)             |
+| [![Conversation detail](docs/images/detail.png)](docs/images/detail.png)  | [![Ask your history](docs/images/ask.png)](docs/images/ask.png)                        |
 
 ## Quick start
 
@@ -291,8 +304,20 @@ python -m ruff check mark tests
 python -m pytest -q
 ```
 
+**Demo data.** To populate a throwaway archive with realistic fake conversations
+(for screenshots or trying things out, without touching your real `~/.mark`):
+
+```bash
+python scripts/seed_demo_data.py              # seeds a demo archive in ~/.mark-demo
+MARK_DATA_DIR=~/.mark-demo python -m mark     # or:  mark  (if it's on your PATH)
+```
+
+The demo archive redirects your real chat sources to a non-existent path, so
+launching it never imports your private conversations. Then open
+<http://127.0.0.1:8765>.
+
 Issues and pull requests are welcome at
-<https://github.com/graymark/markive>.
+<https://github.com/Hacks4Snacks/markive>.
 
 ## License
 

@@ -9,6 +9,14 @@ archive of every AI coding chat (the package is named `markive`; run it with the
 These pages go deeper than the [project README](../README.md). Start with
 **Getting started**, then dip into whichever feature you need.
 
+## Screenshots
+
+|                                                                 |                                                                              |
+|-----------------------------------------------------------------|------------------------------------------------------------------------------|
+| [![Search & library](images/search.png)](images/search.png)     | [![Semantic search](images/semantic-search.png)](images/semantic-search.png) |
+| [![Usage & cost dashboard](images/usage.png)](images/usage.png) | [![Collections](images/collections.png)](images/collections.png)             |
+| [![Conversation detail](images/detail.png)](images/detail.png)  | [![Ask your history](images/ask.png)](images/ask.png)                        |
+
 ## Contents
 
 | Guide                                             | What it covers                                                                   |
