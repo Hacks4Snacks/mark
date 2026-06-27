@@ -628,3 +628,38 @@ def test_ingest_all_skips_unchanged_source(monkeypatch):
     ingest.ingest_all(do_embed=False)
     ingest.ingest_all(do_embed=False)
     assert calls["n"] == 1  # second pass skipped: fingerprint unchanged
+
+
+def test_snapshot_sqlite_falls_back_to_filecopy(tmp_path, monkeypatch):
+    """When the source can't be opened read-only (a WAL DB on a read-only mount),
+    snapshot_sqlite falls back to a filesystem copy that is still readable."""
+    import sqlite3 as _sqlite3
+
+    from mark import config
+    from mark.sources import base
+
+    src = tmp_path / "store.vscdb"
+    con = _sqlite3.connect(src)
+    con.execute("CREATE TABLE t (k TEXT, v TEXT)")
+    con.execute("INSERT INTO t VALUES ('a', '1')")
+    con.commit()
+    con.close()
+
+    real_connect = _sqlite3.connect
+
+    def fake_connect(target, *args, **kwargs):
+        if isinstance(target, str) and "mode=ro" in target:
+            raise _sqlite3.OperationalError("unable to open database file")
+        return real_connect(target, *args, **kwargs)
+
+    monkeypatch.setattr(base.sqlite3, "connect", fake_connect)
+
+    dest = config.DATA_DIR / "_snap_test.db"
+    base.snapshot_sqlite(src, dest)
+    con = real_connect(dest)
+    try:
+        assert con.execute("SELECT v FROM t WHERE k = 'a'").fetchone()[0] == "1"
+    finally:
+        con.close()
+    base.cleanup_snapshot(dest)
+    assert not dest.exists()

@@ -14,11 +14,13 @@ from .base import (
     URL_RE,
     ProgressCb,
     WatchedSource,
+    cleanup_snapshot,
     compute_cost,
     derive_title,
     epoch_ms_to_iso,
     estimate_metrics,
     friendly_repo,
+    snapshot_sqlite,
     turns_duration,
     uri_to_path,
 )
@@ -429,8 +431,13 @@ class CursorSource(WatchedSource):
             sp = str(store)
             if not rebuild and sigs.get(f"cursor:{sp}") == store_sig[sp]:
                 continue
-            con = _ro_connect(store)
-            if con is None:
+            snapshot = snapshot_sqlite(
+                store, config.DATA_DIR / "_cursor_store_snapshot.db"
+            )
+            try:
+                con = sqlite3.connect(snapshot)
+            except sqlite3.Error:
+                cleanup_snapshot(snapshot)
                 continue
             try:
                 for key in list(_composer_keys(con)):
@@ -471,5 +478,6 @@ class CursorSource(WatchedSource):
                         progress(f"Indexed {seen} Cursor conversations...")
             finally:
                 con.close()
+                cleanup_snapshot(snapshot)
             record_file_signature(cur, f"cursor:{sp}", store_sig[sp])
         return counts

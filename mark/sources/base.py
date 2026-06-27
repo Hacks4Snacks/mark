@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import shutil
+import sqlite3
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
@@ -14,6 +16,44 @@ ProgressCb = Callable[[str], None]
 
 FENCE_RE = re.compile(r"```([\w+-]*)\n(.*?)```", re.DOTALL)
 URL_RE = re.compile(r"https?://[^\s)>\]]+")
+
+
+def snapshot_sqlite(src: Path, dest: Path) -> Path:
+    """Copy a possibly live or locked SQLite store to ``dest`` for safe reading.
+
+    Prefers SQLite's online backup from a read-only handle; falls back to a raw
+    copy of the database and its ``-wal`` sidecar when the source can't be opened
+    read-only — a WAL database on a read-only bind mount fails that way. Callers
+    open ``dest`` (a private copy they own) and remove it with
+    :func:`cleanup_snapshot` when done.
+    """
+    config.ensure_dirs()
+    cleanup_snapshot(dest)
+    try:
+        source = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+        try:
+            target = sqlite3.connect(dest)
+            try:
+                source.backup(target)
+            finally:
+                target.close()
+        finally:
+            source.close()
+    except sqlite3.Error:
+        # The online backup must open the source read-only; a WAL store on a
+        # read-only mount can't, so fall back to a filesystem copy (SQLite
+        # replays the copied -wal when the private copy is opened read-write).
+        for suffix in ("", "-wal"):
+            part = Path(f"{src}{suffix}")
+            if part.exists():
+                shutil.copy2(part, Path(f"{dest}{suffix}"))
+    return dest
+
+
+def cleanup_snapshot(dest: Path) -> None:
+    """Delete a snapshot DB created by :func:`snapshot_sqlite` and its sidecars."""
+    for suffix in ("", "-wal", "-shm"):
+        Path(f"{dest}{suffix}").unlink(missing_ok=True)
 
 
 class WatchedSource(ABC):

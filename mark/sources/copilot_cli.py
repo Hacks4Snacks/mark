@@ -15,11 +15,13 @@ from .base import (
     URL_RE,
     ProgressCb,
     WatchedSource,
+    cleanup_snapshot,
     compute_cost,
     derive_title,
     epoch_ms_to_iso,
     estimate_metrics,
     repo_from_cwd,
+    snapshot_sqlite,
     ts_diff_seconds,
     uri_to_path,
 )
@@ -154,21 +156,8 @@ def _live_session_signatures(src: Path, state_dir: Path) -> dict[str, str] | Non
 
 
 def _snapshot_store(src: Path) -> Path:
-    """Read a consistent snapshot of the (possibly live) store via SQLite backup."""
-    config.ensure_dirs()
-    dest = config.DATA_DIR / "_copilot_store_snapshot.db"
-    for suffix in ("", "-wal", "-shm"):
-        Path(str(dest) + suffix).unlink(missing_ok=True)
-    source = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
-    try:
-        target = sqlite3.connect(dest)
-        try:
-            source.backup(target)
-        finally:
-            target.close()
-    finally:
-        source.close()
-    return dest
+    """Read a consistent snapshot of the (possibly live) store for safe reading."""
+    return snapshot_sqlite(src, config.DATA_DIR / "_copilot_store_snapshot.db")
 
 
 def _cli_turns(ro: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
@@ -536,6 +525,5 @@ class CopilotCliSource(WatchedSource):
                     progress(f"Indexed {seen} Copilot CLI sessions...")
         finally:
             ro.close()
-            for suffix in ("", "-wal", "-shm"):
-                Path(str(snapshot) + suffix).unlink(missing_ok=True)
+            cleanup_snapshot(snapshot)
         return counts
