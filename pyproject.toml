@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 # tool, command, import package, and brand are all "Mark".
 [project]
 name = "markive"
-version = "0.2.0"
+version = "0.1.0"
 description = "Mark — Multi-session AI Recall Keeper: a local, private, searchable archive of your AI coding chats with hybrid semantic search."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -60,8 +60,8 @@ markive = "mark.main:main"
 markive-mcp = "mark.mcp_server:main"
 
 [project.urls]
-Homepage = "https://github.com/graymark/markive"
-Issues = "https://github.com/graymark/markive/issues"
+Homepage = "https://github.com/hacks4snacks/mark"
+Issues = "https://github.com/hacks4snacks/mark/issues"
 
 [tool.setuptools]
 packages = [

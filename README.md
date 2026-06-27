@@ -295,8 +295,8 @@ your source conversations are untouched.
 ## Contributing
 
 ```bash
-git clone https://github.com/Hacks4Snacks/markive
-cd markive
+git clone https://github.com/Hacks4Snacks/mark
+cd mark
 ./run.sh                         # creates a venv and launches
 
 # lint & test
@@ -304,20 +304,8 @@ python -m ruff check mark tests
 python -m pytest -q
 ```
 
-**Demo data.** To populate a throwaway archive with realistic fake conversations
-(for screenshots or trying things out, without touching your real `~/.mark`):
-
-```bash
-python scripts/seed_demo_data.py              # seeds a demo archive in ~/.mark-demo
-MARK_DATA_DIR=~/.mark-demo python -m mark     # or:  mark  (if it's on your PATH)
-```
-
-The demo archive redirects your real chat sources to a non-existent path, so
-launching it never imports your private conversations. Then open
-<http://127.0.0.1:8765>.
-
 Issues and pull requests are welcome at
-<https://github.com/Hacks4Snacks/markive>.
+<https://github.com/Hacks4Snacks/mark>.
 
 ## License
 
