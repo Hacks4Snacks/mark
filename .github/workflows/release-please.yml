@@ -18,7 +18,7 @@ jobs:
     name: Maintain release PR & tag
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         with:
           # release-please opens/updates a "release PR" that bumps the version
           # and CHANGELOG from Conventional Commits. Merging it creates the
