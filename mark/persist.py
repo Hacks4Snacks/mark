@@ -73,6 +73,19 @@ def write_session(cur, session: dict[str, Any]) -> None:
     # survive the row being replaced — otherwise a re-scan would unhide it.
     prior = cur.execute("SELECT hidden FROM sessions WHERE id = ?", (sid,)).fetchone()
     was_hidden = bool(prior["hidden"]) if prior else False
+    # Re-indexing replaces the row, cascading away its chunks and their vectors.
+    # For an actively-growing session that would re-embed identical text on every
+    # pass, so snapshot existing vectors keyed by chunk content and carry them
+    # onto the rebuilt chunks below; only genuinely new content then re-embeds.
+    preserved_vectors: dict[str, tuple[str, int, bytes]] = {
+        row["content"]: (row["model"], row["dim"], row["vector"])
+        for row in cur.execute(
+            "SELECT c.content, e.model, e.dim, e.vector "
+            "FROM chunks c JOIN embeddings e ON e.chunk_id = c.id "
+            "WHERE c.session_id = ?",
+            (sid,),
+        )
+    }
     # Replace any prior copy of this session (cascades to children).
     cur.execute("DELETE FROM sessions WHERE id = ?", (sid,))
     cur.execute("DELETE FROM search_index WHERE session_id = ?", (sid,))
@@ -174,7 +187,17 @@ def write_session(cur, session: dict[str, Any]) -> None:
             "INSERT INTO chunks(session_id, source_type, turn_index, content) VALUES (?,?,?,?)",
             (sid, "turn", turn_index, piece),
         )
-        chunk_rows.append((cur.lastrowid, piece))
+        chunk_id = cur.lastrowid
+        chunk_rows.append((chunk_id, piece))
+        # Carry an unchanged chunk's existing vector onto its rebuilt row so a
+        # re-index doesn't pay to recompute an identical embedding.
+        keep = preserved_vectors.get(piece)
+        if keep is not None:
+            cur.execute(
+                "INSERT OR REPLACE INTO embeddings(chunk_id, session_id, model, dim, vector) "
+                "VALUES (?,?,?,?,?)",
+                (chunk_id, sid, keep[0], keep[1], keep[2]),
+            )
 
     # Session-level file references (e.g. from the Copilot CLI store).
     for path, tool, turn_index in session.get("extra_files", []):

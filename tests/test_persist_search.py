@@ -42,3 +42,39 @@ def test_semantic_search_over_embedded_note():
     )
     res = search.search("token timeout", mode="semantic")
     assert any(r["id"] == sid for r in res)
+
+
+def test_reindex_preserves_embeddings_for_unchanged_chunks(make_session):
+    """Re-indexing a session carries existing chunk vectors over instead of
+    deleting them and forcing a re-embed of identical content."""
+    from mark import db, persist
+
+    session = make_session(sid="grow")
+    with db.connect() as conn:
+        cur = conn.cursor()
+        persist.write_session(cur, session)
+        chunks = cur.execute(
+            "SELECT id, content FROM chunks WHERE session_id = 'grow'"
+        ).fetchall()
+        assert chunks  # sanity: the session produced chunks
+        for c in chunks:
+            cur.execute(
+                "INSERT INTO embeddings(chunk_id, session_id, model, dim, vector) "
+                "VALUES (?,?,?,?,?)",
+                (c["id"], "grow", "test-model", 3, b"\x00\x00\x80?" * 3),
+            )
+        conn.commit()
+        embedded = {c["content"] for c in chunks}
+
+        # Re-index the same session (a churn pass) with identical content.
+        persist.write_session(cur, session)
+        conn.commit()
+        kept = {
+            r["content"]
+            for r in cur.execute(
+                "SELECT c.content FROM chunks c "
+                "JOIN embeddings e ON e.chunk_id = c.id "
+                "WHERE c.session_id = 'grow'"
+            )
+        }
+    assert kept == embedded  # every unchanged chunk kept its vector

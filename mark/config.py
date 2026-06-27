@@ -145,13 +145,47 @@ EMBED_MODEL = os.environ.get("MARK_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 # Dimension used by the always-available built-in hashing vectorizer fallback.
 HASH_EMBED_DIM = int(os.environ.get("MARK_HASH_DIM", "1024"))
 
+
 # Cap CPU used by the transformer embedding backend so a first-time index of a
 # large history doesn't peg every core during ingest. fastembed/ONNX otherwise
 # spread inference across all logical CPUs; default to half, leaving headroom for
 # the user's foreground work. Set MARK_EMBED_THREADS=0 to use all cores (fastest).
+def _cgroup_cpu_limit() -> float | None:
+    """Effective CPU count from this container's cgroup quota, if any.
+
+    ``os.cpu_count()`` reports the host's logical CPUs and ignores a container CPU
+    limit, so in a constrained container the embedding backend would size its
+    thread pool to the host and oversubscribe. Reads the cgroup v2 (then v1)
+    quota; returns ``None`` when unconstrained or unreadable (e.g. macOS/Windows).
+    """
+    try:
+        raw = Path("/sys/fs/cgroup/cpu.max").read_text().split()
+        if raw and raw[0] != "max":
+            quota = int(raw[0])
+            period = int(raw[1]) if len(raw) > 1 else 100000
+            if quota > 0 and period > 0:
+                return quota / period
+    except (OSError, ValueError):
+        pass
+    try:
+        quota = int(Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read_text())
+        period = int(Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text())
+        if quota > 0 and period > 0:
+            return quota / period
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _default_embed_threads() -> int:
+    host = os.cpu_count() or 2
+    limit = _cgroup_cpu_limit()
+    effective = min(host, limit) if limit else host
+    return max(1, int(effective) // 2)
+
+
 EMBED_THREADS = max(
-    0,
-    int(os.environ.get("MARK_EMBED_THREADS", str(max(1, (os.cpu_count() or 2) // 2)))),
+    0, int(os.environ.get("MARK_EMBED_THREADS", str(_default_embed_threads())))
 )
 
 # Max characters per search chunk (the window size used to split long turns).
