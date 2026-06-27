@@ -7,7 +7,7 @@ fastembed>=0.3
 
 # Static distilled embeddings — tiny + fast, good fallback if fastembed is
 # unavailable for your Python version.
-model2vec>=0.3
+model2vec>=0.8.2
 
 # Richer uploads: extract text from PDFs.
 pypdf>=4.0
