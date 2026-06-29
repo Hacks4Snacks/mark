@@ -167,10 +167,6 @@ def repo_from_cwd(repository: str | None, cwd: str | None) -> str | None:
     if cwd == str(Path.home()):
         return None
     parts = [p for p in cwd.split("/") if p]
-    if "microsoft" in parts:
-        i = parts.index("microsoft")
-        if i + 1 < len(parts):
-            return parts[i + 1]
     return parts[-1] if parts else None
 
 

@@ -38,20 +38,29 @@ The shipped file is preset for **macOS + VS Code (Stable)**. Only edit the **hos
 | Linux            | `${HOME}/.config/Code/User/...`                        |
 | Windows          | `%APPDATA%/Code/User/...` (use WSL paths under Docker) |
 
-Cursor mounts are included and optional — remove them if you don't use Cursor.
+Cursor and Claude Code mounts are included and optional — remove them if you
+don't use those tools. Claude Code's store (`${HOME}/.claude/projects`) is at the
+same host path on macOS and Linux.
 
 ## Optional tuning
 
-Uncomment the `environment:` block in `docker-compose.yml` to tune indexing:
+Embedding builds search vectors on first run, and that one-time pass is the only
+CPU-heavy part of indexing (parsing is cheap). By default the transformer backend
+uses only **about a quarter of your cores (capped at 4)**, so it stays in the
+background instead of pegging the machine — it just takes a little longer. This
+is most noticeable right after you enable a large source like Claude Code.
+
+To tune it, uncomment the `environment:` block in `docker-compose.yml`:
 
 ```yaml
 environment:
+  # Embedding CPU cap. "0" = all cores (fastest); a low number = gentler/slower.
+  MARK_EMBED_THREADS: "2"
   # Cap on embedded chunks per session (keyword/FTS still indexes all chunks).
-  MARK_MAX_EMBED_CHUNKS_PER_SESSION: "40"
-  # Embedding CPU cap while indexing. Default = half your cores; "0" = all.
-  MARK_EMBED_THREADS: "4"
+  # MARK_MAX_EMBED_CHUNKS_PER_SESSION: "40"
 ```
 
+Incremental syncs only embed newly added turns, so they stay cheap regardless.
 See the full [configuration reference](configuration.md) for every variable.
 
 ## Advanced source config

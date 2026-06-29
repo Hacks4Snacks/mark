@@ -23,14 +23,15 @@ services:
     # Bind to localhost on the host only — this is a personal app.
     ports:
       - "127.0.0.1:8765:8765"
-    # No source paths to configure: the read-only mounts below land exactly
-    # where mark auto-detects them. Uncomment only for optional tuning.
+    # No source paths to configure: the read-only mounts below land exactly where
+    # mark auto-detects them. Embedding already defaults to a small share of your
+    # cores (~a quarter, capped at 4) so the one-time first-run index stays in the
+    # background instead of pegging the machine. Uncomment to tune: raise the cap
+    # for a faster initial index, or "0" to use all cores.
     # environment:
+    #   MARK_EMBED_THREADS: "2"
     #   # Cap on embedded chunks per session (keyword/FTS indexes all chunks).
     #   MARK_MAX_EMBED_CHUNKS_PER_SESSION: "40"
-    #   # Embedding CPU cap: threads the transformer backend uses while indexing.
-    #   # Default = half your cores; "0" uses all (fastest, but hotter/louder).
-    #   MARK_EMBED_THREADS: "4"
     volumes:
       - mark-data:/app/data
       # --- your conversation sources, mounted READ-ONLY onto the in-container
@@ -41,6 +42,9 @@ services:
       # --- Cursor (optional): composer/chat history + repo mapping ---
       - "${HOME}/Library/Application Support/Cursor/User/globalStorage:/home/mark/.config/Cursor/User/globalStorage:ro"
       - "${HOME}/Library/Application Support/Cursor/User/workspaceStorage:/home/mark/.config/Cursor/User/workspaceStorage:ro"
+      # --- Claude Code (optional): CLI session transcripts (JSONL). Same host
+      #     path on macOS and Linux; only projects/ is needed (not settings/creds). ---
+      - "${HOME}/.claude/projects:/home/mark/.claude/projects:ro"
       # --- Advanced config (optional): enable/disable sources, label overrides,
       #     extra roots. Same format as a local ~/.mark/sources.toml; see
       #     sources.example.toml. Use in-container paths for any `roots` you set. ---
