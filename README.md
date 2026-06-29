@@ -7,8 +7,8 @@
 > Run it with the **`mark`** command (the package is named **`markive`**).
 
 <p align="center">
-  <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue.svg" />
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
+  <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-8b5cf6.svg" />
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-8b5cf6.svg" /></a>
   <img alt="Runs locally" src="https://img.shields.io/badge/data-100%25%20local-success.svg" />
 </p>
 

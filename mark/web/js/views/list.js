@@ -65,13 +65,7 @@ function renderResults(data, animate = true) {
   renderActiveFilters();
 
   if (!results.length) {
-    const emptyIcon = state.showHidden ? "eye-off" : state.q ? "search" : "archive";
-    const emptyMsg = state.showHidden
-      ? "No hidden sessions. Use Hide on a conversation to tuck it away here."
-      : state.q
-        ? "No conversations match. Try semantic mode or different words."
-        : "Nothing here yet \u2014 re-scan or add a note.";
-    $("#results").innerHTML = `<div class="empty"><div class="big">${icon(emptyIcon, { size: 40 })}</div>${emptyMsg}</div>`;
+    renderEmptyState();
     return;
   }
 
@@ -99,6 +93,85 @@ function renderResults(data, animate = true) {
     (hasMore ? `<button class="btn btn-block load-more" id="loadMore">Load ${PAGE_SIZE} more</button>` : "");
   wireCards();
   $("#loadMore")?.addEventListener("click", loadMore);
+}
+
+// The containerless Bookmark-M emblem, inline so empty states show the brand at scale.
+const EMBLEM = `<svg class="em-mark" viewBox="0 0 32 32" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <defs><linearGradient id="emg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="var(--accent)"/><stop offset="1" stop-color="var(--accent-2)"/></linearGradient></defs>
+  <g transform="translate(1 1) scale(0.30)">
+    <path d="M24 14 q0 -8 8 -8 h36 q8 0 8 8 v80 l-26 -17 l-26 17 z" fill="url(#emg)"/>
+    <path d="M38 60 L38 32 L50 47 L62 32 L62 60" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>`;
+
+const hasFilters = () =>
+  !!(state.source || state.repo || state.tags.size || state.dateFrom || state.dateTo);
+
+// Renders the right empty state for the situation: first-run onboarding, a
+// no-results-for-query nudge, a filters-too-narrow prompt, or the hidden bucket.
+function renderEmptyState() {
+  const box = $("#results");
+  if (state.showHidden) {
+    box.innerHTML = `<div class="empty"><div class="big">${icon("eye-off", { size: 40 })}</div>No hidden sessions. Use Hide on a conversation to tuck it away here.</div>`;
+    return;
+  }
+  if (state.q) {
+    box.innerHTML = `<div class="empty empty-rich">
+      <div class="big">${icon("search", { size: 40 })}</div>
+      <p class="em-title">No matches for \u201c${esc(state.q)}\u201d</p>
+      <p class="em-sub">Try ${state.mode !== "semantic" ? "<b>Semantic</b> mode to search by meaning, or " : ""}different words. Filters can also be narrowing your results.</p>
+      <div class="em-actions">
+        ${state.mode !== "semantic" ? `<button class="btn btn-primary" data-act="semantic">${icon("sparkles")} Search by meaning</button>` : ""}
+        <button class="btn" data-act="ask">${icon("sparkles")} Ask your history instead</button>
+        ${hasFilters() ? `<button class="btn btn-ghost" data-act="clear">Clear filters</button>` : ""}
+      </div>
+    </div>`;
+    wireEmptyActions();
+    return;
+  }
+  if (hasFilters()) {
+    box.innerHTML = `<div class="empty empty-rich">
+      <div class="big">${icon("folder", { size: 40 })}</div>
+      <p class="em-title">No conversations match these filters</p>
+      <p class="em-sub">Nothing falls inside the current source, repo, topic, or date filters.</p>
+      <div class="em-actions"><button class="btn btn-primary" data-act="clear">Clear filters</button></div>
+    </div>`;
+    wireEmptyActions();
+    return;
+  }
+  // first run — nothing indexed yet
+  const srcs = ["vscode", "cli", "cursor", "cline", "chatgpt", "copilot"];
+  box.innerHTML = `<div class="empty empty-rich">
+    ${EMBLEM}
+    <p class="em-title">Your AI memory starts here</p>
+    <p class="em-sub">Mark builds a private, searchable archive of your AI coding conversations \u2014 everything stays on your machine. Scan your history to get started, or add a note by hand.</p>
+    <div class="em-actions">
+      <button class="btn btn-primary" data-act="scan">${icon("sync")} Scan my history</button>
+      <button class="btn" data-act="add">${icon("plus")} Add a note</button>
+      <button class="btn" data-act="ask">${icon("sparkles")} Ask your history</button>
+    </div>
+    <div class="em-sources">${srcs.map((s) => `<span class="em-src">${srcMeta(s).icon} ${esc(srcMeta(s).label)}</span>`).join("")}</div>
+    <p class="em-hint">Tip: press <kbd>\u2318</kbd><kbd>K</kbd> anytime to search and jump around.</p>
+  </div>`;
+  wireEmptyActions();
+}
+
+function wireEmptyActions() {
+  $$("#results [data-act]").forEach((b) =>
+    b.addEventListener("click", () => {
+      switch (b.dataset.act) {
+        case "semantic": {
+          state.mode = "semantic";
+          $$("#modeToggle button").forEach((x) => x.classList.toggle("active", x.dataset.mode === "semantic"));
+          run();
+          break;
+        }
+        case "clear": clearAllFilters(); break;
+        case "scan": $("#reindexBtn")?.click(); break;
+        case "add": $("#addBtn")?.click(); break;
+        case "ask": $("#askBtn")?.click(); break;
+      }
+    }));
 }
 
 export function cardHTML(r, gid = "", groupSize = 1) {
