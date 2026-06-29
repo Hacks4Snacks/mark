@@ -24,7 +24,7 @@ export function routeFromHash() {
     if (state.view !== "usage") showUsage({ fromHash: true });
     return;
   }
-  if (location.hash === "#/ask") {
+  if (location.hash === "#/ask" && state.askEnabled) {
     if (state.view !== "ask") showAsk({ fromHash: true });
     return;
   }

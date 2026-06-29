@@ -68,13 +68,17 @@ format.
 | `MARK_ASK_NUM_CTX_CAP`            | `16384`                         | Ceiling on the context window requested (clamped to the model's own length)   |
 | `MARK_ASK_DEFAULT_NUM_CTX`        | `8192`                          | Fallback window when the model doesn't report a context length                |
 | `MARK_ASK_RESERVE_OUTPUT_TOKENS`  | `1024`                          | Tokens held back within the window for the answer                             |
-| `MARK_ASK_DEFAULT_SOURCES`        | `8`                             | Distinct sessions an answer may cite when unspecified (UI selector overrides) |
-| `MARK_ASK_MAX_CANDIDATE_PASSAGES` | `60`                            | Passages retrieved (and reranked) before packing into the budget              |
-| `MARK_ASK_PER_SESSION_PASSAGES`   | `3`                             | Max passages drawn from any one session                                       |
+| `MARK_ASK_MAX_CANDIDATE_PASSAGES` | `80`                            | Passages retrieved (and reranked) before packing into the budget              |
+| `MARK_ASK_PER_SESSION_PASSAGES`   | `2`                             | Max passages drawn from any one session (favours breadth across sessions)     |
 | `MARK_ASK_NEIGHBOR_TURNS`         | `1`                             | Surrounding turns included on each side of a matched passage                  |
-| `MARK_ASK_MAX_TURN_CHARS`         | `4000`                          | Cap on characters taken from a single turn when widening context              |
+| `MARK_ASK_MAX_TURN_CHARS`         | `4000`                          | Cap on characters from the matched passage itself                             |
+| `MARK_ASK_NEIGHBOR_CHARS`         | `800`                           | Cap on characters from each surrounding neighbour turn (drives breadth)       |
 | `MARK_ASK_RERANK`                 | `1`                             | Cross-encoder reranking of passages (needs `semantic` extra; `0` disables)    |
 | `MARK_RERANK_MODEL`               | `Xenova/ms-marco-MiniLM-L-6-v2` | fastembed cross-encoder used for reranking                                    |
+
+The number of **sources** an answer cites is not a fixed setting: Ask packs as
+many distinct sessions as fit the model's context window, so a larger
+`MARK_ASK_NUM_CTX_CAP` (or a roomier model) yields more sources.
 
 See [Ask your history](ask.md).
 

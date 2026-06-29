@@ -30,12 +30,21 @@ let statusTimer;
 let lastSeenIngest;        // undefined until first observation
 let lastSessionCount;      // visible-session count at last refresh
 
+// Show the topbar Ask button only when the feature is enabled. It starts hidden
+// in the markup so a disabled feature never flashes before the first status poll.
+function applyAskVisibility() {
+  const btn = $("#askBtn");
+  if (btn) btn.hidden = !state.askEnabled;
+}
+
 async function pollStatus(initial = false) {
   let running = false;
   try {
     const st = await api("/api/status");
     running = !!st.running;
     if (st.resume_cmd) state.resumeCmd = st.resume_cmd;
+    state.askEnabled = !!st.ask_enabled;
+    applyAskVisibility();
     // The spinning re-scan button is the sole sync indicator (no banner/toast).
     $("#reindexBtn").classList.toggle("spin", running);
     // The index changed (manual reindex or background auto-sync completed).
@@ -280,8 +289,10 @@ async function init() {
   paintIcons();
   setup();
   await refreshAll();
+  // Resolve status (incl. the Ask feature flag) before routing so a deep link to
+  // a disabled view is gated correctly rather than briefly rendering.
+  await pollStatus(true);
   routeFromHash();
-  pollStatus(true);
 }
 
 init();

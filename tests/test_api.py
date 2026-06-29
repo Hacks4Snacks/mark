@@ -16,6 +16,37 @@ def test_read_endpoints_ok(client):
         assert client.get(path).status_code == 200, path
 
 
+def test_ask_enabled_exposes_routes(client):
+    # The `client` fixture enables the Ask feature, so its routes are mounted
+    # and /api/status advertises it.
+    assert client.get("/api/status").json()["ask_enabled"] is True
+    assert client.get("/api/ask/status").status_code == 200
+
+
+def test_ask_disabled_by_default_hides_routes(monkeypatch):
+    # With the feature flag off (the shipped default) the ask routes are not
+    # mounted and the collection-scoped ask is guarded at request time.
+    from fastapi.testclient import TestClient
+
+    from mark import background, config
+    from mark.app import create_app
+
+    monkeypatch.setattr(background, "start", lambda: None)
+    monkeypatch.setattr(background, "stop", lambda: None)
+    monkeypatch.setattr(config, "ENABLE_ASK", False)
+
+    with TestClient(create_app()) as c:
+        assert c.get("/api/status").json()["ask_enabled"] is False
+        # The ask routes are not mounted, so requests fall through to the static
+        # mount: it 404s unknown GETs and 405s the methods it doesn't serve.
+        assert c.get("/api/ask/status").status_code == 404
+        assert c.post("/api/ask", json={"question": "hi"}).status_code in (404, 405)
+        # Collection-scoped ask stays mounted but is guarded at request time.
+        cid = c.post("/api/collections", json={"name": "Flagless"}).json()["id"]
+        r = c.post(f"/api/collections/{cid}/ask", json={"question": "hi"})
+        assert r.status_code == 404
+
+
 def test_render_endpoint():
     # Uses the module directly so it doesn't need the client fixture's lifespan.
     from mark import render

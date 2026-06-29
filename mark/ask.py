@@ -162,19 +162,25 @@ def _passage_body(
     passage: dict[str, Any],
     turns_map: dict[str, dict[int, dict[str, Any]]],
     radius: int,
-    turn_cap: int,
+    match_cap: int,
+    neighbor_cap: int,
     emitted_chunks: set[int],
     emitted_turns: set[tuple[str, int]],
 ) -> str:
     """Render one passage as context: its matched slice, widened by up to
-    ``radius`` neighbouring turns, with already-emitted text de-duplicated."""
+    ``radius`` neighbouring turns, with already-emitted text de-duplicated.
+
+    The matched slice keeps ``match_cap`` characters; each surrounding neighbour
+    turn is held to the smaller ``neighbor_cap`` so widening for context stays
+    cheap and leaves budget for more sources.
+    """
     cid = passage["chunk_id"]
     sid = passage["session_id"]
     ti = passage["turn_index"]
     emitted_chunks.add(cid)
     # Document/note chunks have no turn structure: use the chunk text as-is.
     if ti is None:
-        return _truncate(passage["content"], turn_cap)
+        return _truncate(passage["content"], match_cap)
 
     turns = turns_map.get(sid, {})
     parts: list[str] = []
@@ -182,18 +188,18 @@ def _passage_body(
     for j in range(ti - radius, ti):
         if (sid, j) in emitted_turns or j not in turns:
             continue
-        txt = _format_turn(turns[j], turn_cap)
+        txt = _format_turn(turns[j], neighbor_cap)
         if txt:
             parts.append(txt)
             emitted_turns.add((sid, j))
     # The matched slice itself (chunks are already 'User:'/'Assistant:'-prefixed).
-    parts.append(_truncate(passage["content"], turn_cap))
+    parts.append(_truncate(passage["content"], match_cap))
     emitted_turns.add((sid, ti))
     # Following context turns.
     for j in range(ti + 1, ti + radius + 1):
         if (sid, j) in emitted_turns or j not in turns:
             continue
-        txt = _format_turn(turns[j], turn_cap)
+        txt = _format_turn(turns[j], neighbor_cap)
         if txt:
             parts.append(txt)
             emitted_turns.add((sid, j))
@@ -204,18 +210,17 @@ def build_context(
     question: str,
     *,
     char_budget: int,
-    max_sessions: int,
+    max_sessions: int | None = None,
     session_ids: set[str] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Assemble a citation context from the most relevant *passages*.
 
     Retrieval is passage-level: the actual matched chunks (plus a little
     neighbouring-turn context), reranked, then packed in relevance order until
-    ``char_budget`` is exhausted. ``max_sessions`` caps how many distinct
-    sessions may be cited (breadth); depth is governed by the budget, not a fixed
-    per-source slice. Multiple passages from one session share its citation
-    number, and the answer can draw on far more grounded context than the old
-    "first few turns of N sessions" approach.
+    ``char_budget`` is exhausted. Breadth is bounded by that budget — the answer
+    cites as many distinct sessions as fit the model's context window — not by a
+    fixed session count. ``max_sessions`` is an optional hard cap (``None`` = no
+    cap). Multiple passages from one session share its citation number.
     """
     passages = search.search_passages(
         question,
@@ -228,7 +233,8 @@ def build_context(
     passages = _rerank(question, passages)
 
     radius = config.ASK_NEIGHBOR_TURNS
-    turn_cap = config.ASK_MAX_TURN_CHARS
+    match_cap = config.ASK_MAX_TURN_CHARS
+    neighbor_cap = config.ASK_NEIGHBOR_CHARS
     turns_map = (
         _load_turns_map(list({p["session_id"] for p in passages})) if radius > 0 else {}
     )
@@ -245,13 +251,14 @@ def build_context(
         sid = p["session_id"]
         if p["chunk_id"] in emitted_chunks:
             continue
-        # Cap breadth: don't open a NEW session once the source budget is full,
-        # but keep enriching sessions already cited.
-        if sid not in cite and len(cite) >= max_sessions:
+        # Optional breadth cap: don't open a NEW session past the cap (when set),
+        # but keep enriching sessions already cited. By default there is no cap —
+        # breadth is bounded only by the character budget below.
+        if max_sessions is not None and sid not in cite and len(cite) >= max_sessions:
             continue
 
         body = _passage_body(
-            p, turns_map, radius, turn_cap, emitted_chunks, emitted_turns
+            p, turns_map, radius, match_cap, neighbor_cap, emitted_chunks, emitted_turns
         )
         if not body:
             continue
@@ -293,9 +300,8 @@ def stream_answer(
 ) -> Iterator[dict[str, Any]]:
     """Yield events: {sources}, then {token}* , then {done} or {error}.
 
-    ``limit`` caps how many distinct sessions the answer may cite; the amount of
-    context per answer is governed by the model's own context window, not by
-    ``limit``.
+    ``limit`` is an optional cap on how many distinct sessions the answer may
+    cite; when omitted, breadth is bounded only by the model's context window.
     """
     st = status()
     if not st["available"] or not st["model"]:
@@ -310,7 +316,9 @@ def stream_answer(
     prompt_tokens = max(1024, num_ctx - config.ASK_RESERVE_OUTPUT_TOKENS)
     # ~10% slack for the system prompt, the question, and chat-template tokens.
     char_budget = max(2000, int(prompt_tokens * 0.9 * _CHARS_PER_TOKEN))
-    max_sessions = limit if (limit and limit > 0) else config.ASK_DEFAULT_SOURCES
+    # No default session cap: breadth is bounded by the context window above. An
+    # explicit caller-supplied limit still applies when provided.
+    max_sessions = limit if (limit and limit > 0) else None
 
     context, sources = build_context(
         question,

@@ -19,6 +19,9 @@ const ASK_EXAMPLES = [
 ];
 
 export async function showAsk(opts = {}) {
+  // Feature-flagged off: never render the Ask view. Navigation paths (button,
+  // palette, router) are also gated, so this is a defensive backstop.
+  if (!state.askEnabled) return;
   const leaving = state.view !== "ask";
   state.view = "ask";
   state.currentId = null;

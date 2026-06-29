@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import background, config, db
-from .api import api_router
+from .api import build_api_router
 
 
 @asynccontextmanager
@@ -22,7 +22,7 @@ async def lifespan(_: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Mark", version="0.1.0", lifespan=lifespan)
-    app.include_router(api_router)
+    app.include_router(build_api_router())
 
     @app.get("/")
     def index() -> FileResponse:

@@ -388,6 +388,7 @@ function renderCollection(c) {
       </div>
     </div>
 
+    ${state.askEnabled ? `
     <div class="coll-ask" id="collAskPanel">
       <button type="button" class="coll-ask-toggle" id="collAskToggle" aria-expanded="true">
         <span>${icon("sparkles")} Ask this collection</span>
@@ -404,6 +405,7 @@ function renderCollection(c) {
         <div id="collAskAnswer" class="ask-answer md" hidden></div>
       </div>
     </div>
+    ` : ""}
 
     <div class="list-head coll-members-head">
       <h2>Sessions</h2>
@@ -441,31 +443,33 @@ function renderCollection(c) {
 
   wireMemberClicks(c);
 
-  $("#collAskToggle").addEventListener("click", () => {
-    const body = $("#collAskBody");
-    const btn = $("#collAskToggle");
-    body.hidden = !body.hidden;
-    btn.classList.toggle("collapsed", body.hidden);
-    btn.setAttribute("aria-expanded", body.hidden ? "false" : "true");
-  });
+  if (state.askEnabled) {
+    $("#collAskToggle").addEventListener("click", () => {
+      const body = $("#collAskBody");
+      const btn = $("#collAskToggle");
+      body.hidden = !body.hidden;
+      btn.classList.toggle("collapsed", body.hidden);
+      btn.setAttribute("aria-expanded", body.hidden ? "false" : "true");
+    });
 
-  checkCollAskStatus();
-  renderCollAskExamples(c, ov);
-  const askForm = $("#collAskForm");
-  askForm.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const q = $("#collAskInput").value.trim();
-    if (!q) return;
-    $("#collAskExamples").hidden = true;
-    streamAsk(
-      `/api/collections/${encodeURIComponent(c.id)}/ask`,
-      { question: q },
-      { answerEl: $("#collAskAnswer"), sourcesEl: $("#collAskSources"), sendBtn: $("#collAskSend") }
-    );
-  });
-  $("#collAskInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askForm.requestSubmit(); }
-  });
+    checkCollAskStatus();
+    renderCollAskExamples(c, ov);
+    const askForm = $("#collAskForm");
+    askForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const q = $("#collAskInput").value.trim();
+      if (!q) return;
+      $("#collAskExamples").hidden = true;
+      streamAsk(
+        `/api/collections/${encodeURIComponent(c.id)}/ask`,
+        { question: q },
+        { answerEl: $("#collAskAnswer"), sourcesEl: $("#collAskSources"), sendBtn: $("#collAskSend") }
+      );
+    });
+    $("#collAskInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askForm.requestSubmit(); }
+    });
+  }
 }
 
 function wireMemberClicks(c) {
