@@ -393,9 +393,13 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   box-shadow: var(--shadow);
   opacity: 0; transform: translateY(-6px); pointer-events: none;
+}
+/* Transition only on the way in. Hiding is instant so a fast scroll back to
+   the top can't leave the bar mid-fade, pinned over the real header. */
+.detail-sticky.show {
+  opacity: 1; transform: none; pointer-events: auto;
   transition: opacity .2s var(--ease-out), transform .2s var(--ease-out);
 }
-.detail-sticky.show { opacity: 1; transform: none; pointer-events: auto; }
 .detail-sticky .ds-back { cursor: pointer; color: var(--muted); font-weight: 700; font-size: 16px; line-height: 1; }
 .detail-sticky .ds-back:hover { color: var(--text); }
 .detail-sticky .ds-title { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
