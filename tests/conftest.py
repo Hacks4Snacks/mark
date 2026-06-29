@@ -38,6 +38,11 @@ def client(monkeypatch):
 
     monkeypatch.setattr(background, "start", lambda: None)
     monkeypatch.setattr(background, "stop", lambda: None)
+    # The Ask feature ships disabled by default; enable it so endpoint tests can
+    # exercise its routes. Tests that need it off build their own app.
+    from mark import config
+
+    monkeypatch.setattr(config, "ENABLE_ASK", True)
 
     from fastapi.testclient import TestClient
 

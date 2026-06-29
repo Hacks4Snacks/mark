@@ -26,6 +26,11 @@ UPLOADS_DIR = Path(
 HOST = os.environ.get("MARK_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MARK_PORT", "8765"))
 
+# Master switch for the Ask (local RAG) feature. It is still being refined, so it
+# ships OFF by default: when disabled the API routes are not mounted and the UI
+# components never populate. Set MARK_ENABLE_ASK=1 to turn the whole feature on.
+ENABLE_ASK = os.environ.get("MARK_ENABLE_ASK", "0") not in ("0", "", "false", "False")
+
 # Opt-in RAG: if a local Ollama server is reachable, mark can synthesise
 # answers from your past conversations. Everything stays local — no API keys.
 OLLAMA_URL = os.environ.get("MARK_OLLAMA_URL", "http://localhost:11434").rstrip("/")
@@ -48,21 +53,24 @@ ASK_DEFAULT_NUM_CTX = int(os.environ.get("MARK_ASK_DEFAULT_NUM_CTX", "8192"))
 ASK_RESERVE_OUTPUT_TOKENS = int(
     os.environ.get("MARK_ASK_RESERVE_OUTPUT_TOKENS", "1024")
 )
-# Default number of distinct sessions an answer may cite when the caller doesn't
-# specify (the UI's "sources" selector overrides this per request).
-ASK_DEFAULT_SOURCES = int(os.environ.get("MARK_ASK_DEFAULT_SOURCES", "8"))
+# Breadth is NOT capped by a session count: an answer draws on as many distinct
+# sessions as fit the model's context window (the token budget above). Callers
+# may still pass an explicit per-request cap, but there is no default one.
 # Candidate passages retrieved (and reranked) before packing into the budget.
 ASK_MAX_CANDIDATE_PASSAGES = int(
-    os.environ.get("MARK_ASK_MAX_CANDIDATE_PASSAGES", "60")
+    os.environ.get("MARK_ASK_MAX_CANDIDATE_PASSAGES", "80")
 )
-# Max passages drawn from any one session, so a single long transcript can add
-# depth without crowding out other sources.
-ASK_PER_SESSION_PASSAGES = int(os.environ.get("MARK_ASK_PER_SESSION_PASSAGES", "3"))
+# Max passages drawn from any one session, so a single long transcript can't
+# crowd out other sources (favouring breadth across sessions).
+ASK_PER_SESSION_PASSAGES = int(os.environ.get("MARK_ASK_PER_SESSION_PASSAGES", "2"))
 # Turns of surrounding context included on each side of a matched passage.
 ASK_NEIGHBOR_TURNS = int(os.environ.get("MARK_ASK_NEIGHBOR_TURNS", "1"))
-# Cap on characters taken from any single turn when widening context, so one
-# huge agent turn can't dominate the budget.
+# Cap on characters from the matched passage itself (chunks are already small).
 ASK_MAX_TURN_CHARS = int(os.environ.get("MARK_ASK_MAX_TURN_CHARS", "4000"))
+# Cap on characters from each *surrounding* neighbour turn. Kept small so that
+# widening a match for context doesn't blow the budget and starve breadth across
+# sessions — the single biggest factor in how many sources an answer can cite.
+ASK_NEIGHBOR_CHARS = int(os.environ.get("MARK_ASK_NEIGHBOR_CHARS", "800"))
 # Cross-encoder reranker for sharper passage relevance. Needs fastembed (the
 # `semantic` extra); silently skipped when unavailable. Set 0 to disable.
 ASK_RERANK = os.environ.get("MARK_ASK_RERANK", "1") not in ("0", "", "false", "False")

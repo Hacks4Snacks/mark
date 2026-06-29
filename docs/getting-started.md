@@ -87,7 +87,7 @@ consistent read-only snapshot.
   - **Collections** — auto-updating groups of conversations.
   - **Library** — every extracted code block and shell command.
   - **Usage** — spend, duration and token analytics.
-  - **Ask** — natural-language Q&A (needs a local LLM).
+  - **Ask** — natural-language Q&A (off by default; needs `MARK_ENABLE_ASK=1` and a local LLM).
   - **Add** — drop in a note or file.
   - **⟳** — re-scan now.
   - **theme** — toggle light/dark.

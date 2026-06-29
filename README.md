@@ -42,7 +42,7 @@ so your conversations never leave your machine.
 - [Configuration](#configuration)
 - [Usage, duration & cost](#usage-duration--cost)
 - [Use it from your agent (MCP server)](#use-it-from-your-agent-mcp-server)
-- [Ask your history](#ask-your-history-optional-local-llm)
+- [Ask your history](#ask-your-history-off-by-default-local-llm)
 - [Collections](#collections)
 - [Snippet & command library](#snippet--command-library)
 - [Manage your archive](#manage-your-archive)
@@ -112,7 +112,7 @@ Full guides live in [`docs/`](docs/README.md):
 | [Searching & filtering](docs/searching.md)             | Search modes, facets, sorting, related sessions       |
 | [Collections](docs/collections.md)                     | Auto-updating groups, pin/exclude, ask-a-collection   |
 | [Usage & cost](docs/usage-and-cost.md)                 | Dashboards, real vs estimated metrics, custom pricing |
-| [Ask your history](docs/ask.md)                        | Local RAG with Ollama                                 |
+| [Ask your history](docs/ask.md)                        | Local RAG (Ollama), off by default                    |
 | [Snippet & command library](docs/library.md)           | Browse code and commands across sessions              |
 | [Sources & syncing](docs/sources.md)                   | Supported sources, overrides, sync behaviour          |
 | [Managing your archive](docs/managing-your-archive.md) | Notes, uploads, tags, hide, delete, export            |
@@ -225,21 +225,25 @@ Tools exposed:
 
 Everything runs locally over stdio: no network, no API keys.
 
-## Ask your history (optional, local LLM)
+## Ask your history (off by default, local LLM)
 
-If a local [Ollama](https://ollama.com) server is running, the **✦ Ask** view
-lets you ask questions in natural language. Mark retrieves the most relevant
-past conversations, has a **local** model synthesise a cited answer, and streams
-it back token-by-token, so your archive stays on your machine, no API keys.
+Ask is still being refined, so it's **disabled by default** — enable it with
+`MARK_ENABLE_ASK=1`. Once enabled, if a local [Ollama](https://ollama.com) server
+is running, the **✦ Ask** view lets you ask questions in natural language. Mark
+retrieves the most relevant past conversations, has a **local** model synthesise a
+cited answer, and streams it back token-by-token, so your archive stays on your
+machine, no API keys.
 
 ```bash
-ollama pull llama3.2     # any installed model works; mark auto-picks one
+export MARK_ENABLE_ASK=1   # Ask is disabled by default
+ollama pull llama3.2       # any installed model works; mark auto-picks one
 ollama serve
 ```
 
 Override the model with `MARK_OLLAMA_MODEL` or the endpoint with
-`MARK_OLLAMA_URL`. When Ollama isn't reachable, the view simply shows setup
-hints; every other feature works without it.
+`MARK_OLLAMA_URL`. While Ask is disabled the **✦ Ask** button and view never
+appear; when it's enabled but Ollama isn't reachable, the view simply shows setup
+hints. Every other feature works without it.
 
 ## Collections
 

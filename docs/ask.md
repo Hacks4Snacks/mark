@@ -5,22 +5,32 @@ plain English and get a **cited** answer synthesised from the most relevant
 sessions. It's a retrieval-augmented generation (RAG) feature that runs entirely
 on your machine.
 
-> **Optional and fully local.** Ask is the one feature that needs a model. Mark
-> uses a **local [Ollama](https://ollama.com) server** — no cloud, no API keys.
-> When Ollama isn't running, the view simply shows setup hints and every other
-> feature keeps working.
+> **Disabled by default, optional, and fully local.** Ask is still being refined,
+> so it ships **off** — turn it on by setting `MARK_ENABLE_ASK=1` before starting
+> Mark. While it's disabled the **✦ Ask** button and view never appear and its API
+> routes stay unmounted. It's also the one feature that needs a model: Mark uses a
+> **local [Ollama](https://ollama.com) server** — no cloud, no API keys. When Ask
+> is enabled but Ollama isn't running, the view simply shows setup hints. Every
+> other feature keeps working regardless.
 
 ## Setup
 
-1. Install [Ollama](https://ollama.com).
-2. Pull any chat model and start the server:
+1. **Enable the feature.** Ask is disabled by default; turn it on by setting
+   `MARK_ENABLE_ASK=1` before starting Mark:
+
+   ```bash
+   export MARK_ENABLE_ASK=1
+   ```
+
+2. Install [Ollama](https://ollama.com).
+3. Pull any chat model and start the server:
 
    ```bash
    ollama pull llama3.2     # any installed model works
    ollama serve
    ```
 
-3. Open Mark → **✦ Ask**. Once Ollama is reachable, the view is ready.
+4. Open Mark → **✦ Ask**. Once Ollama is reachable, the view is ready.
 
 ## How it works
 

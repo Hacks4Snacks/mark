@@ -22,6 +22,9 @@ export const state = {
   limit: PAGE_SIZE,
   // Copilot CLI "resume" command template (from /api/status; {id} is substituted).
   resumeCmd: "copilot --resume {id}",
+  // Whether the Ask (local RAG) feature is enabled (from /api/status). Off until
+  // the backend reports it on, so the Ask UI stays dormant by default.
+  askEnabled: false,
 };
 
 // Every primary view lives in a top-level container; switching simply toggles

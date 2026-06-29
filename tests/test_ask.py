@@ -128,6 +128,17 @@ def test_build_context_citations_are_per_session(persist_session):
     assert len(capped) == 1
 
 
+def test_build_context_unbounded_sessions_by_default(persist_session):
+    # No max_sessions: breadth is bounded only by the character budget, not a
+    # session count. Ten matching sessions all fit a generous budget (the old
+    # default would have capped this at 8).
+    for i in range(10):
+        persist_session(_session(f"s{i}", [(f"zphloga note number {i}", "ok")]))
+
+    _, sources = ask.build_context("zphloga", char_budget=100000)
+    assert len(sources) == 10
+
+
 def test_rerank_reorders_by_cross_encoder(monkeypatch):
     passages = [{"content": "a"}, {"content": "b"}, {"content": "c"}]
     # Force ascending scores so the last passage becomes the most relevant.

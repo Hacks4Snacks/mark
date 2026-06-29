@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from .. import ask
+from .. import ask, config
 from .. import collections as collections_svc
 from ..repositories import sessions as sessions_repo
 from ..schemas import (
@@ -95,6 +95,8 @@ def api_session_collections(session_id: str) -> list[dict[str, Any]]:
 
 @router.post("/api/collections/{cid}/ask")
 def api_collection_ask(cid: str, body: CollAskIn) -> StreamingResponse:
+    if not config.ENABLE_ASK:
+        raise HTTPException(status_code=404, detail="ask is disabled")
     coll = collections_svc.get_collection(cid)
     if not coll:
         raise HTTPException(status_code=404, detail="collection not found")

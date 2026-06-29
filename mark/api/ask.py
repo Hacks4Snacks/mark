@@ -22,8 +22,8 @@ def api_ask(body: AskIn) -> StreamingResponse:
     question = (body.question or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="empty question")
-    # Breadth is an optional advanced cap; depth is governed by the model's
-    # context window. When unset, the backend uses MARK_ASK_DEFAULT_SOURCES.
+    # Breadth is an optional advanced cap; when unset, the number of sources is
+    # bounded only by the model's context window (no default session cap).
     limit = max(1, body.limit) if body.limit else None
 
     def gen():

@@ -129,7 +129,9 @@ function markActive() {
 }
 
 function buildStatic(q) {
-  const cmds = COMMANDS.filter((c) => matches(q, c.label + " " + (c.hint || "") + " " + c.kind));
+  const cmds = COMMANDS.filter((c) =>
+    (c.id !== "nav-ask" || state.askEnabled) &&
+    matches(q, c.label + " " + (c.hint || "") + " " + c.kind));
   return cmds.map((c) => ({ ...c, type: "command", group: c.kind }));
 }
 
