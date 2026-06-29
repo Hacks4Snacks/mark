@@ -281,6 +281,9 @@ function turnHTML(t) {
 
 // ---------- reading mode (progress bar + sticky header) ----------
 function setupReading() {
+  // renderDetail() can run again (hide/unhide, topic edits) without leaving the
+  // view, so drop any prior handler before wiring a fresh one.
+  if (detailScrollHandler) window.removeEventListener("scroll", detailScrollHandler);
   const prog = $("#readProgress");
   const sticky = $("#detailSticky");
   if (prog) prog.hidden = false;
