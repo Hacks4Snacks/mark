@@ -9,6 +9,21 @@ From v0.2.0 onward, entries are generated automatically by
 [release-please](https://github.com/googleapis/release-please) from Conventional
 Commits.
 
+## [0.2.0](https://github.com/Hacks4Snacks/mark/compare/v0.1.0...v0.2.0) (2026-06-29)
+
+
+### Features
+
+* feature flag ask ([#14](https://github.com/Hacks4Snacks/mark/issues/14)) ([92e9c18](https://github.com/Hacks4Snacks/mark/commit/92e9c183cea2d8fcba059e1f25b68a0672003350))
+* Improve Ask Context ([#12](https://github.com/Hacks4Snacks/mark/issues/12)) ([fc72e14](https://github.com/Hacks4Snacks/mark/commit/fc72e143c5a050af52f9189ed35ec33a55d2b465))
+* Support Claude Code ([#7](https://github.com/Hacks4Snacks/mark/issues/7)) ([5b1f51a](https://github.com/Hacks4Snacks/mark/commit/5b1f51ad1c468db13129b941b3b3ca95c0c0781b))
+
+
+### Bug Fixes
+
+* Address additional UI scrolling bug and icon update ([#11](https://github.com/Hacks4Snacks/mark/issues/11)) ([31289a2](https://github.com/Hacks4Snacks/mark/commit/31289a2ff97cc1f383e55175a6b0c5b266952c6b))
+* Reduce truncation ([#13](https://github.com/Hacks4Snacks/mark/issues/13)) ([01b6f9b](https://github.com/Hacks4Snacks/mark/commit/01b6f9b0ad55ccccd80200cdcbbc733cb9cecea6))
+
 ## [0.1.0](https://github.com/Hacks4Snacks/mark/releases/tag/v0.1.0) (2026-06-26)
 
 **First public release.** 🎉
