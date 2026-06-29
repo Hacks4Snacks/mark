@@ -61,8 +61,13 @@ format.
 
 ## Ask (local LLM)
 
+Ask is **disabled by default** while it's being refined. Set `MARK_ENABLE_ASK=1`
+to turn it on; until then the **✦ Ask** UI stays hidden and its API routes are
+not mounted.
+
 | Variable                          | Default                         | Purpose                                                                       |
 |-----------------------------------|---------------------------------|-------------------------------------------------------------------------------|
+| `MARK_ENABLE_ASK`                 | `0`                             | Master switch for the whole Ask feature (`1` enables it; off by default)      |
 | `MARK_OLLAMA_URL`                 | `http://localhost:11434`        | Ollama endpoint                                                               |
 | `MARK_OLLAMA_MODEL`               | *(auto-pick)*                   | Force a specific installed Ollama model                                       |
 | `MARK_ASK_NUM_CTX_CAP`            | `16384`                         | Ceiling on the context window requested (clamped to the model's own length)   |

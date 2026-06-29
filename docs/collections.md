@@ -67,8 +67,9 @@ what did it touch?"*
 
 ## Ask a collection
 
-If the optional local **Ask** feature is set up (see [Ask your history](ask.md)),
-you can scope a question to **just one collection**. Answers are then drawn only
+If the optional local **Ask** feature is enabled (`MARK_ENABLE_ASK=1`; it's off
+by default — see [Ask your history](ask.md)), you can scope a question to **just
+one collection**. Answers are then drawn only
 from that group's conversations — handy for *"summarise everything I learned in
 the Rust collection."*
 
