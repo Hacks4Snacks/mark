@@ -143,16 +143,6 @@ function maxBy(arr, f) {
   return best;
 }
 
-// Percent change of the last window vs. the window before it (null if N/A).
-function periodDelta(vals) {
-  if (vals.length < 14) return null;
-  const win = Math.min(30, Math.floor(vals.length / 2));
-  const recent = sum(vals.slice(-win));
-  const prev = sum(vals.slice(-2 * win, -win));
-  if (prev <= 0) return null;
-  return Math.round(((recent - prev) / prev) * 100);
-}
-
 // ---- top render ----------------------------------------------------------
 
 function renderUsage(d) {
@@ -212,32 +202,22 @@ function scopeChip(key) {
 
 function tiles(t) {
   const live = [
-    ["dollar", "Total spend", fmtCost(t.cost || 0), "cost", HINTS.cost, ""],
-    ["message", "Sessions", (t.sessions || 0).toLocaleString(), "sessions", HINTS.sessions, ""],
-    ["star", "Premium requests", (t.premium || 0).toLocaleString(), "premium", HINTS.premium, "premium"],
-  ].map(([ic, key, val, metric, hint, scope]) => trendTile(ic, key, val, metric, hint, scope));
+    ["Total spend", fmtCost(t.cost || 0), "cost", HINTS.cost, ""],
+    ["Sessions", (t.sessions || 0).toLocaleString(), "sessions", HINTS.sessions, ""],
+    ["Premium requests", (t.premium || 0).toLocaleString(), "premium", HINTS.premium, "premium"],
+  ].map(([key, val, metric, hint, scope]) => trendTile(key, val, metric, hint, scope));
   const stat = [
-    ["gauge", "AIU", (t.aiu || 0).toLocaleString(undefined, { maximumFractionDigits: 0 }), HINTS.aiu, "aiu"],
-    ["cpu", "Tokens", `${bigNum(t.input_tokens)}<span class="us-sub">in</span> · ${bigNum(t.output_tokens)}<span class="us-sub">out</span>`, HINTS.tokens, ""],
-    ["clock", "Time in sessions", fmtDuration(t.duration) || "0s", HINTS.time, "duration"],
-  ].map(([ic, key, val, hint, scope]) => staticTile(ic, key, val, hint, scope));
+    ["AIU", (t.aiu || 0).toLocaleString(undefined, { maximumFractionDigits: 0 }), HINTS.aiu, "aiu"],
+    ["Tokens", `${bigNum(t.input_tokens)}<span class="us-sub">in</span> · ${bigNum(t.output_tokens)}<span class="us-sub">out</span>`, HINTS.tokens, ""],
+    ["Time in sessions", fmtDuration(t.duration) || "0s", HINTS.time, "duration"],
+  ].map(([key, val, hint, scope]) => staticTile(key, val, hint, scope));
   return `<div class="usage-stats">${live.join("")}${stat.join("")}</div>`;
 }
 
-function fmtDelta(dl) {
-  const up = dl >= 0;
-  const mag = Math.abs(dl);
-  const text = mag >= 1000 ? `${Math.round(1 + mag / 100)}×` : `${mag}%`;
-  return `<span class="us-delta ${up ? "up" : "down"}" title="vs. the previous 30 days">${icon(up ? "trend-up" : "trend-down", { size: 12 })}${text}</span>`;
-}
-
-function trendTile(ic, key, val, metric, hint, scope = "") {
+function trendTile(key, val, metric, hint, scope = "") {
   const vals = _series.map((r) => r[metric]);
   const spark = sparkline(lastN(vals, 45), { color: METRICS[metric].color });
-  const dl = periodDelta(vals);
-  const delta = dl == null ? "" : fmtDelta(dl);
   return `<div class="usage-stat has-spark">
-    <div class="us-top"><span class="us-ic">${icon(ic, { size: 14 })}</span>${delta}</div>
     <div class="us-val">${val}</div>
     <div class="us-key">${esc(key)} ${infoSpan(hint)}</div>
     ${scope ? scopeChip(scope) : ""}
@@ -245,9 +225,8 @@ function trendTile(ic, key, val, metric, hint, scope = "") {
   </div>`;
 }
 
-function staticTile(ic, key, val, hint, scope = "") {
+function staticTile(key, val, hint, scope = "") {
   return `<div class="usage-stat">
-    <div class="us-top"><span class="us-ic">${icon(ic, { size: 14 })}</span></div>
     <div class="us-val">${val}</div>
     <div class="us-key">${esc(key)} ${infoSpan(hint)}</div>
     ${scope ? scopeChip(scope) : ""}

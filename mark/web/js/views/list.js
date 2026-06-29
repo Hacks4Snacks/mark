@@ -296,12 +296,22 @@ export function showList(opts) {
     state.view = "list";
     setLayoutWide(false);
     showOnly("#listView");
+    if (leaving) restoreListScroll(opts && opts.restoreId);
   };
   if (leaving) withTransition(apply);
   else apply();
   if (leaving && !(opts && opts.fromHash) && location.hash) {
     history.pushState("", document.title, location.pathname + location.search);
   }
+}
+
+// Returning from a session lands the reader back on the card they opened rather
+// than at the detail view's stale scroll offset (the two views share the page
+// scroll). Falls back to the top when that card isn't in the current results.
+function restoreListScroll(id) {
+  const card = id ? document.querySelector(`#results .card[data-id="${CSS.escape(id)}"]`) : null;
+  if (card) card.scrollIntoView({ block: "center" });
+  else window.scrollTo({ top: 0 });
 }
 
 function highlightCard() {

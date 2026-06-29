@@ -14,6 +14,7 @@ import { doSearch, showList } from "./list.js";
 import { openCollMenu } from "./collections.js";
 
 let detailScrollHandler = null; // active reading-progress listener
+let detailStickyTimer = null; // pending sticky-header reveal (dwell debounce)
 
 export async function openSession(id, opts = {}) {
   try {
@@ -155,15 +156,15 @@ function renderDetail(s) {
       <div class="detail-meta">${meta}</div>
     </div>
     <div class="detail-sticky" id="detailSticky">
-      <span class="ds-back" id="dsBack" title="Back to results">${icon("arrow-left", { size: 16 })}</span>
-      <span class="ds-title">${esc(s.title || "Untitled")}</span>
+      <button type="button" class="ds-back" id="dsBack" title="Back to results">${icon("arrow-left", { size: 16 })}<span class="ds-title">${esc(s.title || "Untitled")}</span></button>
     </div>
     <div class="detail-body">
       <div class="transcript detail-scroll">${body || '<p class="muted">No content.</p>'}</div>
       <div class="detail-aside">${asideBlocks.join("") || '<span class="muted">No attachments.</span>'}</div>
     </div>`;
-  $("#backBtn").addEventListener("click", showList);
-  $("#dsBack").addEventListener("click", showList);
+  const backToList = () => showList({ restoreId: s.id });
+  $("#backBtn").addEventListener("click", backToList);
+  $("#dsBack").addEventListener("click", backToList);
   $("#addToColl")?.addEventListener("click", (e) => {
     e.stopPropagation();
     openCollMenu(e.currentTarget, s.id);
@@ -280,19 +281,56 @@ function turnHTML(t) {
 }
 
 // ---------- reading mode (progress bar + sticky header) ----------
+// The compact header is only meaningful once the full header (which carries its
+// own "Back to results" control) has scrolled up under the fixed topbar — that's
+// exactly when the sticky bar pins into place. Reveal it only after the reader
+// dwells there, so a quick scroll that merely passes through on the way back to
+// the top can't fade it in and then yank it away (the back-button flash).
+// Hiding stays immediate.
+const STICKY_DWELL = 160; // ms the header must stay tucked away before revealing
+
+function clearStickyTimer() {
+  if (detailStickyTimer != null) {
+    clearTimeout(detailStickyTimer);
+    detailStickyTimer = null;
+  }
+}
+
 function setupReading() {
   // renderDetail() can run again (hide/unhide, topic edits) without leaving the
   // view, so drop any prior handler before wiring a fresh one.
   if (detailScrollHandler) window.removeEventListener("scroll", detailScrollHandler);
+  clearStickyTimer();
   const prog = $("#readProgress");
   const sticky = $("#detailSticky");
+  const head = $("#detailView .detail-head");
+  const topbar = document.querySelector(".topbar");
   if (prog) prog.hidden = false;
+  // The topbar's height varies with viewport width (its action row wraps), so
+  // pin the compact header flush against its current bottom rather than a fixed
+  // offset — otherwise the bar tucks behind a tall topbar or floats below it.
+  const pinTop = () => (topbar ? topbar.getBoundingClientRect().height : 0);
+  // True once the full header has scrolled above the sticky bar's pin line.
+  const headerTuckedAway = () => !head || head.getBoundingClientRect().bottom <= pinTop();
   const onScroll = () => {
     const doc = document.documentElement;
     const max = doc.scrollHeight - doc.clientHeight;
     const pct = max > 0 ? Math.min(1, Math.max(0, doc.scrollTop / max)) : 0;
     if (prog) prog.style.width = (pct * 100).toFixed(1) + "%";
-    if (sticky) sticky.classList.toggle("show", doc.scrollTop > 150);
+    if (!sticky) return;
+    sticky.style.top = pinTop() + "px";
+    if (headerTuckedAway()) {
+      // Arm a delayed reveal; a transient pass-through never gets to fire it.
+      if (!sticky.classList.contains("show") && detailStickyTimer == null) {
+        detailStickyTimer = window.setTimeout(() => {
+          detailStickyTimer = null;
+          if (headerTuckedAway()) sticky.classList.add("show");
+        }, STICKY_DWELL);
+      }
+    } else {
+      clearStickyTimer();
+      sticky.classList.remove("show");
+    }
   };
   window.addEventListener("scroll", onScroll, { passive: true });
   detailScrollHandler = onScroll;
@@ -304,6 +342,7 @@ export function teardownReading() {
     window.removeEventListener("scroll", detailScrollHandler);
     detailScrollHandler = null;
   }
+  clearStickyTimer();
   const prog = $("#readProgress");
   if (prog) { prog.hidden = true; prog.style.width = "0"; }
 }
