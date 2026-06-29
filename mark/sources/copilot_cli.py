@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
-import re
 import sqlite3
 from collections import Counter
 from pathlib import Path
@@ -23,6 +22,7 @@ from .base import (
     estimate_metrics,
     repo_from_cwd,
     snapshot_sqlite,
+    tool_trace,
     ts_diff_seconds,
     uri_to_path,
 )
@@ -224,71 +224,11 @@ def _tool_file_path(name: str | None, args: Any) -> str | None:
     return None
 
 
-# Argument keys that best summarise a tool call for the inline trace. A concrete
-# file target wins; then the primary free-text intent (a command/query/pattern);
-# then a bare ``path``. ``path`` is checked last on purpose: for a file tool it
-# is the target, but for a search tool it is only the scope, so a query/pattern
-# reads better.
-_TRACE_FILE_KEYS = ("filePath", "file_path", "target_file", "filename", "uri")
-_TRACE_TEXT_KEYS = ("command", "query", "pattern", "url", "prompt")
-_PATCH_FILE_RE = re.compile(r"\*\*\*\s+(?:Update|Add|Delete|Move)\s+File:\s*(.+)")
-
-
-def _short(text: str, limit: int = 120) -> str:
-    """Collapse whitespace and clip a value to a single readable trace fragment."""
-    text = " ".join(text.split())
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
-
-
-def _norm_path(val: str) -> str:
-    val = val.strip()
-    return uri_to_path(val) or val
-
-
-def _tool_call_summary(args: Any) -> str:
-    """A short human label for a tool call: its path or primary text argument."""
-    if isinstance(args, str):  # apply_patch ships a raw patch string, not JSON
-        m = _PATCH_FILE_RE.search(args)
-        return _norm_path(m.group(1)) if m else ""
-    if not isinstance(args, dict):
-        return ""
-    for key in _TRACE_FILE_KEYS:
-        val = args.get(key)
-        if isinstance(val, str) and val.strip():
-            return _norm_path(val)
-    for key in _TRACE_TEXT_KEYS:
-        val = args.get(key)
-        if isinstance(val, str) and val.strip():
-            return _short(val)
-    val = args.get("path")
-    return _norm_path(val) if isinstance(val, str) and val.strip() else ""
-
-
-def _tool_trace_line(name: str | None, args: Any) -> str:
-    """One inline action-log entry, e.g. `▷ view` /path. The glyph sits inside
-    the code span, matching the cline / cursor / claude_code adapters."""
-    label = _tool_call_summary(args)
-    return f"`▷ {name or 'tool'}`" + (f" {label}" if label else "")
-
-
 def _join_segments(segments: list[list[str]]) -> str:
-    """Render the ordered (kind, text) trace into markdown: prose as paragraphs,
-    runs of tool calls as one compact bullet list (commonmark has no soft breaks,
-    so each action needs its own list item to stay on its own line)."""
-    parts: list[str] = []
-    i, n = 0, len(segments)
-    while i < n:
-        kind, text = segments[i]
-        if kind == "tool":
-            run: list[str] = []
-            while i < n and segments[i][0] == "tool":
-                run.append("- " + segments[i][1])
-                i += 1
-            parts.append("\n".join(run))
-        else:
-            parts.append(text)
-            i += 1
-    return "\n\n".join(p for p in parts if p.strip()).strip()
+    """Join the ordered (kind, text) trace into markdown: prose and each tool
+    call become blank-line-separated blocks (a tool call is one line, or a fenced
+    code block when its argument spans several lines)."""
+    return "\n\n".join(t for _, t in segments if t and t.strip()).strip()
 
 
 def _finish_event_turn(turn: dict[str, Any]) -> dict[str, Any]:
@@ -411,14 +351,17 @@ def _events_to_turns(
                     call_id = data.get("toolCallId")
                     if call_id is not None:
                         cur_turn["_calls"][call_id] = len(cur_turn["segments"])
-                    cur_turn["segments"].append(["tool", _tool_trace_line(nm, args)])
+                    cur_turn["segments"].append(["tool", tool_trace(nm, args)])
                 elif et == "tool.execution_complete":
                     # Annotate only failures; successes are implied by the call.
                     if cur_turn is None or data.get("success") is not False:
                         continue
                     idx = cur_turn["_calls"].get(data.get("toolCallId"))
                     if idx is not None and idx < len(cur_turn["segments"]):
-                        cur_turn["segments"][idx][1] += " — failed"
+                        seg = cur_turn["segments"][idx]
+                        # Mark the header line so a fenced multi-line arg stays intact.
+                        head, nl, rest = seg[1].partition("\n")
+                        seg[1] = f"{head} — failed{nl}{rest}"
                 elif et == "session.shutdown":
                     cc = data.get("codeChanges")
                     if isinstance(cc, dict):

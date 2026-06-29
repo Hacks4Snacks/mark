@@ -450,6 +450,17 @@ def test_copilot_cli_events_inline_agentic_trace(tmp_path):
     con.close()
 
     edited = "/repo/src/app.py"
+    long_cmd = (
+        "set -euo pipefail; TOKEN=$(az account get-access-token --resource "
+        "aaaaaa-1234-4567-bb17-11111111111 --query accessToken -o tsv); "
+        'curl -sS -H "Authorization: Bearer $TOKEN" https://example/api | jq .'
+    )
+    multiline_cmd = (
+        "python3 - <<'PY'\n"
+        "from pathlib import Path\n"
+        "print(Path('.').resolve())\n"
+        "PY"
+    )
     events = [
         {"type": "session.start", "data": {"selectedModel": "gpt-5.5"}},
         {"type": "user.message", "data": {"content": "fix the routing bug"}},
@@ -468,6 +479,30 @@ def test_copilot_cli_events_inline_agentic_trace(tmp_path):
         {
             "type": "tool.execution_complete",
             "data": {"toolCallId": "c1", "success": True},
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "c4",
+                "toolName": "bash",
+                "arguments": {"command": long_cmd},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "c4", "success": True},
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "c5",
+                "toolName": "bash",
+                "arguments": {"command": multiline_cmd},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "c5", "success": True},
         },
         {
             "type": "tool.execution_start",
@@ -538,8 +573,15 @@ def test_copilot_cli_events_inline_agentic_trace(tmp_path):
     )
     # A failed execution is annotated.
     assert "`▷ rg` resolve_route — failed" in ar
+    # Long free-text arguments (a full shell command) are kept verbatim — there is
+    # no truncation marker anywhere in the reconstructed trace.
+    assert "`▷ bash` " + long_cmd in ar
+    assert "…" not in ar
+    # A multi-line command is preserved verbatim inside a fenced code block.
+    assert "`▷ bash`\n```\n" + multiline_cmd + "\n```" in ar
     # Tool names and the git-diff-edited file are captured for the aside/search.
-    assert {"view", "rg", "apply_patch"} <= set(json.loads(s["turns"][0]["tools"]))
+    tool_names = set(json.loads(s["turns"][0]["tools"]))
+    assert {"view", "rg", "apply_patch", "bash"} <= tool_names
     assert any(f["file_path"] == edited for f in s["files"])
 
 

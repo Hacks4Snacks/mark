@@ -21,6 +21,7 @@ from .base import (
     estimate_tokens,
     parse_iso,
     repo_from_cwd,
+    tool_trace,
     ts_diff_seconds,
 )
 
@@ -53,13 +54,7 @@ def _block_text(block: Any) -> str:
     if kind == "text":
         return block.get("text", "") or ""
     if kind == "tool_use":
-        name = block.get("name", "tool")
-        arg = (
-            json.dumps(block.get("input"))[:60]
-            if block.get("input") is not None
-            else ""
-        )
-        return f"\n`▷ {name}` {arg}\n"
+        return f"\n\n{tool_trace(block.get('name'), block.get('input'))}\n\n"
     if kind == "tool_result":
         # Tool outputs (file reads, command dumps) are bulky and low-value for
         # search — keep only a short trace.

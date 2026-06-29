@@ -149,6 +149,82 @@ def uri_to_path(obj: Any) -> str | None:
     return None
 
 
+# tool-call trace rendering (shared by the agent source adapters)
+# Keys whose value best summarises a tool call, most-specific first: a concrete
+# file target, then the primary free-text intent, then a bare scope ``path``.
+# ``path`` is checked last because for a file tool it is the target, but for a
+# search tool it is only the scope, where a query/pattern reads better.
+_TRACE_FILE_KEYS = ("filePath", "file_path", "target_file", "filename", "uri")
+_TRACE_TEXT_KEYS = (
+    "command",
+    "query",
+    "pattern",
+    "regex",
+    "url",
+    "question",
+    "action",
+    "description",
+    "prompt",
+)
+_PATCH_FILE_RE = re.compile(r"\*\*\*\s+(?:Update|Add|Delete|Move)\s+File:\s*(.+)")
+
+
+def tool_call_label(args: Any) -> str:
+    """The most meaningful single argument of a tool call, kept in full.
+
+    Returns a normalised file path, else the primary free-text argument
+    (command/query/...), else a bare ``path`` scope, else ``""``. Values are
+    returned verbatim — newlines and all — so the renderer can choose inline vs.
+    a fenced code block. Nothing is truncated.
+    """
+    if isinstance(args, str):  # some tools (apply_patch) ship a raw patch string
+        m = _PATCH_FILE_RE.search(args)
+        if not m:
+            return ""
+        p = m.group(1).strip()
+        return uri_to_path(p) or p
+    if not isinstance(args, dict):
+        return ""
+    for key in _TRACE_FILE_KEYS:
+        val = args.get(key)
+        if isinstance(val, str) and val.strip():
+            return uri_to_path(val.strip()) or val.strip()
+    for key in _TRACE_TEXT_KEYS:
+        val = args.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    val = args.get("path")
+    if isinstance(val, str) and val.strip():
+        return uri_to_path(val.strip()) or val.strip()
+    return ""
+
+
+def _code_fence(content: str) -> str:
+    """A backtick fence guaranteed longer than any run of backticks in content."""
+    longest = run = 0
+    for ch in content:
+        run = run + 1 if ch == "`" else 0
+        longest = max(longest, run)
+    return "`" * max(3, longest + 1)
+
+
+def tool_trace(name: str | None, args: Any) -> str:
+    """Render one tool call as markdown for the inline action log.
+
+    A single-line argument renders inline as ``\u0060▷ name\u0060 arg``; a
+    multi-line argument (e.g. a heredoc command) is preserved verbatim in a
+    fenced code block under the name so it stays readable. Nothing is truncated.
+    """
+    name = name or "tool"
+    label = tool_call_label(args)
+    if not label:
+        return f"`▷ {name}`"
+    if "\n" not in label:
+        return f"`▷ {name}` {label}"
+    fence = _code_fence(label)
+    return f"`▷ {name}`\n{fence}\n{label}\n{fence}"
+
+
 def friendly_repo(path: str | None) -> str | None:
     if not path:
         return None
