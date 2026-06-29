@@ -310,6 +310,26 @@ def cursor_workspace_storage_roots() -> list[Path]:
     ]
 
 
+def claude_projects_roots() -> list[Path]:
+    """Discover Claude Code transcript roots (``~/.claude/projects``).
+
+    Claude Code writes one JSONL transcript per session under
+    ``<base>/projects/<encoded-cwd>/<session-id>.jsonl``. The ``<base>`` is
+    ``~/.claude`` unless ``CLAUDE_CONFIG_DIR`` is set (``os.pathsep``-separated for
+    several). The returned paths may not exist yet — discovery in the adapter
+    guards with ``Path.exists``. Override directly via ``[sources.claude_code]
+    roots`` in sources.toml or ``MARK_SOURCE_CLAUDE_CODE_ROOTS``.
+    """
+    base = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    if base:
+        return [
+            Path(p).expanduser() / "projects"
+            for p in base.split(os.pathsep)
+            if p.strip()
+        ]
+    return [Path.home() / ".claude" / "projects"]
+
+
 # Friendly source labels for known Cline-family coding-agent extensions.
 CLINE_FAMILY_SOURCES: dict[str, str] = {
     "saoudrizwan.claude-dev": "cline",

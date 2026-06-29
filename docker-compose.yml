@@ -41,6 +41,9 @@ services:
       # --- Cursor (optional): composer/chat history + repo mapping ---
       - "${HOME}/Library/Application Support/Cursor/User/globalStorage:/home/mark/.config/Cursor/User/globalStorage:ro"
       - "${HOME}/Library/Application Support/Cursor/User/workspaceStorage:/home/mark/.config/Cursor/User/workspaceStorage:ro"
+      # --- Claude Code (optional): CLI session transcripts (JSONL). Same host
+      #     path on macOS and Linux; only projects/ is needed (not settings/creds). ---
+      - "${HOME}/.claude/projects:/home/mark/.claude/projects:ro"
       # --- Advanced config (optional): enable/disable sources, label overrides,
       #     extra roots. Same format as a local ~/.mark/sources.toml; see
       #     sources.example.toml. Use in-container paths for any `roots` you set. ---

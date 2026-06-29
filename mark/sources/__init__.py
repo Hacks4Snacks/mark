@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .base import ImportSource, ProgressCb, WatchedSource
 from .chatgpt import ChatGptSource
+from .claude_code import ClaudeCodeSource
 from .cline import ClineSource
 from .copilot_cli import CopilotCliSource
 from .cursor import CursorSource
@@ -12,6 +13,7 @@ WATCHED_SOURCES: list[WatchedSource] = [
     CopilotCliSource(),
     ClineSource(),
     CursorSource(),
+    ClaudeCodeSource(),
 ]
 
 #: On-demand importers for user-supplied export files (cloud assistants).
@@ -23,6 +25,7 @@ __all__ = [
     "IMPORT_SOURCES",
     "WATCHED_SOURCES",
     "ChatGptSource",
+    "ClaudeCodeSource",
     "ClineSource",
     "CopilotCliSource",
     "CursorSource",

@@ -38,7 +38,9 @@ The shipped file is preset for **macOS + VS Code (Stable)**. Only edit the **hos
 | Linux            | `${HOME}/.config/Code/User/...`                        |
 | Windows          | `%APPDATA%/Code/User/...` (use WSL paths under Docker) |
 
-Cursor mounts are included and optional — remove them if you don't use Cursor.
+Cursor and Claude Code mounts are included and optional — remove them if you
+don't use those tools. Claude Code's store (`${HOME}/.claude/projects`) is at the
+same host path on macOS and Linux.
 
 ## Optional tuning
 

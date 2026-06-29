@@ -12,6 +12,7 @@ page explains what's supported, how to override paths, and how syncing works.
 | `copilot_cli` | Copilot CLI / agent-store conversations + real token metrics | `~/.copilot/session-store.db` (+ `~/.copilot/session-state`) |
 | `cline`       | Cline-family agent task histories                            | `…/Code/User/globalStorage`                                  |
 | `cursor`      | Cursor Composer / chat history                               | `…/Cursor/User/globalStorage/state.vscdb`                    |
+| `claude_code` | Claude Code CLI session transcripts + real token metrics     | `~/.claude/projects` (`$CLAUDE_CONFIG_DIR/projects` if set)  |
 
 Plus **import** sources (one-off uploads rather than watched paths):
 

@@ -40,6 +40,13 @@ enabled = true
 # roots = ["~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"]
 # options = { workspace_roots = ["~/Library/Application Support/Cursor/User/workspaceStorage"] }
 
+# --- Claude Code (CLI session transcripts) -----------------------------------
+[sources.claude_code]
+enabled = true
+# roots are the projects/ dirs holding per-session JSONL transcripts (defaults to
+# ~/.claude/projects, or $CLAUDE_CONFIG_DIR/projects when that env var is set):
+# roots = ["~/.claude/projects"]
+
 # --- Environment overrides (highest precedence) ------------------------------
 # MARK_SOURCE_VSCODE_ENABLED=0           disable a source for one run
 # MARK_SOURCE_CLINE_ROOTS=/a/path:/b     os.pathsep-separated roots

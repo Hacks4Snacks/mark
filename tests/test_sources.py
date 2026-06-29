@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from mark.sources import IMPORT_SOURCES, WATCHED_SOURCES, vscode
+from mark.sources import IMPORT_SOURCES, WATCHED_SOURCES, claude_code, vscode
 from mark.sources.chatgpt import ChatGptSource
 
 
@@ -89,7 +89,7 @@ def test_chatgpt_import_into_db(persist_session):
 def test_source_registry_is_well_formed():
     # Every watched source exposes a stable key and a default config.
     keys = [s.key for s in WATCHED_SOURCES]
-    assert {"vscode", "copilot_cli", "cline", "cursor"} <= set(keys)
+    assert {"vscode", "copilot_cli", "cline", "cursor", "claude_code"} <= set(keys)
     assert len(keys) == len(set(keys)), "watched source keys must be unique"
     for s in WATCHED_SOURCES:
         cfg = s.default_config()
@@ -388,7 +388,7 @@ def test_copilot_cli_indexes_store_sessions(tmp_path):
         "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
         (
             "sess1",
-            "/Users/m/microsoft/myrepo",
+            "/home/dev/projects/myrepo",
             None,
             None,
             "2026-01-01T00:00:00+00:00",
@@ -663,3 +663,212 @@ def test_snapshot_sqlite_falls_back_to_filecopy(tmp_path, monkeypatch):
         con.close()
     base.cleanup_snapshot(dest)
     assert not dest.exists()
+
+
+def _claude_transcript() -> list[dict]:
+    """A realistic Claude Code ``<session>.jsonl`` transcript (enveloped events).
+
+    One prompt drives a multi-step agent reply (thinking + code + a Write tool +
+    its tool_result + a follow-up); a second prompt starts a second turn. A
+    summary line supplies the title and an ``isMeta`` system-reminder must not
+    become its own turn.
+    """
+    cwd = "/home/dev/projects/myrepo"
+    return [
+        {"type": "summary", "summary": "Refresh token help", "leafUuid": "u-last"},
+        {
+            "type": "user",
+            "isMeta": True,
+            "timestamp": "2026-06-23T10:00:00.000Z",
+            "cwd": cwd,
+            "gitBranch": "main",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "<system-reminder>be concise</system-reminder>",
+                    }
+                ],
+            },
+        },
+        {
+            "type": "user",
+            "timestamp": "2026-06-23T10:00:01.000Z",
+            "cwd": cwd,
+            "gitBranch": "main",
+            "message": {"role": "user", "content": "How do I refresh a token?"},
+        },
+        {
+            "type": "assistant",
+            "timestamp": "2026-06-23T10:00:05.000Z",
+            "cwd": cwd,
+            "message": {
+                "role": "assistant",
+                "model": "claude-opus-4.8",
+                "usage": {
+                    "input_tokens": 1000,
+                    "output_tokens": 50,
+                    "cache_read_input_tokens": 200,
+                    "cache_creation_input_tokens": 100,
+                },
+                "content": [
+                    {"type": "thinking", "thinking": "The user wants a token refresh."},
+                    {
+                        "type": "text",
+                        "text": "Call the refresh endpoint:\n```bash\ncurl /refresh\n```",
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "Write",
+                        "input": {"file_path": f"{cwd}/auth.py", "content": "..."},
+                    },
+                ],
+            },
+        },
+        {
+            "type": "user",
+            "timestamp": "2026-06-23T10:00:06.000Z",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": "File written",
+                    }
+                ],
+            },
+        },
+        {
+            "type": "assistant",
+            "timestamp": "2026-06-23T10:00:07.000Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude-opus-4.8",
+                "usage": {
+                    "input_tokens": 1200,
+                    "output_tokens": 20,
+                    "cache_read_input_tokens": 300,
+                },
+                "content": [{"type": "text", "text": "Done. The token now refreshes."}],
+            },
+        },
+        {
+            "type": "user",
+            "timestamp": "2026-06-23T10:00:10.000Z",
+            "cwd": cwd,
+            "message": {"role": "user", "content": "Thanks, now add a test"},
+        },
+        {
+            "type": "assistant",
+            "timestamp": "2026-06-23T10:00:12.000Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude-opus-4.8",
+                "usage": {"input_tokens": 1500, "output_tokens": 30},
+                "content": [{"type": "text", "text": "Added tests."}],
+            },
+        },
+    ]
+
+
+def test_claude_code_parses_transcript(tmp_path):
+    """A Claude Code JSONL transcript parses to costed, multi-step turns."""
+    path = tmp_path / "projects" / "-home-dev-projects-myrepo" / "sess1.jsonl"
+    _write_jsonl(path, _claude_transcript())
+
+    s = claude_code.parse_transcript(path)
+    assert s is not None
+    assert s["id"] == "claude-code-sess1"
+    assert s["source"] == "claude-code"
+    assert s["responder"] == "Claude Code"
+    # Title comes from the transcript's own summary line.
+    assert s["title"] == "Refresh token help"
+    # cwd is read from the events, not decoded from the (lossy) directory name.
+    assert s["repository"] == "myrepo"
+    assert s["repo_path"] == "/home/dev/projects/myrepo"
+
+    # The isMeta system-reminder is not its own turn; one prompt + its agent run
+    # is a single turn, so there are two turns total.
+    assert len(s["turns"]) == 2
+    t0 = s["turns"][0]
+    assert t0["user_message"] == "How do I refresh a token?"
+    assert "refresh endpoint" in t0["assistant_response"]
+    assert "Done. The token now refreshes." in t0["assistant_response"]
+    assert t0["code_blocks"] == [{"language": "bash", "content": "curl /refresh"}]
+    assert t0["thinking"] == "The user wants a token refresh."
+    assert "Write" in t0["tools"]
+    assert "/home/dev/projects/myrepo/auth.py" in t0["files"]
+    assert s["turns"][1]["user_message"] == "Thanks, now add a test"
+    assert "Added tests." in s["turns"][1]["assistant_response"]
+
+    # Real per-message usage is summed across the whole session (not estimated).
+    m = s["metrics"]
+    assert m["model"] == "claude-opus-4.8"
+    assert m["input_tokens"] == 3700
+    assert m["output_tokens"] == 100
+    assert m["tokens_estimated"] == 0
+    assert m["est_cost_usd"] > 0
+    assert s["created_at"] <= s["updated_at"]
+
+
+def test_claude_code_indexes_transcripts(tmp_path):
+    """The adapter discovers projects/*/<session>.jsonl and indexes them."""
+    from mark import config, db, search
+    from mark.sources.claude_code import ClaudeCodeSource
+
+    root = tmp_path / "projects"
+    path = root / "-home-dev-projects-myrepo" / "sess1.jsonl"
+    _write_jsonl(path, _claude_transcript())
+    # A subagent sidecar one level deeper must NOT be indexed as its own session.
+    _write_jsonl(
+        path.parent / "sess1" / "subagents" / "sub.jsonl", _claude_transcript()
+    )
+
+    cfg = config.SourceConfig(key="claude_code", roots=[root])
+    with db.connect() as conn:
+        cur = conn.cursor()
+        counts = ClaudeCodeSource().ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+
+    assert counts["added"] == 1  # only the top-level transcript, not the subagent
+    s = search.get_session("claude-code-sess1")
+    assert s is not None
+    assert s["repository"] == "myrepo"
+    # get_session returns the flattened sessions row, so metrics are top-level.
+    assert s["model"] == "claude-opus-4.8"
+    assert s["input_tokens"] == 3700
+    res = search.search("refresh token", mode="keyword")
+    assert any(r["id"] == "claude-code-sess1" for r in res)
+
+
+def test_claude_code_reingest_skips_unchanged(tmp_path):
+    """A second scan of an unchanged transcript is skipped from its stat alone."""
+    from mark import config, db
+    from mark.sources.claude_code import ClaudeCodeSource
+
+    root = tmp_path / "projects"
+    path = root / "-home-dev-projects-myrepo" / "sess1.jsonl"
+    _write_jsonl(path, _claude_transcript())
+
+    cfg = config.SourceConfig(key="claude_code", roots=[root])
+    src = ClaudeCodeSource()
+    with db.connect() as conn:
+        cur = conn.cursor()
+        first = src.ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        existing = {
+            r["id"]: r["content_hash"]
+            for r in cur.execute("SELECT id, content_hash FROM sessions")
+        }
+        second = src.ingest(cur, existing, cfg, rebuild=False)
+        conn.commit()
+        cached = cur.execute(
+            "SELECT signature FROM source_file_stat WHERE path = ?",
+            (f"cc:{path}",),
+        ).fetchone()
+    assert first["added"] == 1
+    assert second == {"added": 0, "updated": 0, "skipped": 1}
+    assert cached is not None
