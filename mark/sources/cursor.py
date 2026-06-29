@@ -21,6 +21,7 @@ from .base import (
     estimate_metrics,
     friendly_repo,
     snapshot_sqlite,
+    tool_trace,
     turns_duration,
     uri_to_path,
 )
@@ -134,16 +135,15 @@ def _assistant_segment(bubble: dict[str, Any]) -> tuple[str, str, list[str], lis
         for key in _FILE_ARG_KEYS:
             if _looks_like_path(args.get(key)):
                 files.append(args[key].strip())
-        preview = json.dumps(args, ensure_ascii=False)[:60] if args else ""
-        trace = f"`▷ {name}` {preview}".rstrip()
+        trace = tool_trace(name, args)
         result = tfd.get("result")
         rtext = (
             result if isinstance(result, str) else json.dumps(result) if result else ""
         )
         rtext = " ".join((rtext or "").split())
         if rtext:
-            trace += f"\n  ⮑ {rtext[:100]}"
-        text = f"{text}\n{trace}" if text else trace
+            trace += f"\n\n  ⮑ {rtext[:100]}"
+        text = f"{text}\n\n{trace}" if text else trace
 
     return text, thinking, tools, files
 
@@ -201,7 +201,7 @@ def _composer_turns(bubbles: list[dict[str, Any]]) -> list[dict[str, Any]]:
         elif btype == _BUBBLE_ASSISTANT:
             seg, thinking, tools, files = _assistant_segment(b)
             if seg:
-                cur_asst.append(seg + "\n")
+                cur_asst.append(seg + "\n\n")
             if thinking:
                 cur_think.append(thinking)
             cur_tools.extend(tools)

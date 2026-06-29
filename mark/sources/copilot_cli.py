@@ -22,6 +22,7 @@ from .base import (
     estimate_metrics,
     repo_from_cwd,
     snapshot_sqlite,
+    tool_trace,
     ts_diff_seconds,
     uri_to_path,
 )
@@ -223,15 +224,22 @@ def _tool_file_path(name: str | None, args: Any) -> str | None:
     return None
 
 
+def _join_segments(segments: list[list[str]]) -> str:
+    """Join the ordered (kind, text) trace into markdown: prose and each tool
+    call become blank-line-separated blocks (a tool call is one line, or a fenced
+    code block when its argument spans several lines)."""
+    return "\n\n".join(t for _, t in segments if t and t.strip()).strip()
+
+
 def _finish_event_turn(turn: dict[str, Any]) -> dict[str, Any]:
-    ar = (turn["assistant_response"] or "").strip()
     um = (turn["user_message"] or "").strip()
     turn["tools"] = list(dict.fromkeys(turn["tools"]))
     turn["files"] = list(dict.fromkeys(turn["files"]))
-    # Some turns reply purely with tool calls (e.g. ask_user / report_intent) and
-    # carry no prose. Surface the tools so the turn isn't rendered as empty.
+    ar = _join_segments(turn.get("segments") or [])
+    # A turn that is pure tool activity with no captured trace still names its
+    # tools so it is never rendered empty.
     if not ar and turn["tools"]:
-        ar = "↳ " + ", ".join(turn["tools"])
+        ar = ", ".join(f"`▷ {t}`" for t in turn["tools"])
     turn["user_message"] = um
     turn["assistant_response"] = ar
     turn["thinking"] = (turn.get("thinking") or "").strip()
@@ -242,6 +250,8 @@ def _finish_event_turn(turn: dict[str, Any]) -> dict[str, Any]:
     turn["urls"] = list(
         dict.fromkeys(u.rstrip(".,);") for u in URL_RE.findall(f"{um} {ar}"))
     )
+    turn.pop("segments", None)
+    turn.pop("_calls", None)
     return turn
 
 
@@ -266,11 +276,14 @@ def _events_to_turns(
         return {
             "turn_index": len(turns),
             "user_message": user,
-            "assistant_response": "",
+            # Ordered [kind, text] trace (kind in {"prose", "tool"}) joined into
+            # the assistant_response when the turn is finished.
+            "segments": [],
             "thinking": "",
             "tools": [],
             "files": [],
             "timestamp": ts,
+            "_calls": {},  # toolCallId -> segment index, for marking failures
         }
 
     try:
@@ -301,14 +314,17 @@ def _events_to_turns(
                         cur_turn = new_turn("", ts)
                     content = data.get("content")
                     if isinstance(content, str) and content.strip():
-                        sep = "\n\n" if cur_turn["assistant_response"] else ""
-                        cur_turn["assistant_response"] += sep + content.strip()
+                        cur_turn["segments"].append(["prose", content.strip()])
                     # Plaintext model reasoning (only some messages carry it; the
                     # reasoningOpaque/encryptedContent variants are not decodable).
                     rt = data.get("reasoningText")
                     if isinstance(rt, str) and rt.strip():
                         tsep = "\n\n" if cur_turn["thinking"] else ""
                         cur_turn["thinking"] += tsep + rt.strip()
+                    # The tool calls themselves arrive as tool.execution_start
+                    # events (the ordered, authoritative stream); here we only
+                    # mirror names/files so a request that never executes (e.g.
+                    # permission-denied) still appears in the tool/file lists.
                     for tr in data.get("toolRequests") or []:
                         if not isinstance(tr, dict):
                             continue
@@ -322,11 +338,30 @@ def _events_to_turns(
                     if cur_turn is None:
                         cur_turn = new_turn("", ts)
                     nm = data.get("toolName")
+                    args = data.get("arguments")
                     if nm:
                         cur_turn["tools"].append(nm)
-                    fp = _tool_file_path(nm, data.get("arguments"))
+                    fp = _tool_file_path(nm, args)
                     if fp:
                         cur_turn["files"].append(fp)
+                    # Inline the agent's actions in order: this is what makes a
+                    # mostly-autonomous run (one prompt, dozens of tool turns)
+                    # read as a conversation instead of just its first prose and
+                    # its last.
+                    call_id = data.get("toolCallId")
+                    if call_id is not None:
+                        cur_turn["_calls"][call_id] = len(cur_turn["segments"])
+                    cur_turn["segments"].append(["tool", tool_trace(nm, args)])
+                elif et == "tool.execution_complete":
+                    # Annotate only failures; successes are implied by the call.
+                    if cur_turn is None or data.get("success") is not False:
+                        continue
+                    idx = cur_turn["_calls"].get(data.get("toolCallId"))
+                    if idx is not None and idx < len(cur_turn["segments"]):
+                        seg = cur_turn["segments"][idx]
+                        # Mark the header line so a fenced multi-line arg stays intact.
+                        head, nl, rest = seg[1].partition("\n")
+                        seg[1] = f"{head} — failed{nl}{rest}"
                 elif et == "session.shutdown":
                     cc = data.get("codeChanges")
                     if isinstance(cc, dict):
