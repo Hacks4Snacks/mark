@@ -19,6 +19,7 @@ import {
 import { libState, loadSnippets, showLibrary } from "./views/library.js";
 import { loadUsage, showUsage } from "./views/usage.js";
 import { showAsk, submitAsk } from "./views/ask.js";
+import { closePalette, isPaletteOpen, openPalette, setupPalette } from "./palette.js";
 
 // ---------- status, reindex & live auto-sync ----------
 // A single self-scheduling loop polls /api/status: fast while an import runs,
@@ -238,10 +239,17 @@ function setup() {
   });
 
   document.addEventListener("keydown", (e) => {
-    const inSearch = document.activeElement === $("#search");
-    if ((e.key === "/" && !inSearch) || (e.metaKey && e.key === "k")) {
-      e.preventDefault(); $("#search").focus(); return;
+    const tag = document.activeElement?.tagName;
+    const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    // Cmd/Ctrl-K opens the command palette from anywhere.
+    if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+      e.preventDefault();
+      isPaletteOpen() ? closePalette() : openPalette();
+      return;
     }
+    if (isPaletteOpen()) return; // palette handles its own keys
+    // "/" focuses the inline search when not already typing.
+    if (e.key === "/" && !typing) { e.preventDefault(); $("#search").focus(); return; }
     if (e.key === "Escape") {
       const menu = $("#collMenu");
       if (menu && !menu.hidden) { hideCollMenu(); return; }
@@ -252,7 +260,10 @@ function setup() {
     if (state.view === "list") handleListKey(e);
   });
 
+  $("#cmdkHint")?.addEventListener("click", () => openPalette());
+
   setupDialog();
+  setupPalette();
 }
 
 // Paint inline SVGs into any static `data-icon` placeholders (topbar, dialogs).

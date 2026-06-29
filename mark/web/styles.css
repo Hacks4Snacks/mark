@@ -1,21 +1,31 @@
 :root {
   --radius: 14px;
   --radius-sm: 9px;
+  /* formal radius scale — prefer these over ad-hoc values */
+  --r-xs: 7px;
+  --r-sm: 9px;
+  --r-md: 12px;
+  --r-lg: 14px;
+  --r-pill: 999px;
   --gap: 18px;
   --maxw: 1320px;
   --font: "Inter", ui-sans-serif, -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, monospace;
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", "Fira Code", Menlo, monospace;
   --shadow: 0 1px 2px rgba(0,0,0,.18), 0 8px 24px -12px rgba(0,0,0,.35);
   --shadow-lg: 0 24px 60px -20px rgba(0,0,0,.55);
   --speed: .16s;
   --ease-out: cubic-bezier(.22, 1, .36, 1);
+  /* amber — the search-highlight signature, promoted to a true second accent */
+  --amber: #ffb02e;
+  --amber-2: #ffd666;
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
   --bg: #0e1014;
-  --bg-grad: radial-gradient(1200px 600px at 80% -10%, #1a1f2e 0%, transparent 60%),
-             radial-gradient(900px 500px at -10% 10%, #161a26 0%, transparent 55%);
+  --bg-grad: radial-gradient(1200px 600px at 80% -10%, #221d33 0%, transparent 60%),
+             radial-gradient(900px 500px at -10% 10%, #1d1726 0%, transparent 55%);
   --surface: #15181f;
   --surface-2: #1b1f29;
   --elevated: #20252f;
@@ -25,7 +35,7 @@
   --muted: #9aa4b6;
   --faint: #828b9e;
   --accent: #8b8cff;
-  --accent-2: #59c2ff;
+  --accent-2: #e072ff;
   --accent-ink: #0c0e14;
   --chip: #222734;
   --mark: rgba(255, 214, 102, .28);
@@ -37,8 +47,8 @@
 [data-theme="light"] {
   color-scheme: light;
   --bg: #f5f6f9;
-  --bg-grad: radial-gradient(1100px 560px at 85% -12%, #e9ecff 0%, transparent 60%),
-             radial-gradient(820px 460px at -8% 6%, #e6f6ff 0%, transparent 55%);
+  --bg-grad: radial-gradient(1100px 560px at 85% -12%, #ecebff 0%, transparent 60%),
+             radial-gradient(820px 460px at -8% 6%, #fbeaff 0%, transparent 55%);
   --surface: #ffffff;
   --surface-2: #fbfcfe;
   --elevated: #ffffff;
@@ -48,7 +58,7 @@
   --muted: #535c6b;
   --faint: #717a8a;
   --accent: #5b5bf0;
-  --accent-2: #1597e6;
+  --accent-2: #c026d3;
   --accent-ink: #ffffff;
   --chip: #eef1f6;
   --mark: rgba(255, 205, 70, .45);
@@ -77,7 +87,24 @@ body {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1, "cv01" 1;
 }
-h1, h2, .brand-text strong { letter-spacing: -.01em; }
+/* Space Grotesk gives the brand a distinct voice in display contexts;
+   Inter still carries all body & UI text. */
+h1, h2, h3.card-title,
+.brand-text strong,
+.stat-card .n, .us-val,
+.list-head h2, .detail-head h1,
+.coll-page-head h2, .ask-head h2, .empty .em-title {
+  font-family: var(--font-display);
+  letter-spacing: -.015em;
+}
+
+/* consistent keyboard focus everywhere (was only on the search box) */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible,
+.card:focus-visible, .chip:focus-visible, .facet:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb, var(--accent) 62%, transparent);
+  border-radius: var(--r-sm);
+}
 
 /* slowly drifting aurora — the immersive backdrop */
 body::before {
@@ -113,11 +140,19 @@ mark { background: var(--mark); color: var(--mark-ink); border-radius: 3px; padd
 }
 .brand { display: flex; align-items: center; gap: 11px; cursor: pointer; user-select: none; }
 .brand-mark {
-  font-size: 22px; width: 38px; height: 38px; display: grid; place-items: center;
-  background: linear-gradient(140deg, var(--accent), var(--accent-2));
-  border-radius: 11px; box-shadow: var(--shadow);
+  width: 34px; height: 38px; display: grid; place-items: center;
+  transition: transform var(--speed) var(--ease-out);
 }
-.brand-mark svg { display: block; }
+/* containerless mark: a soft drop-shadow gives depth without a tile */
+.brand-mark svg { display: block; filter: drop-shadow(0 4px 10px color-mix(in srgb, var(--accent) 45%, transparent)); }
+/* a small lift on hover, plus the bookmark "tucking in" — a signature touch */
+.brand:hover .brand-mark { transform: translateY(-1px) rotate(-3deg); }
+.brand:hover .brand-mark svg g { animation: markSettle .5s var(--ease-out); }
+@keyframes markSettle {
+  0% { transform: translate(1px, -1px) scale(.30); }
+  55% { transform: translate(1px, 2.5px) scale(.30); }
+  100% { transform: translate(1px, 1px) scale(.30); }
+}
 .brand-text { display: flex; flex-direction: column; line-height: 1.1; }
 .brand-text strong { font-size: 16px; letter-spacing: .2px; }
 .brand-text small { color: var(--faint); font-size: 11px; }
@@ -296,6 +331,8 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 16px 18px; cursor: pointer; transition: all var(--speed); position: relative; overflow: hidden;
+  /* subtle glassy top edge for depth */
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 6%, transparent);
 }
 .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: linear-gradient(var(--accent), var(--accent-2)); opacity: 0; transition: opacity var(--speed); z-index: 1; }
 /* soft accent glow that blooms from the upper-left on hover */
@@ -859,6 +896,77 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
   .coll-members-head { flex-wrap: wrap; }
   .coll-member-sort { margin-left: 0; width: 100%; }
 }
+
+/* ---------- keyboard hint chips ---------- */
+kbd {
+  font-family: var(--mono); font-size: 11px; line-height: 1;
+  background: var(--chip); color: var(--muted);
+  border: 1px solid var(--border); border-bottom-width: 2px;
+  border-radius: 6px; padding: 3px 5px; min-width: 16px; text-align: center;
+}
+.cmdk-hint {
+  display: inline-flex; align-items: center; gap: 2px; flex: none;
+  background: none; border: none; cursor: pointer; padding: 2px;
+  opacity: .8; transition: opacity var(--speed);
+}
+.cmdk-hint:hover { opacity: 1; }
+.cmdk-hint kbd { font-size: 11px; padding: 3px 5px; }
+
+/* the matched-results count picks up the amber highlight signature */
+#listCount { color: color-mix(in srgb, var(--amber) 72%, var(--muted)); font-weight: 600; }
+
+/* ---------- command palette ---------- */
+.cmdk { position: fixed; inset: 0; z-index: 100; display: grid; place-items: start center; }
+.cmdk-backdrop { position: absolute; inset: 0; background: rgba(4,6,12,.5); backdrop-filter: blur(4px); animation: cmdkFade .16s var(--ease-out); }
+.cmdk-panel {
+  position: relative; width: min(620px, 92vw); margin-top: 12vh;
+  background: var(--elevated); border: 1px solid var(--border);
+  border-radius: 16px; box-shadow: var(--shadow-lg);
+  overflow: hidden; animation: cmdkPop .2s var(--ease-out);
+}
+@keyframes cmdkFade { from { opacity: 0; } }
+@keyframes cmdkPop { from { opacity: 0; transform: translateY(-8px) scale(.98); } }
+.cmdk-input-row { display: flex; align-items: center; gap: 11px; padding: 15px 18px; border-bottom: 1px solid var(--border); }
+.cmdk-search-ic { width: 18px; height: 18px; flex: none; border-radius: 5px; background: linear-gradient(140deg, var(--accent), var(--accent-2)); -webkit-mask: url("/favicon.svg") center/contain no-repeat; mask: url("/favicon.svg") center/contain no-repeat; }
+#cmdkInput { flex: 1; min-width: 0; background: none; border: none; outline: none; font-size: 16px; color: var(--text); }
+#cmdkInput::placeholder { color: var(--faint); }
+.cmdk-esc { flex: none; }
+.cmdk-list { max-height: min(52vh, 440px); overflow-y: auto; padding: 6px; }
+.cmdk-list::-webkit-scrollbar { width: 8px; }
+.cmdk-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
+.cmdk-group { font-size: 10.5px; text-transform: uppercase; letter-spacing: .7px; color: var(--faint); padding: 12px 12px 5px; font-weight: 700; }
+.cmdk-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  background: none; border: none; color: var(--text); cursor: pointer;
+  padding: 9px 12px; border-radius: 10px; transition: background var(--speed);
+}
+.cmdk-row.is-active { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.cmdk-row-ic { flex: none; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--surface-2); color: var(--accent); border: 1px solid var(--border-soft); }
+.cmdk-row.is-active .cmdk-row-ic { background: color-mix(in srgb, var(--accent) 22%, var(--surface-2)); color: var(--text); }
+.cmdk-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.cmdk-row-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmdk-row-sub { font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmdk-row-kind { flex: none; font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .5px; }
+.cmdk-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 44px 20px; color: var(--faint); }
+.cmdk-empty .ic { color: var(--faint); }
+.cmdk-foot { display: flex; gap: 16px; padding: 10px 16px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--faint); }
+.cmdk-foot span { display: inline-flex; align-items: center; gap: 5px; }
+.cmdk-foot kbd { font-size: 10px; padding: 2px 4px; }
+body.cmdk-open { overflow: hidden; }
+
+/* ---------- branded empty / first-run states ---------- */
+.empty.empty-rich { padding: 56px 24px; }
+.empty .em-mark { width: 76px; height: 76px; margin: 0 auto 20px; display: block; filter: drop-shadow(0 12px 28px color-mix(in srgb, var(--accent) 45%, transparent)); }
+.empty .em-title { font-size: 23px; color: var(--text); margin: 0 0 8px; }
+.empty .em-sub { max-width: 46ch; margin: 0 auto 22px; color: var(--muted); line-height: 1.6; }
+.empty .em-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 26px; }
+.empty .em-sources { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: 52ch; margin: 0 auto; }
+.empty .em-src { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 999px; padding: 5px 12px; }
+.empty .em-src .ic { color: var(--accent); }
+.empty .em-hint { margin-top: 24px; font-size: 12px; color: var(--faint); }
+.empty .em-hint kbd { margin: 0 1px; }
+
+@media (max-width: 920px) { .cmdk-hint { display: none; } }
 
 /* ---------- view transitions (list ↔ detail) ---------- */
 ::view-transition-old(root),
