@@ -97,7 +97,7 @@ pip install 'markive[semantic]'
 | Variable                            | Default                  | Purpose                                                        |
 |-------------------------------------|--------------------------|----------------------------------------------------------------|
 | `MARK_EMBED_MODEL`                  | `BAAI/bge-small-en-v1.5` | fastembed model id                                             |
-| `MARK_EMBED_THREADS`                | half your cores          | CPU cap for the transformer backend (`0` = all cores, fastest) |
+| `MARK_EMBED_THREADS`                | a quarter, max 4         | CPU cap for the transformer backend (`0` = all cores, fastest) |
 | `MARK_MAX_EMBED_CHUNKS_PER_SESSION` | `40`                     | Cap on embedded chunks per session                             |
 
 > **Keyword search always indexes every chunk** — nothing is lost from FTS. Only

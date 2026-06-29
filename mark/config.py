@@ -147,9 +147,10 @@ HASH_EMBED_DIM = int(os.environ.get("MARK_HASH_DIM", "1024"))
 
 
 # Cap CPU used by the transformer embedding backend so a first-time index of a
-# large history doesn't peg every core during ingest. fastembed/ONNX otherwise
-# spread inference across all logical CPUs; default to half, leaving headroom for
-# the user's foreground work. Set MARK_EMBED_THREADS=0 to use all cores (fastest).
+# large history doesn't slow the machine during ingest. fastembed/ONNX otherwise
+# spread inference across all logical CPUs; default to about a quarter (capped at
+# 4) so the index stays in the background and never looks like a runaway/hung app
+# on first run. It just takes longer. Set MARK_EMBED_THREADS=0 to use all cores.
 def _cgroup_cpu_limit() -> float | None:
     """Effective CPU count from this container's cgroup quota, if any.
 
@@ -181,7 +182,10 @@ def _default_embed_threads() -> int:
     host = os.cpu_count() or 2
     limit = _cgroup_cpu_limit()
     effective = min(host, limit) if limit else host
-    return max(1, int(effective) // 2)
+    # ~a quarter of the cores, floored at 1 and capped at 4: enough to make
+    # steady progress without the first-time index pegging the machine or looking
+    # like a runaway process. Power users opt into more with MARK_EMBED_THREADS=0.
+    return max(1, min(int(effective) // 4, 4))
 
 
 EMBED_THREADS = max(

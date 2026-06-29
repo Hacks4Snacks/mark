@@ -45,7 +45,7 @@ Precedence for source settings is: built-in default < `sources.toml` < env vars.
 | Variable                            | Default                  | Purpose                                                               |
 |-------------------------------------|--------------------------|-----------------------------------------------------------------------|
 | `MARK_EMBED_MODEL`                  | `BAAI/bge-small-en-v1.5` | fastembed model id (when the `semantic` extra is installed)           |
-| `MARK_EMBED_THREADS`                | half your cores          | CPU cap for the transformer backend; `0` uses all cores (fastest)     |
+| `MARK_EMBED_THREADS`                | a quarter, max 4         | CPU cap for the transformer backend; `0` uses all cores (fastest)     |
 | `MARK_HASH_DIM`                     | `1024`                   | Dimension of the built-in offline hashing vectorizer fallback         |
 | `MARK_MAX_CHUNK_CHARS`              | `2000`                   | Window size for splitting long turns into search chunks               |
 | `MARK_MAX_EMBED_CHUNKS_PER_SESSION` | `40`                     | Cap on *embedded* chunks per session (keyword/FTS indexes all chunks) |

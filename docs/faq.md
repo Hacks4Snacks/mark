@@ -41,9 +41,9 @@ Set a different port: `MARK_PORT=9000 mark`.
 
 **The first launch is slow / pegs my CPU.**
 First-time indexing embeds your whole history. The transformer backend caps
-itself at half your cores by default — lower it with `MARK_EMBED_THREADS=2`, or
-raise to `0` (all cores) for maximum speed. Search works on whatever is indexed so
-far and fills in as it goes.
+itself at about a quarter of your cores (max 4) by default so it stays in the
+background — raise it with `MARK_EMBED_THREADS` (or `0` for all cores) for maximum
+speed. Search works on whatever is indexed so far and fills in as it goes.
 
 **New sessions aren't showing up.**
 Mark auto-syncs while running, but you can force it with the **⟳** button. If you
