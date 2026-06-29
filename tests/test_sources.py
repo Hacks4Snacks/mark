@@ -426,6 +426,123 @@ def test_copilot_cli_indexes_store_sessions(tmp_path):
     assert "curl /refresh" in s["turns"][0]["assistant_response"]
 
 
+def test_copilot_cli_events_inline_agentic_trace(tmp_path):
+    """A mostly-autonomous run (one prompt, many tool turns) is reconstructed from
+    events.jsonl as a full interleaved trace, not just its first and last prose."""
+    from mark import config, db, search
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    store = tmp_path / "session-store.db"
+    con = sqlite3.connect(store)
+    con.execute(
+        "CREATE TABLE sessions (id TEXT, cwd TEXT, repository TEXT, summary TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    con.execute(
+        "CREATE TABLE turns (session_id TEXT, turn_index INTEGER, user_message TEXT, "
+        "assistant_response TEXT, timestamp TEXT)"
+    )
+    con.execute(
+        "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+        ("sess1", "/repo", None, None, "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"),
+    )
+    con.commit()
+    con.close()
+
+    edited = "/repo/src/app.py"
+    events = [
+        {"type": "session.start", "data": {"selectedModel": "gpt-5.5"}},
+        {"type": "user.message", "data": {"content": "fix the routing bug"}},
+        {"type": "assistant.turn_start", "data": {"turnId": 0}},
+        # The CLI emits an empty user.message between turn_start and the reply.
+        {"type": "user.message", "data": {"content": ""}},
+        {"type": "assistant.message", "data": {"content": "Let me investigate."}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "c1",
+                "toolName": "view",
+                "arguments": {"path": edited},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "c1", "success": True},
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "c2",
+                "toolName": "rg",
+                "arguments": {"pattern": "resolve_route", "paths": "/repo"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "c2", "success": False},
+        },
+        {"type": "assistant.message", "data": {"content": "Found the cause."}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "c3",
+                "toolName": "apply_patch",
+                "arguments": f"*** Begin Patch\n*** Update File: {edited}\n@@\n-x\n+y\n",
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "c3", "success": True},
+        },
+        {"type": "assistant.message", "data": {"content": "Done, fix applied."}},
+        {
+            "type": "session.shutdown",
+            "data": {"codeChanges": {"filesModified": [edited]}},
+        },
+    ]
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    (sdir / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in events), encoding="utf-8"
+    )
+
+    cfg = config.SourceConfig(
+        key="copilot_cli", roots=[store], options={"state_dir": str(state_dir)}
+    )
+    with db.connect() as conn:
+        cur = conn.cursor()
+        counts = CopilotCliSource().ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+
+    assert counts == {"added": 1, "updated": 0, "skipped": 0}
+    s = search.get_session("sess1")
+    assert s is not None
+    assert len(s["turns"]) == 1  # one prompt -> one turn (the autonomous run)
+    ar = s["turns"][0]["assistant_response"]
+    # All three prose blocks survive, in order (not just first + last).
+    i_a, i_b, i_c = (
+        ar.find("Let me investigate."),
+        ar.find("Found the cause."),
+        ar.find("Done, fix applied."),
+    )
+    assert -1 < i_a < i_b < i_c
+    # The tool calls are inlined in order with useful labels.
+    assert "`▷ view` " + edited in ar
+    assert "`▷ rg` resolve_route" in ar
+    assert "`▷ apply_patch` " + edited in ar
+    assert (
+        ar.index("`▷ view`")
+        < ar.index("Found the cause.")
+        < ar.index("`▷ apply_patch`")
+    )
+    # A failed execution is annotated.
+    assert "`▷ rg` resolve_route — failed" in ar
+    # Tool names and the git-diff-edited file are captured for the aside/search.
+    assert {"view", "rg", "apply_patch"} <= set(json.loads(s["turns"][0]["tools"]))
+    assert any(f["file_path"] == edited for f in s["files"])
+
+
 def test_cursor_indexes_composer_from_vscdb(tmp_path):
     """A Cursor composer (inline conversation in state.vscdb) is parsed + indexed."""
     from mark import config, db, search
