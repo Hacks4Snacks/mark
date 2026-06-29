@@ -146,3 +146,19 @@ def test_rerank_falls_back_when_unavailable(monkeypatch):
 def test_rerank_disabled_returns_none():
     # conftest forces the reranker off; rerank() must degrade to None, not crash.
     assert embeddings.rerank("q", ["doc"]) is None
+
+
+def test_api_ask_accepts_body_without_limit(client, monkeypatch):
+    # The "sources" dropdown was removed, so the endpoint must accept a
+    # limit-less body and fall back to the backend default (limit=None).
+    seen = {}
+
+    def fake_stream(question, limit=None, session_ids=None):
+        seen["question"] = question
+        seen["limit"] = limit
+        yield {"type": "done", "model": "stub"}
+
+    monkeypatch.setattr(ask, "stream_answer", fake_stream)
+    resp = client.post("/api/ask", json={"question": "anything"})
+    assert resp.status_code == 200  # body validated (not a 422)
+    assert seen == {"question": "anything", "limit": None}

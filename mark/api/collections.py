@@ -101,7 +101,7 @@ def api_collection_ask(cid: str, body: CollAskIn) -> StreamingResponse:
     question = (body.question or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="empty question")
-    limit = max(1, min(int(body.limit), 20))
+    limit = max(1, body.limit) if body.limit else None
     member_ids = collections_svc.resolve_member_ids(coll)
 
     def gen():
