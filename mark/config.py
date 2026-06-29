@@ -32,6 +32,42 @@ OLLAMA_URL = os.environ.get("MARK_OLLAMA_URL", "http://localhost:11434").rstrip(
 # Empty = auto-pick a reasonable installed model (prefers a small general one).
 OLLAMA_MODEL = os.environ.get("MARK_OLLAMA_MODEL", "").strip()
 
+# Ask (local RAG) retrieval & context assembly
+# Ask packs the most relevant *passages* (matched chunks + a little neighbouring
+# context) into the model's window under a token budget, rather than slicing a
+# fixed handful of whole sessions. These knobs tune that assembly; the defaults
+# suit an 8B-class local model.
+#
+# Hard ceiling on the context window mark requests (num_ctx). The value actually
+# used is min(this, the model's own trained context length, probed via Ollama
+# /api/show). Bigger = more history per answer, but more RAM and latency.
+ASK_NUM_CTX_CAP = int(os.environ.get("MARK_ASK_NUM_CTX_CAP", "16384"))
+# Fallback window when the model doesn't report a context length.
+ASK_DEFAULT_NUM_CTX = int(os.environ.get("MARK_ASK_DEFAULT_NUM_CTX", "8192"))
+# Tokens held back from the window for the model's own answer.
+ASK_RESERVE_OUTPUT_TOKENS = int(
+    os.environ.get("MARK_ASK_RESERVE_OUTPUT_TOKENS", "1024")
+)
+# Default number of distinct sessions an answer may cite when the caller doesn't
+# specify (the UI's "sources" selector overrides this per request).
+ASK_DEFAULT_SOURCES = int(os.environ.get("MARK_ASK_DEFAULT_SOURCES", "8"))
+# Candidate passages retrieved (and reranked) before packing into the budget.
+ASK_MAX_CANDIDATE_PASSAGES = int(
+    os.environ.get("MARK_ASK_MAX_CANDIDATE_PASSAGES", "60")
+)
+# Max passages drawn from any one session, so a single long transcript can add
+# depth without crowding out other sources.
+ASK_PER_SESSION_PASSAGES = int(os.environ.get("MARK_ASK_PER_SESSION_PASSAGES", "3"))
+# Turns of surrounding context included on each side of a matched passage.
+ASK_NEIGHBOR_TURNS = int(os.environ.get("MARK_ASK_NEIGHBOR_TURNS", "1"))
+# Cap on characters taken from any single turn when widening context, so one
+# huge agent turn can't dominate the budget.
+ASK_MAX_TURN_CHARS = int(os.environ.get("MARK_ASK_MAX_TURN_CHARS", "4000"))
+# Cross-encoder reranker for sharper passage relevance. Needs fastembed (the
+# `semantic` extra); silently skipped when unavailable. Set 0 to disable.
+ASK_RERANK = os.environ.get("MARK_ASK_RERANK", "1") not in ("0", "", "false", "False")
+RERANK_MODEL = os.environ.get("MARK_RERANK_MODEL", "Xenova/ms-marco-MiniLM-L-6-v2")
+
 # The Copilot CLI / agent session store (a live SQLite DB). mark reads a
 # consistent snapshot of it read-only. Override the path via
 # ``[sources.copilot_cli] roots`` in sources.toml or ``MARK_SOURCE_COPILOT_CLI_ROOTS``.

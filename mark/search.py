@@ -134,6 +134,24 @@ def _render_fts_snippet(raw: str) -> str:
     return html.escape(raw).replace("\x02", "<mark>").replace("\x03", "</mark>")
 
 
+def _fuse(
+    ranked_lists: tuple[list[dict[str, Any]], ...],
+) -> tuple[dict[int, float], dict[int, dict[str, Any]]]:
+    """Reciprocal Rank Fusion over chunk-level result lists.
+
+    Returns the fused score per ``chunk_id`` plus the first-seen item metadata for
+    each chunk, so callers can either collapse to sessions or keep passages.
+    """
+    fused: dict[int, float] = {}
+    meta: dict[int, dict[str, Any]] = {}
+    for ranked in ranked_lists:
+        for rank, item in enumerate(ranked):
+            cid = item["chunk_id"]
+            fused[cid] = fused.get(cid, 0.0) + 1.0 / (_RRF_K + rank)
+            meta.setdefault(cid, item)
+    return fused, meta
+
+
 def _allowed_sessions(repo, source, tags, date_from, date_to) -> set[str] | None:
     clauses, params = [], []
     if repo:
@@ -197,13 +215,7 @@ def search(
     sem = _semantic_search(query, limit * 6) if mode in ("hybrid", "semantic") else []
 
     # Reciprocal Rank Fusion at the chunk level.
-    fused: dict[int, float] = {}
-    meta: dict[int, dict[str, Any]] = {}
-    for ranked in (kw, sem):
-        for rank, item in enumerate(ranked):
-            cid = item["chunk_id"]
-            fused[cid] = fused.get(cid, 0.0) + 1.0 / (_RRF_K + rank)
-            meta.setdefault(cid, item)
+    fused, meta = _fuse((kw, sem))
 
     # Best chunk per session.
     by_session: dict[str, tuple[float, int]] = {}
@@ -239,6 +251,77 @@ def search(
         s["snippet"] = snippet
         results.append(s)
     return _sort_results(results, sort)
+
+
+def search_passages(
+    query: str,
+    *,
+    limit: int = 40,
+    per_session_cap: int = 3,
+    only_ids: set[str] | None = None,
+    candidate_factor: int = 6,
+) -> list[dict[str, Any]]:
+    """Return the top matching *passages* (chunks) for RAG context assembly.
+
+    Unlike :func:`search`, this does not collapse to one row per session: up to
+    ``per_session_cap`` passages from the same session may be returned, so a long
+    on-topic session can contribute more than a single excerpt. Each result
+    carries the chunk's own text and turn index plus its parent session's display
+    metadata, ranked by fused keyword+semantic relevance.
+    """
+    query = (query or "").strip()
+    if not query:
+        return []
+
+    kw = _keyword_search(query, limit * candidate_factor)
+    sem = _semantic_search(query, limit * candidate_factor)
+    fused, _meta = _fuse((kw, sem))
+    if not fused:
+        return []
+
+    ordered = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)
+    chunks = _load_chunks([cid for cid, _ in ordered])
+
+    picked: list[tuple[int, float]] = []
+    per_session: dict[str, int] = {}
+    for cid, score in ordered:
+        cm = chunks.get(cid)
+        if not cm:
+            continue
+        sid = cm["session_id"]
+        if only_ids is not None and sid not in only_ids:
+            continue
+        if per_session.get(sid, 0) >= per_session_cap:
+            continue
+        per_session[sid] = per_session.get(sid, 0) + 1
+        picked.append((cid, score))
+        if len(picked) >= limit:
+            break
+    if not picked:
+        return []
+
+    sessions = _load_sessions([chunks[cid]["session_id"] for cid, _ in picked])
+    max_score = picked[0][1] or 1.0
+    passages: list[dict[str, Any]] = []
+    for cid, score in picked:
+        cm = chunks[cid]
+        s = sessions.get(cm["session_id"])
+        if not s:  # hidden or vanished session — skip
+            continue
+        passages.append(
+            {
+                "chunk_id": cid,
+                "session_id": cm["session_id"],
+                "turn_index": cm["turn_index"],
+                "content": cm["content"],
+                "score": round(score / max_score, 4),
+                "title": s.get("title"),
+                "source": s.get("source"),
+                "repository": s.get("repository"),
+                "updated_at": s.get("updated_at") or s.get("created_at"),
+            }
+        )
+    return passages
 
 
 def _sort_results(results: list[dict[str, Any]], sort: str) -> list[dict[str, Any]]:
@@ -354,6 +437,20 @@ def _load_chunk_text(ids: list[int]) -> dict[int, str]:
             ids,
         ).fetchall()
     return {r["id"]: r["content"] for r in rows}
+
+
+def _load_chunks(ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Load chunk rows (id, session, turn, type, content) keyed by chunk id."""
+    if not ids:
+        return {}
+    with db.cursor() as cur:
+        placeholders = ",".join("?" * len(ids))
+        rows = cur.execute(
+            "SELECT id, session_id, turn_index, source_type, content "
+            f"FROM chunks WHERE id IN ({placeholders})",
+            ids,
+        ).fetchall()
+    return {r["id"]: dict(r) for r in rows}
 
 
 def facets() -> dict[str, Any]:

@@ -61,10 +61,20 @@ format.
 
 ## Ask (local LLM)
 
-| Variable            | Default                  | Purpose                                 |
-|---------------------|--------------------------|-----------------------------------------|
-| `MARK_OLLAMA_URL`   | `http://localhost:11434` | Ollama endpoint                         |
-| `MARK_OLLAMA_MODEL` | *(auto-pick)*            | Force a specific installed Ollama model |
+| Variable                          | Default                         | Purpose                                                                       |
+|-----------------------------------|---------------------------------|-------------------------------------------------------------------------------|
+| `MARK_OLLAMA_URL`                 | `http://localhost:11434`        | Ollama endpoint                                                               |
+| `MARK_OLLAMA_MODEL`               | *(auto-pick)*                   | Force a specific installed Ollama model                                       |
+| `MARK_ASK_NUM_CTX_CAP`            | `16384`                         | Ceiling on the context window requested (clamped to the model's own length)   |
+| `MARK_ASK_DEFAULT_NUM_CTX`        | `8192`                          | Fallback window when the model doesn't report a context length                |
+| `MARK_ASK_RESERVE_OUTPUT_TOKENS`  | `1024`                          | Tokens held back within the window for the answer                             |
+| `MARK_ASK_DEFAULT_SOURCES`        | `8`                             | Distinct sessions an answer may cite when unspecified (UI selector overrides) |
+| `MARK_ASK_MAX_CANDIDATE_PASSAGES` | `60`                            | Passages retrieved (and reranked) before packing into the budget              |
+| `MARK_ASK_PER_SESSION_PASSAGES`   | `3`                             | Max passages drawn from any one session                                       |
+| `MARK_ASK_NEIGHBOR_TURNS`         | `1`                             | Surrounding turns included on each side of a matched passage                  |
+| `MARK_ASK_MAX_TURN_CHARS`         | `4000`                          | Cap on characters taken from a single turn when widening context              |
+| `MARK_ASK_RERANK`                 | `1`                             | Cross-encoder reranking of passages (needs `semantic` extra; `0` disables)    |
+| `MARK_RERANK_MODEL`               | `Xenova/ms-marco-MiniLM-L-6-v2` | fastembed cross-encoder used for reranking                                    |
 
 See [Ask your history](ask.md).
 

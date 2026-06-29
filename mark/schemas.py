@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 class AskIn(BaseModel):
     question: str
-    limit: int = 6
+    limit: int | None = None
 
 
 class RenderIn(BaseModel):
@@ -39,7 +39,7 @@ class MemberIn(BaseModel):
 
 class CollAskIn(BaseModel):
     question: str
-    limit: int = 8
+    limit: int | None = None
 
 
 class TagIn(BaseModel):

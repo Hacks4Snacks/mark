@@ -15,6 +15,10 @@ def tmp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "UPLOADS_DIR", tmp_path / "uploads")
     # Deterministic, offline embeddings.
     monkeypatch.setattr(embeddings, "_embedder", embeddings._HashEmbed())
+    # Don't let Ask's optional cross-encoder reranker download a model mid-test;
+    # tests exercise the deterministic fallback (and rerank wiring) explicitly.
+    monkeypatch.setattr(embeddings, "_reranker", None)
+    monkeypatch.setattr(embeddings, "_reranker_ready", True)
     # The vector matrix cache is keyed by "model:rowcount"; reset it so one
     # test's vectors can never leak into another test that happens to match.
     monkeypatch.setattr(

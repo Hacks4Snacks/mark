@@ -75,11 +75,10 @@ export async function submitAsk() {
   if (!q) return;
   const ex = $("#askExamples");
   if (ex) ex.hidden = true;
-  const limit = parseInt($("#askLimit")?.value, 10) || 8;
   askBusy = true;
   await streamAsk(
     "/api/ask",
-    { question: q, limit },
+    { question: q },
     { answerEl: $("#askAnswer"), sourcesEl: $("#askSources"), sendBtn: $("#askSend") }
   );
   askBusy = false;

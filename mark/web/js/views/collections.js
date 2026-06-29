@@ -396,13 +396,6 @@ function renderCollection(c) {
       <div class="coll-ask-body" id="collAskBody">
         <form class="ask-form" id="collAskForm">
           <textarea id="collAskInput" rows="2" placeholder="Ask a question answered only from these conversations\u2026"></textarea>
-          <select id="collAskLimit" class="ask-limit" title="How many conversations to draw from" aria-label="Sources to consider">
-            <option value="6">6 sources</option>
-            <option value="8" selected>8 sources</option>
-            <option value="12">12 sources</option>
-            <option value="16">16 sources</option>
-            <option value="20">20 sources</option>
-          </select>
           <button class="btn btn-primary" id="collAskSend" type="submit">Ask</button>
         </form>
         <div id="collAskStatus" class="ask-status" hidden></div>
@@ -463,11 +456,10 @@ function renderCollection(c) {
     e.preventDefault();
     const q = $("#collAskInput").value.trim();
     if (!q) return;
-    const limit = parseInt($("#collAskLimit").value, 10) || 8;
     $("#collAskExamples").hidden = true;
     streamAsk(
       `/api/collections/${encodeURIComponent(c.id)}/ask`,
-      { question: q, limit },
+      { question: q },
       { answerEl: $("#collAskAnswer"), sourcesEl: $("#collAskSources"), sendBtn: $("#collAskSend") }
     );
   });
