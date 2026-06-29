@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+from typing import ClassVar
 
 from markdown_it import MarkdownIt
 from pygments import highlight as _pyg_highlight
@@ -26,7 +27,7 @@ class MarkDarkStyle(Style):
     """Syntax colors tuned to Mark's dark palette (purple/cyan/green/amber)."""
 
     background_color = "transparent"
-    styles = {
+    styles: ClassVar[dict] = {
         Token: "#e8eaf0",
         Comment: "italic #6b7488",
         Comment.Preproc: "#c98bdb",
@@ -65,7 +66,7 @@ class MarkLightStyle(Style):
     """Syntax colors tuned to Mark's light palette."""
 
     background_color = "transparent"
-    styles = {
+    styles: ClassVar[dict] = {
         Token: "#1b2330",
         Comment: "italic #717a8a",
         Comment.Preproc: "#8a3fbf",
