@@ -26,11 +26,17 @@ on your machine.
 
 When you ask a question, Mark:
 
-1. **Retrieves** the most relevant past conversations using the same hybrid
-   search that powers the rest of the app.
-2. Builds a context window from short **excerpts** of those sessions, each
-   numbered as a source.
-3. Has the **local** model synthesise an answer that cites the sources it used
+1. **Retrieves** the most relevant *passages* from your history using the same
+   hybrid (keyword + semantic) search that powers the rest of the app — pinning
+   the exact turns that answer your question rather than whole sessions.
+2. **Reranks** those passages with a local cross-encoder (when the `semantic`
+   extra is installed) so the most on-point excerpts win; otherwise it keeps the
+   hybrid-search order.
+3. **Packs** the top passages — each widened with a little surrounding context
+   and numbered as a source — into the model's context window, sized to the
+   model you're running instead of a fixed per-source slice. Several passages
+   from one session share its citation number.
+4. Has the **local** model synthesise an answer that cites the sources it used
    (e.g. `[1]`, `[2]`), and **streams it back token by token**.
 
 The model is instructed to answer **only** from your excerpts and to say plainly

@@ -205,3 +205,70 @@ def to_blob(vec: np.ndarray) -> bytes:
 
 def from_blob(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32)
+
+
+class _CrossEncoderReranker:
+    """Cross-encoder relevance scorer (fastembed).
+
+    A cross-encoder reads the query and a candidate *together*, so it ranks a
+    small set of retrieved passages far more accurately than the bi-encoder
+    cosine similarity used for first-stage recall.
+    """
+
+    def __init__(self) -> None:
+        from fastembed.rerank.cross_encoder import TextCrossEncoder  # type: ignore
+
+        self.name = config.RERANK_MODEL
+        # Reuse the embedding CPU cap so a first-time rerank (model download +
+        # ONNX init) doesn't peg every core.
+        self._model = TextCrossEncoder(
+            model_name=config.RERANK_MODEL,
+            threads=config.EMBED_THREADS or None,
+        )
+
+    def scores(self, query: str, documents: Sequence[str]) -> list[float]:
+        return [float(s) for s in self._model.rerank(query, list(documents))]
+
+
+_rerank_lock = threading.Lock()
+_reranker: _CrossEncoderReranker | None = None
+_reranker_ready = False
+
+
+def get_reranker() -> _CrossEncoderReranker | None:
+    """Lazily construct the cross-encoder reranker, or ``None`` when unavailable.
+
+    The outcome (including failure) is cached so the expensive model download and
+    ONNX session init are only attempted once per process.
+    """
+    global _reranker, _reranker_ready
+    if _reranker_ready:
+        return _reranker
+    with _rerank_lock:
+        if _reranker_ready:
+            return _reranker
+        if config.ASK_RERANK:
+            try:
+                _reranker = _CrossEncoderReranker()
+            except Exception:  # missing dep, download failure, runtime issue
+                _reranker = None
+        _reranker_ready = True
+        return _reranker
+
+
+def rerank(query: str, documents: Sequence[str]) -> list[float] | None:
+    """Relevance scores aligned with ``documents`` (higher = better).
+
+    Returns ``None`` when no reranker backend is available so callers can fall
+    back to their existing ordering.
+    """
+    if not documents:
+        return []
+    rr = get_reranker()
+    if rr is None:
+        return None
+    try:
+        scores = rr.scores(query, documents)
+    except Exception:
+        return None
+    return scores if len(scores) == len(documents) else None
