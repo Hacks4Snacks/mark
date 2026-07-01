@@ -6,6 +6,7 @@ from .claude_code import ClaudeCodeSource
 from .cline import ClineSource
 from .copilot_cli import CopilotCliSource
 from .cursor import CursorSource
+from .grok import GrokSource
 from .vscode import VSCodeSource
 
 WATCHED_SOURCES: list[WatchedSource] = [
@@ -19,6 +20,7 @@ WATCHED_SOURCES: list[WatchedSource] = [
 #: On-demand importers for user-supplied export files (cloud assistants).
 IMPORT_SOURCES: list[ImportSource] = [
     ChatGptSource(),
+    GrokSource(),
 ]
 
 __all__ = [
@@ -29,6 +31,7 @@ __all__ = [
     "ClineSource",
     "CopilotCliSource",
     "CursorSource",
+    "GrokSource",
     "ImportSource",
     "ProgressCb",
     "VSCodeSource",

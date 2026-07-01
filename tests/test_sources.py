@@ -5,6 +5,7 @@ import sqlite3
 
 from mark.sources import IMPORT_SOURCES, WATCHED_SOURCES, claude_code, vscode
 from mark.sources.chatgpt import ChatGptSource
+from mark.sources.grok import GrokSource
 
 
 def _sample_export() -> bytes:
@@ -49,6 +50,35 @@ def _sample_export() -> bytes:
     return json.dumps([convo]).encode()
 
 
+def _sample_grok_export() -> bytes:
+    """An Enhanced Grok Export v2 payload: one Human + one Grok message."""
+    export = {
+        "exportDate": "2026-07-01T21:27:21.657Z",
+        "exportVersion": "2.4.1",
+        "platform": "grok",
+        "messageCount": 2,
+        "url": "https://grok.com/c/9a8a350b-45b4-4847-9c14-20acba8d2faa?rid=5debbe06",
+        "conversation": [
+            {
+                "id": "msg_0",
+                "speaker": "Human",
+                "content": "How do I refresh a token? See https://example.com/docs",
+                "mode": "deepsearch",
+                "timestamp": "2026-07-01T21:27:21.655Z",
+            },
+            {
+                "id": "msg_1",
+                "speaker": "Grok",
+                "content": "Call the refresh endpoint:\n```bash\ncurl /refresh\n```",
+                "mode": "standard",
+                "timestamp": "2026-07-01T21:27:21.656Z",
+            },
+        ],
+        "statistics": {"humanMessages": 1, "grokMessages": 1},
+    }
+    return json.dumps(export).encode()
+
+
 def test_chatgpt_detect():
     src = ChatGptSource()
     assert src.detect("conversations.json", _sample_export()) is True
@@ -86,6 +116,51 @@ def test_chatgpt_import_into_db(persist_session):
     assert any(r["id"] == "chatgpt-abc" for r in res)
 
 
+def test_grok_detect():
+    src = GrokSource()
+    assert src.detect("grok-export.json", _sample_grok_export()) is True
+    # A ChatGPT export (a list of conversations) must not be claimed by Grok.
+    assert src.detect("conversations.json", _sample_export()) is False
+    assert src.detect("other.json", b'{"platform": "chatgpt"}') is False
+    assert src.detect("notjson.txt", b"not json at all") is False
+
+
+def test_grok_parse_export():
+    src = GrokSource()
+    sessions = list(src.parse_export(_sample_grok_export()))
+    assert len(sessions) == 1
+    s = sessions[0]
+    # The stable id comes from the /c/<uuid> in the share URL.
+    assert s["id"] == "grok-9a8a350b-45b4-4847-9c14-20acba8d2faa"
+    assert s["source"] == "grok"
+    assert s["responder"] == "Grok"
+    assert s["source_path"].startswith("https://grok.com/c/")
+    assert len(s["turns"]) == 1
+    turn = s["turns"][0]
+    # Human -> user, Grok -> assistant.
+    assert turn["user_message"].startswith("How do I refresh a token?")
+    assert "refresh endpoint" in turn["assistant_response"]
+    # The deliberate mode is captured; the default "standard" is dropped.
+    assert turn["thinking"] == "Mode: deepsearch"
+    # Fenced blocks and URLs are extracted like the other adapters.
+    assert turn["code_blocks"] == [{"language": "bash", "content": "curl /refresh"}]
+    assert "https://example.com/docs" in turn["urls"]
+
+
+def test_grok_import_into_db(persist_session):
+    """The Grok importer's output persists and becomes searchable."""
+    from mark import db, persist, search
+
+    src = GrokSource()
+    with db.connect() as conn:
+        cur = conn.cursor()
+        for session in src.parse_export(_sample_grok_export()):
+            persist.write_session(cur, session)
+        conn.commit()
+    res = search.search("refresh token", mode="keyword")
+    assert any(r["id"] == "grok-9a8a350b-45b4-4847-9c14-20acba8d2faa" for r in res)
+
+
 def test_source_registry_is_well_formed():
     # Every watched source exposes a stable key and a default config.
     keys = [s.key for s in WATCHED_SOURCES]
@@ -95,6 +170,7 @@ def test_source_registry_is_well_formed():
         cfg = s.default_config()
         assert cfg.key == s.key
     assert any(i.key == "chatgpt" for i in IMPORT_SOURCES)
+    assert any(i.key == "grok" for i in IMPORT_SOURCES)
 
 
 def _write_jsonl(path, events):

@@ -17,6 +17,8 @@ page explains what's supported, how to override paths, and how syncing works.
 Plus **import** sources (one-off uploads rather than watched paths):
 
 - **ChatGPT** exports (`conversations.json`) — imported as many sessions.
+- **Grok** exports — a conversation saved by a validated Grok export tool (e.g.
+  the *Enhanced Grok Export* userscript). See [The Grok family](#the-grok-family).
 - **Your own notes and files** — see
   [Managing your archive](managing-your-archive.md).
 
@@ -34,6 +36,29 @@ with its own source name:
 
 Unknown forks are still indexed — they get a label derived from their extension
 id. To name one explicitly, add an override (see below).
+
+### The Grok family
+
+Grok has no local store to watch and no official export, so Mark imports Grok
+conversations from **export tools** — browser userscripts/extensions that save a
+conversation to JSON. Different tools emit different JSON, so Mark accepts only a
+**curated set of validated formats**, each matched by a strict signature and
+normalised to a single `grok` session type:
+
+| Export tool                 | Recognised by                                        |
+|-----------------------------|------------------------------------------------------|
+| Enhanced Grok Export (v2.x) | top-level `platform: "grok"` + a `conversation` list |
+
+Drop the exported `.json` onto the upload area (or `POST /api/uploads`) and Mark
+imports it. Per-message Grok **modes** (deepsearch/think/…) are preserved on each
+turn. An export from an **unrecognised** tool is never parsed on a guess — it
+falls back to a plain searchable document, so nothing is lost.
+
+**Adding another export tool** is a small, test-backed change rather than a new
+adapter: add a format handler (a strict `matches` signature plus a
+`conversations` mapper) to `mark/sources/grok.py`, plus a sample fixture and a
+test. Every handler normalises to the same `grok` session, so the rest of Mark is
+unaffected.
 
 ## Auto-discovery vs. overriding
 
