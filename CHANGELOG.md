@@ -9,6 +9,13 @@ From v0.2.0 onward, entries are generated automatically by
 [release-please](https://github.com/googleapis/release-please) from Conventional
 Commits.
 
+## [0.3.0](https://github.com/Hacks4Snacks/mark/compare/v0.2.0...v0.3.0) (2026-07-01)
+
+
+### Features
+
+* grok source adapter support ([#15](https://github.com/Hacks4Snacks/mark/issues/15)) ([2c6d835](https://github.com/Hacks4Snacks/mark/commit/2c6d835609caa46a2ea8b1ecf4e354e4457f4565))
+
 ## [0.2.0](https://github.com/Hacks4Snacks/mark/compare/v0.1.0...v0.2.0) (2026-06-29)
 
 
