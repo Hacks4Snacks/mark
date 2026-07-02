@@ -64,6 +64,7 @@ export const SOURCE_ICON = {
   agent: "bot",
   upload: "paperclip",
   copilot: "bot",
+  copilot_memory: "archive",
 };
 
 export function icon(name, { size = 16, cls = "" } = {}) {

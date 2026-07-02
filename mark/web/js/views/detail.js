@@ -102,17 +102,28 @@ function renderDetail(s) {
     (a.id != null && (a.content != null || a.stored_path))
       ? `/api/sessions/${encodeURIComponent(s.id)}/attachments/${encodeURIComponent(a.id)}/download`
       : null;
-  if (attachments.length) {
-    asideBlocks.push(`<div><h4>Attachments (${attachments.length})</h4><div class="aside-files">${
-      attachments.map((a, i) => {
-        const dl = attDownloadHref(a);
-        const dlLink = dl
-          ? `<a class="att-dl" href="${dl}" download="${esc(a.filename || "file")}" title="Download ${esc(a.filename || "file")}">${icon("download", { size: 14 })}</a>`
-          : "";
-        return `<div class="aside-file att-row" title="${esc(a.filename || "")}">`
-          + `<a class="att-jump" data-att="${i}">${icon("paperclip", { size: 13 })} ${esc(a.filename || "file")}</a>${dlLink}</div>`;
-      }).join("")
-    }</div></div>`);
+  // Memory-tool notes (kept where the agent wrote them) are shown apart from any
+  // other agent-created files; they are told apart by their on-disk location.
+  const isMemoryAtt = (a) =>
+    (a.stored_path || "").replace(/\\/g, "/").includes("memory-tool/memories");
+  const attIndexed = attachments.map((a, i) => ({ a, i }));
+  const memAtts = attIndexed.filter(({ a }) => isMemoryAtt(a));
+  const agentAtts = attIndexed.filter(({ a }) => !isMemoryAtt(a));
+  const asideList = (items, ic) => `<div class="aside-files">${
+    items.map(({ a, i }) => {
+      const dl = attDownloadHref(a);
+      const dlLink = dl
+        ? `<a class="att-dl" href="${dl}" download="${esc(a.filename || "file")}" title="Download ${esc(a.filename || "file")}">${icon("download", { size: 14 })}</a>`
+        : "";
+      return `<div class="aside-file att-row" title="${esc(a.filename || "")}">`
+        + `<a class="att-jump" data-att="${i}">${icon(ic, { size: 13 })} ${esc(a.filename || "file")}</a>${dlLink}</div>`;
+    }).join("")
+  }</div>`;
+  if (memAtts.length) {
+    asideBlocks.push(`<div><h4>Memory notes (${memAtts.length})</h4>${asideList(memAtts, "archive")}</div>`);
+  }
+  if (agentAtts.length) {
+    asideBlocks.push(`<div><h4>Attachments (${agentAtts.length})</h4>${asideList(agentAtts, "paperclip")}</div>`);
   }
 
   let body;
@@ -121,22 +132,27 @@ function renderDetail(s) {
   } else {
     body = (s.turns || []).map(turnHTML).join("");
   }
-  if (attachments.length) {
-    body += `<div class="attachments"><h3>Attachments created by the agent</h3>${
-      attachments.map((a, i) => {
-        const meta = `${esc(a.filename || "file")} · ${fmtBytes(a.size_bytes)}`;
-        const dl = attDownloadHref(a);
-        const dlLink = dl
-          ? `<a class="att-dl" href="${dl}" download="${esc(a.filename || "file")}" title="Download ${esc(a.filename || "file")}">${icon("download", { size: 14 })} Download</a>`
-          : "";
-        const inner = a.html
-          ? `<div class="md">${a.html}</div>`
-          : a.content != null
-            ? `<pre class="att-pre">${esc(a.content)}</pre>`
-            : `<p class="muted">Not stored (binary or larger than the snapshot limit). Path: ${esc(a.stored_path || "")}</p>`;
-        return `<details class="attachment" id="att-${i}"><summary>${icon("paperclip", { size: 13 })} ${meta}${dlLink}</summary>${inner}</details>`;
-      }).join("")
-    }</div>`;
+  const attDetails = (items, ic) =>
+    items.map(({ a, i }) => {
+      const meta = `${esc(a.filename || "file")} · ${fmtBytes(a.size_bytes)}`;
+      const dl = attDownloadHref(a);
+      const dlLink = dl
+        ? `<a class="att-dl" href="${dl}" download="${esc(a.filename || "file")}" title="Download ${esc(a.filename || "file")}">${icon("download", { size: 14 })} Download</a>`
+        : "";
+      const inner = a.html
+        ? `<div class="md">${a.html}</div>`
+        : a.content != null
+          ? `<pre class="att-pre">${esc(a.content)}</pre>`
+          : `<p class="muted">Not stored (binary or larger than the snapshot limit). Path: ${esc(a.stored_path || "")}</p>`;
+      return `<details class="attachment" id="att-${i}"><summary>${icon(ic, { size: 13 })} ${meta}${dlLink}</summary>${inner}</details>`;
+    }).join("");
+  if (memAtts.length) {
+    body += `<div class="attachments"><h3>Memory notes</h3>`
+      + `<p class="muted">Durable notes the agent saved with its memory tool while working on this conversation.</p>`
+      + `${attDetails(memAtts, "archive")}</div>`;
+  }
+  if (agentAtts.length) {
+    body += `<div class="attachments"><h3>Attachments created by the agent</h3>${attDetails(agentAtts, "paperclip")}</div>`;
   }
 
   view.innerHTML = `
