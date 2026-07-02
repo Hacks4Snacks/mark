@@ -164,7 +164,14 @@ def test_grok_import_into_db(persist_session):
 def test_source_registry_is_well_formed():
     # Every watched source exposes a stable key and a default config.
     keys = [s.key for s in WATCHED_SOURCES]
-    assert {"vscode", "copilot_cli", "cline", "cursor", "claude_code"} <= set(keys)
+    assert {
+        "vscode",
+        "copilot_cli",
+        "copilot_memory",
+        "cline",
+        "cursor",
+        "claude_code",
+    } <= set(keys)
     assert len(keys) == len(set(keys)), "watched source keys must be unique"
     for s in WATCHED_SOURCES:
         cfg = s.default_config()
@@ -738,6 +745,165 @@ def test_vscode_reingest_skips_unchanged_via_stat_cache(tmp_path):
     assert first == {"added": 1, "updated": 0, "skipped": 0}
     assert second == {"added": 0, "updated": 0, "skipped": 1}
     assert cached is not None
+
+
+def _make_memory_workspace(tmp_path):
+    """A workspaceStorage root with a workspace.json (repo mapping) plus two
+    Copilot memory notes: one repo-scoped, one session-scoped."""
+    import base64
+
+    ws = tmp_path / "workspaceStorage"
+    (ws / "ws1").mkdir(parents=True)
+    (ws / "ws1" / "workspace.json").write_text(
+        json.dumps({"folder": "file:///home/me/code/myrepo"})
+    )
+    mem = ws / "ws1" / "GitHub.copilot-chat" / "memory-tool" / "memories"
+    (mem / "repo").mkdir(parents=True)
+    (mem / "repo" / "conventions.md").write_text(
+        "# Conventions\n\nUse refresh tokens for auth.\n```bash\ncurl /refresh\n```\n"
+    )
+    sid = "f0bd00cf-c81d-4435-aa27-52373371f0f5"
+    b64 = base64.urlsafe_b64encode(sid.encode()).decode().rstrip("=")
+    (mem / b64).mkdir(parents=True)
+    (mem / b64 / "plan.md").write_text("# Plan\n\nStep one: ship the feature.\n")
+    return ws
+
+
+def test_copilot_memory_indexes_repo_scope_not_session(tmp_path):
+    """Repo-scoped notes index as their own `copilot_memory` session (no LLM cost);
+    session-scoped notes are left to the VS Code source, not indexed here."""
+    from mark import config, db, search
+    from mark.sources.copilot_memory import CopilotMemorySource
+
+    ws = _make_memory_workspace(tmp_path)
+    cfg = config.SourceConfig(key="copilot_memory", roots=[ws])
+    src = CopilotMemorySource()
+    with db.connect() as conn:
+        cur = conn.cursor()
+        res = src.ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        rows = {
+            r["title"]: dict(r)
+            for r in cur.execute(
+                "SELECT id, title, source, repository, workspace_id, "
+                "est_cost_usd, input_tokens FROM sessions"
+            )
+        }
+    assert res == {"added": 1, "updated": 0, "skipped": 0}
+    assert set(rows) == {"Repo memory · conventions"}  # session note not indexed here
+    repo_row = rows["Repo memory · conventions"]
+    assert repo_row["source"] == "copilot_memory"
+    assert repo_row["repository"] == "myrepo"
+    assert repo_row["workspace_id"] == "ws1"
+    assert repo_row["est_cost_usd"] == 0.0  # memory is knowledge, not spend
+    assert repo_row["input_tokens"] == 0
+    # The note body is searchable and traces back to the memory session.
+    hits = search.search("refresh", mode="keyword")
+    assert any(h["id"] == repo_row["id"] for h in hits)
+
+
+def test_copilot_memory_reingest_skips_unchanged(tmp_path):
+    """A second scan of unchanged memory notes is skipped from the stat cache."""
+    from mark import config, db
+    from mark.sources.copilot_memory import CopilotMemorySource
+
+    ws = _make_memory_workspace(tmp_path)
+    cfg = config.SourceConfig(key="copilot_memory", roots=[ws])
+    src = CopilotMemorySource()
+    with db.connect() as conn:
+        cur = conn.cursor()
+        first = src.ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        existing = {
+            r["id"]: r["content_hash"]
+            for r in cur.execute("SELECT id, content_hash FROM sessions")
+        }
+        second = src.ingest(cur, existing, cfg, rebuild=False)
+        conn.commit()
+    assert first == {"added": 1, "updated": 0, "skipped": 0}
+    assert second == {"added": 0, "updated": 0, "skipped": 1}
+
+
+def test_copilot_memory_multiroot_attributes_repo_per_file(tmp_path):
+    """In a multi-root workspace (workspace.json -> .code-workspace descriptor),
+    each repo note is attributed to the folder whose name best matches the file,
+    never the literal 'workspace.json' descriptor."""
+    from mark import config, db
+    from mark.sources.copilot_memory import CopilotMemorySource
+
+    ws = tmp_path / "workspaceStorage"
+    (ws / "ws1").mkdir(parents=True)
+    desc = tmp_path / "Workspaces" / "123" / "workspace.json"
+    desc.parent.mkdir(parents=True)
+    desc.write_text(
+        json.dumps(
+            {"folders": [{"path": "/code/frontend-app"}, {"path": "/code/backend-api"}]}
+        )
+    )
+    (ws / "ws1" / "workspace.json").write_text(json.dumps({"workspace": desc.as_uri()}))
+    mem = ws / "ws1" / "GitHub.copilot-chat" / "memory-tool" / "memories" / "repo"
+    mem.mkdir(parents=True)
+    (mem / "frontend-app.md").write_text("# FE\n\nRoutes and views.\n")
+    (mem / "backend-api-notes.md").write_text("# BE\n\nEndpoints and auth.\n")
+
+    cfg = config.SourceConfig(key="copilot_memory", roots=[ws])
+    with db.connect() as conn:
+        cur = conn.cursor()
+        CopilotMemorySource().ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        repos = {
+            r["title"]: r["repository"]
+            for r in cur.execute("SELECT title, repository FROM sessions")
+        }
+    assert repos["Repo memory · frontend-app"] == "frontend-app"
+    assert repos["Repo memory · backend-api-notes"] == "backend-api"
+
+
+def test_vscode_attaches_session_memory(tmp_path):
+    """A session-scoped memory note is attached to the chat that produced it (an
+    agent attachment on the VS Code session), not indexed as a separate session."""
+    import base64
+
+    from mark import config, db
+    from mark.sources.vscode import VSCodeSource
+
+    ws = tmp_path / "workspaceStorage"
+    sid = "11111111-2222-3333-4444-555555555555"
+    chat = ws / "wsA" / "chatSessions" / f"{sid}.json"
+    chat.parent.mkdir(parents=True)
+    chat.write_text(
+        json.dumps(
+            {
+                "sessionId": sid,
+                "creationDate": 1,
+                "requests": [
+                    {"message": {"text": "hello"}, "response": [{"value": "hi"}]}
+                ],
+            }
+        )
+    )
+    b64 = base64.urlsafe_b64encode(sid.encode()).decode().rstrip("=")
+    memdir = ws / "wsA" / "GitHub.copilot-chat" / "memory-tool" / "memories" / b64
+    memdir.mkdir(parents=True)
+    (memdir / "plan.md").write_text("# Plan\n\nRemember: use refresh tokens.\n")
+
+    cfg = config.SourceConfig(key="vscode", roots=[ws])
+    with db.connect() as conn:
+        cur = conn.cursor()
+        res = VSCodeSource().ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        atts = [
+            dict(r)
+            for r in cur.execute(
+                "SELECT kind, filename, content FROM documents WHERE session_id = ?",
+                (sid,),
+            )
+        ]
+    assert res["added"] == 1
+    assert len(atts) == 1
+    assert atts[0]["kind"] == "attachment"
+    assert atts[0]["filename"] == "plan.md"
+    assert "refresh tokens" in atts[0]["content"]
 
 
 def test_copilot_cli_reingest_skips_snapshot_when_unchanged(tmp_path):

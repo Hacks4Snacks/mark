@@ -5,6 +5,7 @@ from .chatgpt import ChatGptSource
 from .claude_code import ClaudeCodeSource
 from .cline import ClineSource
 from .copilot_cli import CopilotCliSource
+from .copilot_memory import CopilotMemorySource
 from .cursor import CursorSource
 from .grok import GrokSource
 from .vscode import VSCodeSource
@@ -12,6 +13,7 @@ from .vscode import VSCodeSource
 WATCHED_SOURCES: list[WatchedSource] = [
     VSCodeSource(),
     CopilotCliSource(),
+    CopilotMemorySource(),
     ClineSource(),
     CursorSource(),
     ClaudeCodeSource(),
@@ -30,6 +32,7 @@ __all__ = [
     "ClaudeCodeSource",
     "ClineSource",
     "CopilotCliSource",
+    "CopilotMemorySource",
     "CursorSource",
     "GrokSource",
     "ImportSource",

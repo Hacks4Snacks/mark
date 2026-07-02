@@ -24,6 +24,7 @@ export const SRC_LABEL = {
   agent: "Agent",
   upload: "Upload",
   copilot: "Copilot",
+  copilot_memory: "Copilot memory",
 };
 // `icon` is an inline SVG string; `label` is the human name.
 export const srcMeta = (s) => ({

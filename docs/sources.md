@@ -6,13 +6,14 @@ page explains what's supported, how to override paths, and how syncing works.
 
 ## Supported sources
 
-| Source key    | What it indexes                                              | Where it lives (auto-detected)                               |
-|---------------|--------------------------------------------------------------|--------------------------------------------------------------|
-| `vscode`      | VS Code inline/agent chats                                   | `…/Code/User/workspaceStorage` (Stable, Insiders, VSCodium)  |
-| `copilot_cli` | Copilot CLI / agent-store conversations + real token metrics | `~/.copilot/session-store.db` (+ `~/.copilot/session-state`) |
-| `cline`       | Cline-family agent task histories                            | `…/Code/User/globalStorage`                                  |
-| `cursor`      | Cursor Composer / chat history                               | `…/Cursor/User/globalStorage/state.vscdb`                    |
-| `claude_code` | Claude Code CLI session transcripts + real token metrics     | `~/.claude/projects` (`$CLAUDE_CONFIG_DIR/projects` if set)  |
+| Source key       | What it indexes                                              | Where it lives (auto-detected)                               |
+|------------------|--------------------------------------------------------------|--------------------------------------------------------------|
+| `vscode`         | VS Code inline/agent chats                                   | `…/Code/User/workspaceStorage` (Stable, Insiders, VSCodium)  |
+| `copilot_cli`    | Copilot CLI / agent-store conversations + real token metrics | `~/.copilot/session-store.db` (+ `~/.copilot/session-state`) |
+| `copilot_memory` | VS Code Copilot **memory-tool** notes (repo & session)       | `…/workspaceStorage/<id>/GitHub.copilot-chat/memory-tool`    |
+| `cline`          | Cline-family agent task histories                            | `…/Code/User/globalStorage`                                  |
+| `cursor`         | Cursor Composer / chat history                               | `…/Cursor/User/globalStorage/state.vscdb`                    |
+| `claude_code`    | Claude Code CLI session transcripts + real token metrics     | `~/.claude/projects` (`$CLAUDE_CONFIG_DIR/projects` if set)  |
 
 Plus **import** sources (one-off uploads rather than watched paths):
 
@@ -21,6 +22,25 @@ Plus **import** sources (one-off uploads rather than watched paths):
   the *Enhanced Grok Export* userscript). See [The Grok family](#the-grok-family).
 - **Your own notes and files** — see
   [Managing your archive](managing-your-archive.md).
+
+### Copilot memory notes
+
+When the VS Code Copilot agent uses its **memory tool**, it writes durable
+markdown notes that the chat log never contains (it records only that the tool
+ran). Mark captures them by scope:
+
+| On disk (under a workspace's `memory-tool/memories/`)       | Captured as                                                     |
+|-------------------------------------------------------------|----------------------------------------------------------------|
+| `repo/<name>.md` — cross-session repository knowledge       | its own `copilot_memory` session, `Repo memory · <name>`       |
+| `<name>.md` — user-scoped notes (rare)                      | its own `copilot_memory` session, `Memory · <name>`            |
+| `<session-id>/<name>.md` — one conversation's working notes | an **attachment on the chat session** that produced it (VS Code) |
+
+Repo/user notes are attributed to their workspace's repository (so they join
+that repo's facet) and carry **no** token or dollar cost — memory is knowledge,
+not spend, so they never skew the usage dashboards. Session notes ride along
+with their conversation: they appear as attachments in its detail view and
+re-sync whenever that chat is re-indexed. Disable the standalone repo/user
+indexing like any source with `MARK_SOURCE_COPILOT_MEMORY_ENABLED=0`.
 
 ### The Cline family
 

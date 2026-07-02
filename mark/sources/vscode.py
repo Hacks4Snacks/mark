@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -22,11 +23,45 @@ from .base import (
 )
 
 
+def _workspace_folders(descriptor_uri: Any) -> list[str]:
+    """Resolve a multi-root workspace descriptor to its member folder paths.
+
+    A multi-root window's ``workspace.json`` only points at a ``.code-workspace``
+    descriptor; the actual repo folders live inside it under ``folders`` (each a
+    ``{"path": …}`` or ``{"uri": …}``, possibly relative to the descriptor file).
+    """
+    wpath = uri_to_path(descriptor_uri)
+    if not wpath:
+        return []
+    try:
+        data = json.loads(Path(wpath).read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    base = Path(wpath).parent
+    out: list[str] = []
+    for entry in data.get("folders") or []:
+        if not isinstance(entry, dict):
+            continue
+        p = uri_to_path(entry.get("uri")) or entry.get("path")
+        if not isinstance(p, str) or not p:
+            continue
+        if not p.startswith("/") and "://" not in p:  # relative to the descriptor
+            p = str((base / p).resolve())
+        out.append(p)
+    return out
+
+
 def load_workspace_map(
     roots: list[Path],
-) -> dict[str, dict[str, str | None]]:
-    """Map each workspaceStorage id to its repository path/name."""
-    mapping: dict[str, dict[str, str | None]] = {}
+) -> dict[str, dict[str, Any]]:
+    """Map each workspaceStorage id to its repository path/name.
+
+    Single-folder windows store the repo directly (``folder``); multi-root windows
+    store only a pointer to a ``.code-workspace`` descriptor, which is resolved to
+    its member folders. ``folders`` lists every resolved repo so a caller can
+    attribute a file to the right one; ``path``/``name`` are the primary (first).
+    """
+    mapping: dict[str, dict[str, Any]] = {}
     for root in roots:
         for wj in root.glob("*/workspace.json"):
             ws_id = wj.parent.name
@@ -36,11 +71,15 @@ def load_workspace_map(
                 continue
             folder = data.get("folder")
             path = uri_to_path(folder) if folder else None
-            if not path and data.get("workspace"):
-                # Multi-root: resolve the .code-workspace and use its first folder.
-                wpath = uri_to_path(data["workspace"])
-                path = wpath
-            mapping[ws_id] = {"path": path, "name": friendly_repo(path)}
+            folders = [path] if path else []
+            if not folders and data.get("workspace"):
+                folders = _workspace_folders(data["workspace"])
+                path = folders[0] if folders else None
+            mapping[ws_id] = {
+                "path": path,
+                "name": friendly_repo(path),
+                "folders": [{"path": f, "name": friendly_repo(f)} for f in folders],
+            }
     return mapping
 
 
@@ -394,8 +433,75 @@ def _load_session_data(path: Path, raw: bytes) -> dict[str, Any] | None:
     return _reconstruct_jsonl(text)
 
 
+def _decode_session_id(name: str) -> str | None:
+    """Decode a base64 memory-tool directory name back to its chat session id.
+
+    VS Code names a session's memory directory with base64 of the session id. A
+    directory name can't contain ``/``, so the URL-safe alphabet (``-``/``_``) is
+    tried first, then standard. Best-effort: an undecodable name yields ``None``.
+    """
+    pad = "=" * (-len(name) % 4)
+    for altchars in (b"-_", b"+/"):
+        try:
+            text = base64.b64decode(
+                name + pad, altchars=altchars, validate=True
+            ).decode("utf-8", "strict")
+        except (ValueError, UnicodeDecodeError):
+            continue
+        text = text.strip()
+        if text and text.isprintable():
+            return text
+    return None
+
+
+def _read_memory_attachment(path: Path) -> dict[str, Any] | None:
+    """Snapshot a memory note as a viewable text attachment (content capped)."""
+    try:
+        st = path.stat()
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    att: dict[str, Any] = {
+        "filename": path.name,
+        "stored_path": str(path),
+        "mime": "text/markdown",
+        "size_bytes": st.st_size,
+        "content": None,
+    }
+    if st.st_size <= config.MAX_ATTACHMENT_BYTES:
+        att["content"] = raw.decode("utf-8", "replace")
+    return att
+
+
+def _session_memory_attachments(ws_dir: Path, session_id: str) -> list[dict[str, Any]]:
+    """The agent's memory-tool notes written for THIS chat session.
+
+    Copilot's memory tool stores a conversation's working notes at
+    ``…/GitHub.copilot-chat/memory-tool/memories/<base64(session-id)>/*.md`` beside
+    the workspace's chats. Attaching them to the session that produced them keeps
+    the notes where the conversation is read and — because they are written as part
+    of this session — they survive its re-ingest. (Repository-scoped memory, which
+    is cross-session, is indexed separately by the ``copilot_memory`` source.)
+    """
+    base = ws_dir / "GitHub.copilot-chat" / "memory-tool" / "memories"
+    if not base.is_dir():
+        return []
+    out: list[dict[str, Any]] = []
+    for d in sorted(base.iterdir()):
+        if not d.is_dir() or d.name == "repo":
+            continue
+        if _decode_session_id(d.name) != session_id:
+            continue
+        for md in sorted(d.rglob("*.md")):
+            if md.is_file():
+                att = _read_memory_attachment(md)
+                if att:
+                    out.append(att)
+    return out
+
+
 def parse_session(
-    path: Path, wsmap: dict[str, dict[str, str | None]]
+    path: Path, wsmap: dict[str, dict[str, Any]]
 ) -> dict[str, Any] | None:
     try:
         raw = path.read_bytes()
@@ -416,6 +522,7 @@ def parse_session(
         workspace_id = None  # started without a folder open  no repository
     repo = wsmap.get(workspace_id or "", {})
     session_id = data.get("sessionId") or path.stem
+    attachments = _session_memory_attachments(path.parent.parent, session_id)
 
     return {
         "id": session_id,
@@ -433,6 +540,7 @@ def parse_session(
         "content_hash": hashlib.sha256(raw).hexdigest(),
         "turns": turns,
         "metrics": estimate_metrics(turns),
+        "attachments": attachments,
     }
 
 
