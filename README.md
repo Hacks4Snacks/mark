@@ -1,6 +1,6 @@
 <p align="center"><img src="mark/web/favicon.svg" width="72" alt="Mark logo" /></p>
 
-# Mark: Multi-session AI Recall Keeper
+# Mark: Multi-session Agent Recall Keeper
 
 > Your searchable, private archive of every AI coding chat.
 >
