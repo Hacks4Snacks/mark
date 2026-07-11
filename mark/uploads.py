@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, db, embeddings, enrich
+from . import config, db, embeddings, enrich, ingest
 from .persist import window_chunks
 
 
@@ -40,6 +40,28 @@ def _extract_text(filename: str, data: bytes) -> str:
 
 
 def _index_document(
+    *,
+    title: str,
+    kind: str,
+    content: str,
+    filename: str | None = None,
+    stored_path: str | None = None,
+    mime: str | None = None,
+    size: int | None = None,
+) -> str:
+    with ingest.exclusive_ingest():
+        return _index_document_locked(
+            title=title,
+            kind=kind,
+            content=content,
+            filename=filename,
+            stored_path=stored_path,
+            mime=mime,
+            size=size,
+        )
+
+
+def _index_document_locked(
     *,
     title: str,
     kind: str,

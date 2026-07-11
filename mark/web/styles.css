@@ -138,8 +138,12 @@ mark { background: var(--mark); color: var(--mark-ink); border-radius: 3px; padd
   position: sticky; top: 0; z-index: 30;
   display: flex; align-items: center; gap: var(--gap);
   padding: 12px 22px;
-  background: color-mix(in srgb, var(--surface) 78%, transparent);
-  backdrop-filter: saturate(140%) blur(14px);
+  /* Opaque (was a translucent + backdrop-filter blur): this bar is sticky and
+     always covers content scrolling underneath, so the blur had to re-sample
+     and re-filter the backdrop every frame — a big, continuous scroll-jank
+     cost (especially on macOS). A solid background paints once and scrolls
+     free. */
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
 .brand { display: flex; align-items: center; gap: 11px; cursor: pointer; user-select: none; }
@@ -398,8 +402,9 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
   position: sticky; top: 64px; z-index: 20;
   display: flex; align-items: center; gap: 12px;
   padding: 10px 18px; margin-bottom: 14px;
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
-  backdrop-filter: saturate(140%) blur(12px);
+  /* Opaque, no backdrop-filter — see .topbar: blurring the backdrop of a
+     sticky element on every scroll frame is what made long transcripts jank. */
+  background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   box-shadow: var(--shadow);
   opacity: 0; transform: translateY(-6px); pointer-events: none;
@@ -445,7 +450,17 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .aside-file.related .rel-src { flex: none; font-size: 13px; }
 .aside-file.related .rel-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.turn { margin-bottom: 26px; }
+.turn {
+  margin-bottom: 26px;
+  /* A single agent turn can carry a megabyte of rendered markdown, so a long
+     transcript is a very large DOM. content-visibility lets the browser skip
+     layout and paint for turns that are off-screen; `auto` in the intrinsic
+     size makes it remember each turn's real height once rendered, so the
+     scrollbar and reading-progress stay stable. Biggest win for scrolling a
+     long conversation. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 480px;
+}
 .bubble { border-radius: 13px; padding: 14px 18px; border: 1px solid var(--border-soft); }
 .bubble.user { background: color-mix(in srgb, var(--accent) 10%, var(--surface-2)); border-color: color-mix(in srgb, var(--accent) 22%, var(--border)); margin-bottom: 12px; }
 .bubble.assistant { background: var(--surface); }

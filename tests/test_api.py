@@ -1,5 +1,501 @@
 from __future__ import annotations
 
+import threading
+
+import pytest
+
+
+@pytest.fixture
+def ingest_coordinator():
+    """Reset the module-level coordinator around each direct state-machine test."""
+    from mark import background
+
+    background.stop()
+    with background._state:
+        background._stopping = False
+        background._pending = None
+        background._active = None
+        background._last_successful_fingerprint = None
+        background._retry_required = False
+        background._retry_rebuild = False
+        background._status.update(
+            running=False,
+            queued=False,
+            message="idle",
+            last_result=None,
+            last_error=None,
+            started_at=None,
+            finished_at=None,
+        )
+    yield background
+    background.stop()
+
+
+def test_ingest_coordinator_coalesces_follow_up_and_rebuild(
+    ingest_coordinator, monkeypatch
+):
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = []
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+    timed_out = threading.Event()
+
+    def fake_ingest_all(*, rebuild, progress):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+            calls.append(rebuild)
+            call_number = len(calls)
+        try:
+            progress(f"run {call_number}")
+            if call_number == 1:
+                first_started.set()
+                if not release_first.wait(2):
+                    timed_out.set()
+            return {"added": call_number, "updated": 0, "skipped": 0}
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+
+    assert ingest_coordinator.start_reindex(fingerprint="before") is True
+    assert first_started.wait(2)
+    assert ingest_coordinator.start_reindex(fingerprint="before") is False
+    assert ingest_coordinator.start_reindex(fingerprint="after") is True
+    assert ingest_coordinator.start_reindex(fingerprint="after") is False
+    assert ingest_coordinator.start_reindex(rebuild=True, fingerprint="after") is True
+
+    queued = ingest_coordinator.status_snapshot()
+    assert queued["running"] is True
+    assert queued["queued"] is True
+
+    release_first.set()
+    assert ingest_coordinator.wait_for_idle(2)
+    assert calls == [False, True]
+    assert max_active == 1
+    assert not timed_out.is_set()
+    assert ingest_coordinator._last_successful_fingerprint == "after"
+    status = ingest_coordinator.status_snapshot()
+    assert status["running"] is False
+    assert status["queued"] is False
+    assert status["last_error"] is None
+    assert status["last_result"]["added"] == 2
+
+
+def test_ingest_coordinator_pending_tracks_latest_fingerprint(
+    ingest_coordinator, monkeypatch
+):
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = 0
+
+    def fake_ingest_all(*, rebuild, progress):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            release_first.wait(2)
+        return {"added": 0, "updated": 0, "skipped": 0}
+
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+    assert ingest_coordinator.start_reindex(fingerprint="A") is True
+    assert first_started.wait(2)
+    assert ingest_coordinator.start_reindex(fingerprint="B") is True
+    assert ingest_coordinator.start_reindex(fingerprint="A") is True
+
+    release_first.set()
+    assert ingest_coordinator.wait_for_idle(2)
+    assert calls == 2
+    assert ingest_coordinator._last_successful_fingerprint == "A"
+
+
+def test_ingest_coordinator_acknowledges_post_pass_source_state(
+    ingest_coordinator, monkeypatch
+):
+    calls = 0
+    snapshots = iter(
+        [
+            ingest_coordinator.ingest.FingerprintSnapshot("B", {}),
+            ingest_coordinator.ingest.FingerprintSnapshot("B", {}),
+        ]
+    )
+
+    def fake_ingest_all(*, rebuild, progress):
+        nonlocal calls
+        calls += 1
+        observed = "A" if calls == 1 else "B"
+        return {
+            "added": 0,
+            "updated": 0,
+            "skipped": 0,
+            "sources": {},
+            "errors": {},
+            "fingerprint": observed,
+            "fingerprint_complete": True,
+        }
+
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+    monkeypatch.setattr(
+        ingest_coordinator.ingest,
+        "sources_fingerprint_snapshot",
+        lambda: next(snapshots),
+    )
+
+    assert ingest_coordinator.start_reindex(fingerprint="A") is True
+    assert ingest_coordinator.wait_for_idle(2)
+    assert calls == 2
+    assert ingest_coordinator._last_successful_fingerprint == "B"
+
+
+def test_ingest_coordinator_admits_one_identical_first_request(
+    ingest_coordinator, monkeypatch
+):
+    entered = threading.Event()
+    release = threading.Event()
+    barrier = threading.Barrier(3)
+    accepted = []
+
+    def fake_ingest_all(*, rebuild, progress):
+        entered.set()
+        release.wait(2)
+        return {"added": 0, "updated": 0, "skipped": 0}
+
+    def submit():
+        barrier.wait()
+        accepted.append(ingest_coordinator.start_reindex(fingerprint="same"))
+
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+    callers = [threading.Thread(target=submit) for _ in range(2)]
+    for caller in callers:
+        caller.start()
+    barrier.wait()
+    assert entered.wait(2)
+    for caller in callers:
+        caller.join()
+    assert sorted(accepted) == [False, True]
+    release.set()
+    assert ingest_coordinator.wait_for_idle(2)
+
+
+def test_ingest_coordinator_acknowledges_fingerprint_only_after_success(
+    ingest_coordinator, monkeypatch
+):
+    calls = 0
+
+    def fake_ingest_all(*, rebuild, progress):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("source unavailable")
+        return {"added": 0, "updated": 1, "skipped": 0}
+
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+
+    assert ingest_coordinator.start_reindex(fingerprint="changed") is True
+    assert ingest_coordinator.wait_for_idle(2)
+    assert ingest_coordinator._last_successful_fingerprint is None
+    failed = ingest_coordinator.status_snapshot()
+    assert failed["last_error"] == "source unavailable"
+
+    assert ingest_coordinator.start_reindex(fingerprint="changed") is True
+    assert ingest_coordinator.wait_for_idle(2)
+    assert ingest_coordinator._last_successful_fingerprint == "changed"
+    assert ingest_coordinator.status_snapshot()["last_error"] is None
+
+
+def test_ingest_coordinator_does_not_ack_partial_source_failure(
+    ingest_coordinator, monkeypatch
+):
+    def fake_ingest_all(*, rebuild, progress):
+        return {
+            "added": 1,
+            "updated": 0,
+            "skipped": 0,
+            "sources": {
+                "healthy": {"status": "ok", "added": 1},
+                "broken": {"status": "error", "error": "cannot read"},
+            },
+            "errors": {"broken": "cannot read"},
+        }
+
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+    assert ingest_coordinator.start_reindex(fingerprint="mixed") is True
+    assert ingest_coordinator.wait_for_idle(2)
+
+    assert ingest_coordinator._last_successful_fingerprint is None
+    status = ingest_coordinator.status_snapshot()
+    assert status["last_error"] == "broken: cannot read"
+    assert status["last_result"]["sources"]["healthy"]["status"] == "ok"
+
+
+def test_ingest_coordinator_does_not_ack_incomplete_fingerprint(
+    ingest_coordinator, monkeypatch
+):
+    monkeypatch.setattr(
+        ingest_coordinator.ingest,
+        "ingest_all",
+        lambda **kwargs: {
+            "added": 0,
+            "updated": 0,
+            "skipped": 0,
+            "sources": {},
+            "errors": {},
+        },
+    )
+
+    assert (
+        ingest_coordinator.start_reindex(
+            fingerprint="healthy=changed|broken=!error",
+            fingerprint_complete=False,
+        )
+        is True
+    )
+    assert ingest_coordinator.wait_for_idle(2)
+    assert ingest_coordinator._last_successful_fingerprint is None
+
+
+def test_ingest_coordinator_retries_failed_unchanged_rebuild(
+    ingest_coordinator, monkeypatch
+):
+    calls = []
+
+    def fake_ingest_all(*, rebuild, progress):
+        calls.append(rebuild)
+        return {
+            "added": 0,
+            "updated": 0,
+            "skipped": 0,
+            "sources": {
+                "source": (
+                    {"status": "error", "error": "failed"}
+                    if len(calls) == 1
+                    else {"status": "ok"}
+                )
+            },
+            "errors": {"source": "failed"} if len(calls) == 1 else {},
+            "fingerprint": "same",
+            "fingerprint_complete": True,
+        }
+
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+    monkeypatch.setattr(
+        ingest_coordinator.ingest,
+        "sources_fingerprint_snapshot",
+        lambda: ingest_coordinator.ingest.FingerprintSnapshot("same", {}),
+    )
+
+    assert ingest_coordinator.start_reindex(rebuild=True, fingerprint="same") is True
+    assert ingest_coordinator.wait_for_idle(2)
+    assert ingest_coordinator._retry_required is True
+    assert ingest_coordinator._retry_rebuild is True
+
+    assert ingest_coordinator.start_reindex(fingerprint="same") is True
+    assert ingest_coordinator.wait_for_idle(2)
+    assert calls == [True, True]
+    assert ingest_coordinator._retry_required is False
+    assert ingest_coordinator._last_successful_fingerprint == "same"
+
+
+def test_ingest_coordinator_promotes_queued_work_after_rebuild_failure(
+    ingest_coordinator, monkeypatch
+):
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = []
+    snapshots = iter(
+        [
+            ingest_coordinator.ingest.FingerprintSnapshot("B", {}),
+            ingest_coordinator.ingest.FingerprintSnapshot("B", {}),
+        ]
+    )
+
+    def fake_ingest_all(*, rebuild, progress):
+        calls.append(rebuild)
+        if len(calls) == 1:
+            first_started.set()
+            release_first.wait(2)
+            return {
+                "added": 0,
+                "updated": 0,
+                "skipped": 0,
+                "sources": {"source": {"status": "error", "error": "failed"}},
+                "errors": {"source": "failed"},
+                "fingerprint": "A",
+                "fingerprint_complete": True,
+            }
+        return {
+            "added": 0,
+            "updated": 0,
+            "skipped": 0,
+            "sources": {"source": {"status": "ok"}},
+            "errors": {},
+            "fingerprint": "B",
+            "fingerprint_complete": True,
+        }
+
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+    monkeypatch.setattr(
+        ingest_coordinator.ingest,
+        "sources_fingerprint_snapshot",
+        lambda: next(snapshots),
+    )
+
+    assert ingest_coordinator.start_reindex(rebuild=True, fingerprint="A") is True
+    assert first_started.wait(2)
+    assert ingest_coordinator.start_reindex(fingerprint="B") is True
+    release_first.set()
+    assert ingest_coordinator.wait_for_idle(2)
+
+    assert calls == [True, True]
+    assert ingest_coordinator._retry_rebuild is False
+    assert ingest_coordinator._last_successful_fingerprint == "B"
+
+
+def test_ingest_coordinator_status_tracks_latest_attempt(
+    ingest_coordinator, monkeypatch
+):
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = 0
+
+    def fake_ingest_all(*, rebuild, progress):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"added": 1, "updated": 0, "skipped": 0}
+        if calls == 2:
+            raise RuntimeError("latest failure")
+        first_started.set()
+        release_first.wait(2)
+        return {"added": 0, "updated": 1, "skipped": 0}
+
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+    assert ingest_coordinator.start_reindex() is True
+    assert ingest_coordinator.wait_for_idle(2)
+    assert ingest_coordinator.status_snapshot()["last_result"]["added"] == 1
+
+    assert ingest_coordinator.start_reindex() is True
+    assert ingest_coordinator.wait_for_idle(2)
+    failed = ingest_coordinator.status_snapshot()
+    assert failed["last_result"] is None
+    assert failed["last_error"] == "latest failure"
+
+    assert ingest_coordinator.start_reindex() is True
+    assert first_started.wait(2)
+    running = ingest_coordinator.status_snapshot()
+    assert running["last_result"] is None
+    assert running["last_error"] == "latest failure"
+    release_first.set()
+    assert ingest_coordinator.wait_for_idle(2)
+    succeeded = ingest_coordinator.status_snapshot()
+    assert succeeded["last_result"]["updated"] == 1
+    assert succeeded["last_error"] is None
+
+
+def test_ingest_coordinator_stop_joins_active_worker(ingest_coordinator, monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+    timed_out = threading.Event()
+
+    def fake_ingest_all(*, rebuild, progress):
+        started.set()
+        if not release.wait(2):
+            timed_out.set()
+        return {"added": 0, "updated": 0, "skipped": 0}
+
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+    assert ingest_coordinator.start_reindex() is True
+    assert started.wait(2)
+
+    stopped = threading.Event()
+
+    def stop():
+        ingest_coordinator.stop()
+        stopped.set()
+
+    stopper = threading.Thread(target=stop)
+    stopper.start()
+    with ingest_coordinator._state:
+        assert ingest_coordinator._state.wait_for(
+            lambda: ingest_coordinator._stopping, timeout=2
+        )
+    assert not stopped.is_set()
+    release.set()
+    assert stopped.wait(2)
+    stopper.join()
+    assert not timed_out.is_set()
+    assert ingest_coordinator._worker is None
+
+
+def test_ingest_coordinator_auto_sync_stops_and_restarts(
+    ingest_coordinator, monkeypatch
+):
+    first_started = threading.Event()
+    second_started = threading.Event()
+    release_first = threading.Event()
+    calls = 0
+
+    def fake_ingest_all(*, rebuild, progress):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            release_first.wait(2)
+        else:
+            second_started.set()
+        return {"added": 0, "updated": 0, "skipped": 0, "errors": {}}
+
+    monkeypatch.setattr(ingest_coordinator.config, "AUTO_SYNC", True)
+    monkeypatch.setattr(
+        ingest_coordinator.ingest,
+        "sources_fingerprint_snapshot",
+        lambda: ingest_coordinator.ingest.FingerprintSnapshot("stable", {}),
+    )
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+
+    ingest_coordinator.start()
+    assert first_started.wait(2)
+    with ingest_coordinator._state:
+        first_sync_worker = ingest_coordinator._sync_worker
+        first_ingest_worker = ingest_coordinator._worker
+    assert first_sync_worker is not None
+    assert first_ingest_worker is not None
+
+    stopped = threading.Event()
+    stopper = threading.Thread(
+        target=lambda: (ingest_coordinator.stop(), stopped.set())
+    )
+    stopper.start()
+    with ingest_coordinator._state:
+        assert ingest_coordinator._state.wait_for(
+            lambda: ingest_coordinator._stopping, timeout=2
+        )
+    release_first.set()
+    assert stopped.wait(2)
+    stopper.join(timeout=2)
+    assert not stopper.is_alive()
+    assert not first_sync_worker.is_alive()
+    assert not first_ingest_worker.is_alive()
+
+    ingest_coordinator.start()
+    assert second_started.wait(2)
+    assert ingest_coordinator.wait_for_idle(2)
+    with ingest_coordinator._state:
+        second_sync_worker = ingest_coordinator._sync_worker
+        second_ingest_worker = ingest_coordinator._worker
+    assert second_sync_worker is not None and second_sync_worker.is_alive()
+    assert second_ingest_worker is not None and second_ingest_worker.is_alive()
+    assert second_sync_worker is not first_sync_worker
+    assert second_ingest_worker is not first_ingest_worker
+
+    ingest_coordinator.stop()
+    assert not second_sync_worker.is_alive()
+    assert not second_ingest_worker.is_alive()
+
 
 def test_read_endpoints_ok(client):
     for path in [

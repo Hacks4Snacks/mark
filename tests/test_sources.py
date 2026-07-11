@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 
 from mark.sources import IMPORT_SOURCES, WATCHED_SOURCES, claude_code, vscode
 from mark.sources.chatgpt import ChatGptSource
@@ -1029,6 +1030,286 @@ def test_ingest_all_skips_unchanged_source(monkeypatch):
     ingest.ingest_all(do_embed=False)
     ingest.ingest_all(do_embed=False)
     assert calls["n"] == 1  # second pass skipped: fingerprint unchanged
+
+
+def test_sources_fingerprint_isolates_broken_adapter(monkeypatch):
+    from mark import ingest
+    from mark.sources.base import WatchedSource
+
+    healthy_called = False
+
+    class BrokenSource(WatchedSource):
+        key = "broken"
+
+        def fingerprint(self, cfg) -> str:
+            raise RuntimeError("boom")
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            return {"added": 0, "updated": 0, "skipped": 0}
+
+    class HealthySource(WatchedSource):
+        key = "healthy"
+
+        def fingerprint(self, cfg) -> str:
+            nonlocal healthy_called
+            healthy_called = True
+            return "changed"
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            return {"added": 0, "updated": 0, "skipped": 0}
+
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [BrokenSource(), HealthySource()])
+    snapshot = ingest.sources_fingerprint_snapshot()
+
+    assert healthy_called is True
+    assert snapshot.value == "broken=!error|healthy=changed"
+    assert snapshot.errors == {"broken": "boom"}
+
+
+def test_ingest_all_isolates_failed_source_and_continues(monkeypatch, make_session):
+    """A broken adapter rolls back its partial writes without blocking later ones."""
+    from mark import db, ingest
+    from mark.sources.base import WatchedSource
+
+    class FailingSource(WatchedSource):
+        key = "failing"
+        row_sources = ("failing",)
+
+        def fingerprint(self, cfg) -> str:
+            return "failing-fp"
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            ingest.persist.write_session(
+                cur,
+                make_session(
+                    sid="rolled-back",
+                    user="partial source content",
+                ),
+            )
+            raise RuntimeError("broken adapter")
+
+    class HealthySource(WatchedSource):
+        key = "healthy"
+        row_sources = ("healthy",)
+
+        def fingerprint(self, cfg) -> str:
+            return "healthy-fp"
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            cur.execute(
+                "INSERT INTO source_file_stat(path, signature) VALUES (?, ?)",
+                ("healthy-write", "committed"),
+            )
+            return {"added": 1, "updated": 0, "skipped": 0}
+
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [FailingSource(), HealthySource()])
+    result = ingest.ingest_all(do_embed=False)
+
+    assert result["added"] == 1
+    assert result["errors"] == {"failing": "broken adapter"}
+    assert result["sources"]["failing"]["status"] == "error"
+    assert result["sources"]["healthy"]["status"] == "ok"
+    with db.cursor() as cur:
+        for table, id_column in (
+            ("sessions", "id"),
+            ("chunks", "session_id"),
+            ("search_index", "session_id"),
+        ):
+            assert (
+                cur.execute(
+                    f"SELECT 1 FROM {table} WHERE {id_column} = 'rolled-back'"
+                ).fetchone()
+                is None
+            ), table
+        assert (
+            cur.execute(
+                "SELECT 1 FROM source_file_stat WHERE path = 'srcfp:failing'"
+            ).fetchone()
+            is None
+        )
+        assert (
+            cur.execute(
+                "SELECT 1 FROM source_file_stat WHERE path = 'healthy-write'"
+            ).fetchone()
+            is not None
+        )
+        assert (
+            cur.execute(
+                "SELECT signature FROM source_file_stat WHERE path = 'srcfp:healthy'"
+            ).fetchone()[0]
+            == "healthy-fp"
+        )
+
+
+def test_ingest_all_does_not_count_rolled_back_source(monkeypatch):
+    from mark import db, ingest
+    from mark.sources.base import WatchedSource
+
+    class Source(WatchedSource):
+        key = "late-failure"
+        row_sources = ("late-failure",)
+
+        def fingerprint(self, cfg) -> str:
+            return "source-fp"
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            cur.execute(
+                "INSERT INTO source_file_stat(path, signature) VALUES (?, ?)",
+                ("source-write", "must-rollback"),
+            )
+            return {"added": 1, "updated": 0, "skipped": 0}
+
+    def fail_fingerprint(cur, path, signature):
+        raise RuntimeError("cannot persist fingerprint")
+
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [Source()])
+    monkeypatch.setattr(ingest.persist, "record_file_signature", fail_fingerprint)
+    result = ingest.ingest_all(do_embed=False)
+
+    assert result["added"] == 0
+    assert result["errors"] == {"late-failure": "cannot persist fingerprint"}
+    with db.cursor() as cur:
+        assert (
+            cur.execute(
+                "SELECT 1 FROM source_file_stat WHERE path = 'source-write'"
+            ).fetchone()
+            is None
+        )
+
+
+def test_ingest_all_retries_source_after_recovery(monkeypatch):
+    from mark import db, ingest
+    from mark.sources.base import WatchedSource
+
+    calls = 0
+
+    class Source(WatchedSource):
+        key = "recovering"
+        row_sources = ("recovering",)
+
+        def fingerprint(self, cfg) -> str:
+            return "recovering-fp"
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("temporary failure")
+            return {"added": 0, "updated": 1, "skipped": 0}
+
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [Source()])
+    first = ingest.ingest_all(do_embed=False)
+    second = ingest.ingest_all(do_embed=False)
+
+    assert first["errors"] == {"recovering": "temporary failure"}
+    assert second["errors"] == {}
+    assert second["updated"] == 1
+    assert calls == 2
+    with db.cursor() as cur:
+        assert (
+            cur.execute(
+                "SELECT signature FROM source_file_stat "
+                "WHERE path = 'srcfp:recovering'"
+            ).fetchone()[0]
+            == "recovering-fp"
+        )
+
+
+def test_ingest_all_invalidates_prior_fingerprint_after_failure(monkeypatch):
+    from mark import db, ingest
+    from mark.sources.base import WatchedSource
+
+    class Source(WatchedSource):
+        key = "rebuild-failure"
+        row_sources = ("rebuild-failure",)
+
+        def fingerprint(self, cfg) -> str:
+            return "same-fp"
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            raise RuntimeError("rebuild failed")
+
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO source_file_stat(path, signature) VALUES (?, ?)",
+            ("srcfp:rebuild-failure", "same-fp"),
+        )
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [Source()])
+
+    result = ingest.ingest_all(rebuild=True, do_embed=False)
+    assert result["errors"] == {"rebuild-failure": "rebuild failed"}
+    with db.cursor() as cur:
+        assert (
+            cur.execute(
+                "SELECT 1 FROM source_file_stat " "WHERE path = 'srcfp:rebuild-failure'"
+            ).fetchone()
+            is None
+        )
+
+
+def test_ingest_entry_points_share_one_process_gate(monkeypatch):
+    from mark import ingest, uploads
+
+    class TrackingGate:
+        def __init__(self):
+            self.lock = threading.Lock()
+            self.condition = threading.Condition()
+            self.attempts = 0
+
+        def __enter__(self):
+            with self.condition:
+                self.attempts += 1
+                self.condition.notify_all()
+            self.lock.acquire()
+
+        def __exit__(self, exc_type, exc, tb):
+            self.lock.release()
+
+    gate = TrackingGate()
+    entered = []
+
+    def fake_ingest_all(**kwargs):
+        entered.append("watched")
+        return {"added": 0, "updated": 0, "skipped": 0}
+
+    def fake_import_export(*args, **kwargs):
+        entered.append("import")
+        return {"matched": None, "imported": 0}
+
+    def fake_index_document(**kwargs):
+        entered.append("document")
+        return "note-id"
+
+    monkeypatch.setattr(ingest, "_ingest_gate", gate)
+    monkeypatch.setattr(ingest, "_ingest_all", fake_ingest_all)
+    monkeypatch.setattr(ingest, "_import_export", fake_import_export)
+    monkeypatch.setattr(uploads, "_index_document_locked", fake_index_document)
+
+    callers = []
+    gate.lock.acquire()
+    try:
+        callers = [
+            threading.Thread(target=lambda: ingest.ingest_all(do_embed=False)),
+            threading.Thread(target=lambda: ingest.import_export("x", b"x")),
+            threading.Thread(
+                target=lambda: uploads._index_document(
+                    title="note",
+                    kind="note",
+                    content="body",
+                )
+            ),
+        ]
+        for caller in callers:
+            caller.start()
+        with gate.condition:
+            assert gate.condition.wait_for(lambda: gate.attempts == 3, timeout=2)
+        assert entered == []
+    finally:
+        gate.lock.release()
+    for caller in callers:
+        caller.join(timeout=2)
+        assert not caller.is_alive()
+    assert sorted(entered) == ["document", "import", "watched"]
 
 
 def test_snapshot_sqlite_falls_back_to_filecopy(tmp_path, monkeypatch):

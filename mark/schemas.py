@@ -94,8 +94,10 @@ class StatsResponse(BaseModel):
 
 class StatusResponse(BaseModel):
     running: bool
+    queued: bool = False
     message: str
     last_result: dict[str, Any] | None = None
+    last_error: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
     embed_model: str = ""

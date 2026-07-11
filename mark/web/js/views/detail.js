@@ -14,6 +14,7 @@ import { doSearch, showList } from "./list.js";
 import { openCollMenu } from "./collections.js";
 
 let detailScrollHandler = null; // active reading-progress listener
+let detailResizeHandler = null; // re-measures cached scroll metrics on resize
 let detailStickyTimer = null; // pending sticky-header reveal (dwell debounce)
 
 export async function openSession(id, opts = {}) {
@@ -314,33 +315,55 @@ function clearStickyTimer() {
 
 function setupReading() {
   // renderDetail() can run again (hide/unhide, topic edits) without leaving the
-  // view, so drop any prior handler before wiring a fresh one.
+  // view, so drop any prior handlers before wiring fresh ones.
   if (detailScrollHandler) window.removeEventListener("scroll", detailScrollHandler);
+  if (detailResizeHandler) window.removeEventListener("resize", detailResizeHandler);
   clearStickyTimer();
   const prog = $("#readProgress");
   const sticky = $("#detailSticky");
   const head = $("#detailView .detail-head");
   const topbar = document.querySelector(".topbar");
   if (prog) prog.hidden = false;
-  // The topbar's height varies with viewport width (its action row wraps), so
-  // pin the compact header flush against its current bottom rather than a fixed
-  // offset — otherwise the bar tucks behind a tall topbar or floats below it.
-  const pinTop = () => (topbar ? topbar.getBoundingClientRect().height : 0);
-  // True once the full header has scrolled above the sticky bar's pin line.
-  const headerTuckedAway = () => !head || head.getBoundingClientRect().bottom <= pinTop();
-  const onScroll = () => {
+
+  // A single agent turn can carry a megabyte of rendered markdown, so a long
+  // transcript is a very large DOM. Reading layout (getBoundingClientRect,
+  // scrollHeight) right after writing a style forces a synchronous reflow, and
+  // doing that on every scroll event made scrolling crawl — the reflow cost
+  // scales with the whole document. So cache the only two metrics the handler
+  // needs and refresh them only when layout can actually change (resize):
+  //   pinTop    — the topbar height, where the compact header pins. It varies
+  //               with viewport width (the action row wraps), hence measured.
+  //   headBottom — the full header's bottom in document space, so "has the
+  //               header scrolled away" is pure arithmetic against scrollTop.
+  let pinTop = 0;
+  let headBottom = 0;
+  const measure = () => {
+    pinTop = topbar ? topbar.getBoundingClientRect().height : 0;
+    headBottom = head ? head.getBoundingClientRect().bottom + window.scrollY : 0;
+    if (sticky) sticky.style.top = pinTop + "px";
+  };
+
+  // Coalesce bursts of scroll events to one update per animation frame, and do
+  // every read before any write so nothing forces a reflow.
+  let ticking = false;
+  const update = () => {
+    ticking = false;
     const doc = document.documentElement;
+    const scrollTop = doc.scrollTop;
     const max = doc.scrollHeight - doc.clientHeight;
-    const pct = max > 0 ? Math.min(1, Math.max(0, doc.scrollTop / max)) : 0;
+    const pct = max > 0 ? Math.min(1, Math.max(0, scrollTop / max)) : 0;
     if (prog) prog.style.width = (pct * 100).toFixed(1) + "%";
     if (!sticky) return;
-    sticky.style.top = pinTop() + "px";
-    if (headerTuckedAway()) {
+    // True once the full header has scrolled above the compact bar's pin line.
+    const tuckedAway = scrollTop + pinTop >= headBottom;
+    if (tuckedAway) {
       // Arm a delayed reveal; a transient pass-through never gets to fire it.
       if (!sticky.classList.contains("show") && detailStickyTimer == null) {
         detailStickyTimer = window.setTimeout(() => {
           detailStickyTimer = null;
-          if (headerTuckedAway()) sticky.classList.add("show");
+          if (document.documentElement.scrollTop + pinTop >= headBottom) {
+            sticky.classList.add("show");
+          }
         }, STICKY_DWELL);
       }
     } else {
@@ -348,15 +371,29 @@ function setupReading() {
       sticky.classList.remove("show");
     }
   };
+  const onScroll = () => {
+    if (!ticking) {
+      ticking = true;
+      window.requestAnimationFrame(update);
+    }
+  };
+  const onResize = () => { measure(); onScroll(); };
   window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", onResize, { passive: true });
   detailScrollHandler = onScroll;
-  onScroll();
+  detailResizeHandler = onResize;
+  measure();
+  update();
 }
 
 export function teardownReading() {
   if (detailScrollHandler) {
     window.removeEventListener("scroll", detailScrollHandler);
     detailScrollHandler = null;
+  }
+  if (detailResizeHandler) {
+    window.removeEventListener("resize", detailResizeHandler);
+    detailResizeHandler = null;
   }
   clearStickyTimer();
   const prog = $("#readProgress");

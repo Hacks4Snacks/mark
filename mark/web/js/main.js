@@ -41,7 +41,7 @@ async function pollStatus(initial = false) {
   let running = false;
   try {
     const st = await api("/api/status");
-    running = !!st.running;
+    running = !!(st.running || st.queued);
     if (st.resume_cmd) state.resumeCmd = st.resume_cmd;
     state.askEnabled = !!st.ask_enabled;
     applyAskVisibility();

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import threading
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -8,7 +12,28 @@ from . import config, db, embeddings, persist
 from .sources import IMPORT_SOURCES, WATCHED_SOURCES
 from .sources.base import ProgressCb
 
-__all__ = ["import_export", "ingest_all", "sources_fingerprint"]
+__all__ = [
+    "exclusive_ingest",
+    "import_export",
+    "ingest_all",
+    "sources_fingerprint",
+    "sources_fingerprint_snapshot",
+]
+
+_ingest_gate = threading.RLock()
+
+
+@contextmanager
+def exclusive_ingest() -> Iterator[None]:
+    """Serialize every operation that creates sessions, chunks, or vectors."""
+    with _ingest_gate:
+        yield
+
+
+@dataclass(frozen=True)
+class FingerprintSnapshot:
+    value: str
+    errors: dict[str, str]
 
 
 def _embed_pending(progress: ProgressCb | None = None, batch: int = 256) -> int:
@@ -57,13 +82,23 @@ def sources_fingerprint() -> str:
     Changes whenever any source is added, grows, is rewritten, or is toggled.
     Disabled sources contribute nothing (and so never trigger a sync).
     """
+    return sources_fingerprint_snapshot().value
+
+
+def sources_fingerprint_snapshot() -> FingerprintSnapshot:
+    """Aggregate enabled source signatures without one broken source blocking all."""
     parts: list[str] = []
+    errors: dict[str, str] = {}
     for s in WATCHED_SOURCES:
-        cfg = config.resolve_source_config(s.default_config())
-        if not cfg.enabled:
-            continue
-        parts.append(f"{s.key}={s.fingerprint(cfg)}")
-    return "|".join(parts)
+        try:
+            cfg = config.resolve_source_config(s.default_config())
+            if not cfg.enabled:
+                continue
+            parts.append(f"{s.key}={s.fingerprint(cfg)}")
+        except Exception as exc:
+            errors[s.key] = str(exc)
+            parts.append(f"{s.key}=!error")
+    return FingerprintSnapshot("|".join(parts), errors)
 
 
 def _seed_tombstones(cur, existing: dict[str, str]) -> None:
@@ -83,11 +118,21 @@ def ingest_all(
     rebuild: bool = False,
     do_embed: bool = True,
     progress: ProgressCb | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Index every registered source into mark.
 
     Returns counts of added/updated/skipped sessions.
     """
+    with exclusive_ingest():
+        return _ingest_all(rebuild=rebuild, do_embed=do_embed, progress=progress)
+
+
+def _ingest_all(
+    *,
+    rebuild: bool,
+    do_embed: bool,
+    progress: ProgressCb | None,
+) -> dict[str, Any]:
     db.init_db()
 
     # A change of embedding model invalidates all existing vectors.
@@ -101,6 +146,10 @@ def ingest_all(
         rebuild = True
 
     counts: Counter[str] = Counter()
+    source_results: dict[str, dict[str, Any]] = {}
+    source_errors: dict[str, str] = {}
+    fingerprint_parts: list[str] = []
+    fingerprint_errors: dict[str, str] = {}
     with db.transaction() as conn:
         cur = conn.cursor()
         if model_changed:
@@ -111,32 +160,75 @@ def ingest_all(
         }
         _seed_tombstones(cur, existing)
         src_fps = persist.load_file_signatures(cur, prefix="srcfp:")
-        for source in WATCHED_SOURCES:
-            cfg = config.resolve_source_config(source.default_config())
-            if not cfg.enabled:
-                # Non-destructive: keep already-indexed rows, just stop importing.
-                continue
-            # Skip a source entirely when its own cheap fingerprint is unchanged.
-            # A reindex is triggered by ANY source changing (e.g. an active CLI
-            # session), so without this every idle source would re-open and
-            # re-parse its whole store each pass
-            try:
-                fp = source.fingerprint(cfg)
-            except Exception:
-                fp = ""
+        for index, source in enumerate(WATCHED_SOURCES):
+            savepoint = f"source_{index}"
             fp_key = f"srcfp:{source.key}"
-            if not rebuild and fp and src_fps.get(fp_key) == fp:
-                continue
-            if progress:
-                progress(f"Reading {cfg.label or source.key}...")
-            res = source.ingest(cur, existing, cfg, rebuild=rebuild, progress=progress)
-            counts.update(res)
-            if fp:
-                persist.record_file_signature(cur, fp_key, fp)
+            fingerprint_recorded = False
+            cur.execute(f"SAVEPOINT {savepoint}")
+            try:
+                cfg = config.resolve_source_config(source.default_config())
+                if not cfg.enabled:
+                    source_results[source.key] = {"status": "disabled"}
+                    cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    continue
+                # Skip a source entirely when its own cheap fingerprint is
+                # unchanged. A pass triggered by another active source should
+                # not reopen and reparse every idle store.
+                fingerprint_error: str | None = None
+                try:
+                    fp = source.fingerprint(cfg)
+                    fingerprint_parts.append(f"{source.key}={fp}")
+                    fingerprint_recorded = True
+                except Exception as exc:
+                    fp = ""
+                    fingerprint_error = f"fingerprint: {exc}"
+                    fingerprint_errors[source.key] = str(exc)
+                    fingerprint_parts.append(f"{source.key}=!error")
+                    fingerprint_recorded = True
+                if not rebuild and fp and src_fps.get(fp_key) == fp:
+                    source_results[source.key] = {"status": "unchanged"}
+                    cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    continue
+                if progress:
+                    progress(f"Reading {cfg.label or source.key}...")
+                res = source.ingest(
+                    cur, existing, cfg, rebuild=rebuild, progress=progress
+                )
+                if fp:
+                    persist.record_file_signature(cur, fp_key, fp)
+                cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+                counts.update(res)
+                if fingerprint_error:
+                    source_errors[source.key] = fingerprint_error
+                    source_results[source.key] = {
+                        "status": "degraded",
+                        "error": fingerprint_error,
+                        **res,
+                    }
+                else:
+                    source_results[source.key] = {"status": "ok", **res}
+            except Exception as exc:
+                cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+                # Invalidate a prior source-level acknowledgement outside the
+                # rolled-back savepoint so an unchanged source is retried.
+                cur.execute("DELETE FROM source_file_stat WHERE path = ?", (fp_key,))
+                error = str(exc)
+                source_errors[source.key] = error
+                source_results[source.key] = {"status": "error", "error": error}
+                if not fingerprint_recorded:
+                    fingerprint_errors[source.key] = error
+                    fingerprint_parts.append(f"{source.key}=!error")
+                if progress:
+                    progress(f"Error reading {source.key}: {error}")
             conn.commit()
 
-    result = {"added": 0, "updated": 0, "skipped": 0}
+    result: dict[str, Any] = {"added": 0, "updated": 0, "skipped": 0}
     result.update(counts)
+    result["sources"] = source_results
+    result["errors"] = source_errors
+    result["fingerprint"] = "|".join(fingerprint_parts)
+    result["fingerprint_complete"] = not fingerprint_errors
 
     changed = bool(result.get("added") or result.get("updated"))
     if changed:
@@ -178,6 +270,22 @@ def import_export(
     Returns ``{matched, added, updated, skipped, imported}``; ``matched`` is
     ``None`` when no importer claims the file.
     """
+    with exclusive_ingest():
+        return _import_export(
+            filename,
+            data,
+            do_embed=do_embed,
+            progress=progress,
+        )
+
+
+def _import_export(
+    filename: str,
+    data: bytes,
+    *,
+    do_embed: bool,
+    progress: ProgressCb | None,
+) -> dict[str, Any]:
     db.init_db()
     src = next((s for s in IMPORT_SOURCES if s.detect(filename, data)), None)
     if src is None:
