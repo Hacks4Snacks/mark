@@ -543,7 +543,8 @@ def get_session(session_id: str) -> dict[str, Any] | None:
         attachments = [
             dict(r)
             for r in cur.execute(
-                "SELECT id, filename, stored_path, mime, size_bytes, content FROM documents "
+                "SELECT id, filename, stored_path, mime, size_bytes, content, "
+                "storage_kind, sha256, capture_version FROM documents "
                 "WHERE session_id = ? AND kind = 'attachment' ORDER BY filename",
                 (session_id,),
             ).fetchall()

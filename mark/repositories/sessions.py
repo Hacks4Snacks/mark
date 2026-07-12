@@ -64,7 +64,8 @@ def get_attachment(session_id: str, doc_id: int) -> dict | None:
     """Fetch one attachment document (scoped to its session) for download."""
     with db.cursor() as cur:
         row = cur.execute(
-            "SELECT id, filename, stored_path, mime, size_bytes, content "
+            "SELECT id, filename, stored_path, mime, size_bytes, content, "
+            "storage_kind, sha256, capture_version "
             "FROM documents WHERE id = ? AND session_id = ? AND kind = 'attachment'",
             (doc_id, session_id),
         ).fetchone()

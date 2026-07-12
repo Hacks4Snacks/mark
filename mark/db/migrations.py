@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from collections.abc import Callable
+
+from .. import config
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -46,6 +49,61 @@ def _add_source_file_stat_table(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_attachment_provenance(conn: sqlite3.Connection) -> None:
+    """Trust only classified attachment rows and recapture legacy CLI files."""
+    tables = {
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if "documents" not in tables:
+        return
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
+    for name, sql_type in (
+        ("storage_kind", "TEXT"),
+        ("sha256", "TEXT"),
+        ("capture_version", "INTEGER"),
+    ):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE documents ADD COLUMN {name} {sql_type}")
+
+    # VS Code session-memory attachments were sourced from Mark's own known
+    # memory directory and stored inline; preserve them with explicit trust.
+    trusted_inline = conn.execute(
+        "SELECT d.id, d.content FROM documents d JOIN sessions s ON s.id = d.session_id "
+        "WHERE d.kind = 'attachment' AND s.source = 'vscode' "
+        "AND d.content IS NOT NULL"
+    ).fetchall()
+    for row in trusted_inline:
+        raw = row["content"].encode("utf-8")
+        if len(raw) <= config.MAX_ATTACHMENT_BYTES:
+            conn.execute(
+                "UPDATE documents SET stored_path = NULL, size_bytes = ?, "
+                "storage_kind = 'inline', sha256 = ?, capture_version = 1 "
+                "WHERE id = ?",
+                (len(raw), hashlib.sha256(raw).hexdigest(), row["id"]),
+            )
+        else:
+            conn.execute(
+                "UPDATE documents SET stored_path = NULL, size_bytes = ?, "
+                "content = NULL, storage_kind = 'metadata', sha256 = NULL, "
+                "capture_version = 1 WHERE id = ?",
+                (len(raw), row["id"]),
+            )
+    # Pre-fix CLI rows may have originated from denied/request-only tool paths.
+    # Delete them rather than trying to infer provenance after the fact, and
+    # invalidate both aggregate + per-session signatures so the next scan safely
+    # recaptures from authoritative successful events.
+    conn.execute(
+        "DELETE FROM documents WHERE kind = 'attachment' AND session_id IN "
+        "(SELECT id FROM sessions WHERE source = 'cli')"
+    )
+    if "source_file_stat" in tables:
+        conn.execute(
+            "DELETE FROM source_file_stat WHERE path = 'srcfp:copilot_cli' "
+            "OR path LIKE 'cli:%'"
+        )
+
+
 # Ordered list of migrations. Append new ones; never reorder or delete.
 # The 1-based index of a migration is its schema version.
 MIGRATIONS: list[Migration] = [
@@ -54,6 +112,7 @@ MIGRATIONS: list[Migration] = [
     _add_sessions_hidden_column,
     _add_tombstones_table,
     _add_source_file_stat_table,
+    _add_attachment_provenance,
 ]
 
 CURRENT_VERSION = len(MIGRATIONS)

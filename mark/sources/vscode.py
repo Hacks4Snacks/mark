@@ -454,23 +454,11 @@ def _decode_session_id(name: str) -> str | None:
     return None
 
 
-def _read_memory_attachment(path: Path) -> dict[str, Any] | None:
+def _read_memory_attachment(path: Path, root: Path) -> dict[str, Any] | None:
     """Snapshot a memory note as a viewable text attachment (content capped)."""
-    try:
-        st = path.stat()
-        raw = path.read_bytes()
-    except OSError:
-        return None
-    att: dict[str, Any] = {
-        "filename": path.name,
-        "stored_path": str(path),
-        "mime": "text/markdown",
-        "size_bytes": st.st_size,
-        "content": None,
-    }
-    if st.st_size <= config.MAX_ATTACHMENT_BYTES:
-        att["content"] = raw.decode("utf-8", "replace")
-    return att
+    from .. import attachments
+
+    return attachments.inline_file(path, root=root)
 
 
 def _session_memory_attachments(ws_dir: Path, session_id: str) -> list[dict[str, Any]]:
@@ -494,7 +482,7 @@ def _session_memory_attachments(ws_dir: Path, session_id: str) -> list[dict[str,
             continue
         for md in sorted(d.rglob("*.md")):
             if md.is_file():
-                att = _read_memory_attachment(md)
+                att = _read_memory_attachment(md, d)
                 if att:
                     out.append(att)
     return out

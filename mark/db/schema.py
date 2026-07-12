@@ -50,7 +50,10 @@ CREATE TABLE IF NOT EXISTS documents (
     stored_path  TEXT,
     mime         TEXT,
     size_bytes   INTEGER,
-    content      TEXT
+    content      TEXT,
+    storage_kind TEXT,
+    sha256       TEXT,
+    capture_version INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS session_files (

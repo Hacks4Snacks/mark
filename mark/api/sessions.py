@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse, PlainTextResponse, Response
+from fastapi.responses import PlainTextResponse, Response
 
-from .. import exporting, render, search
+from .. import attachments, exporting, render, search
 from ..repositories import sessions as sessions_repo
 from ..schemas import HiddenResponse, OkResponse, TagIn, TagResponse
 
@@ -42,7 +42,15 @@ def api_session(session_id: str) -> dict[str, Any]:
             session["document"]["content"]
         )
     for att in session.get("attachments") or []:
-        content = att.get("content")
+        content = attachments.attachment_text(att)
+        kind = att.get("storage_kind")
+        att["category"] = "memory" if kind == "inline" else "agent"
+        att["downloadable"] = attachments.attachment_bytes(att) is not None
+        att["content"] = content
+        att.pop("stored_path", None)
+        att.pop("storage_kind", None)
+        att.pop("sha256", None)
+        att.pop("capture_version", None)
         if not content:
             continue
         name = (att.get("filename") or "").lower()
@@ -85,21 +93,15 @@ def api_delete_session(session_id: str) -> dict[str, Any]:
 
 @router.get("/api/sessions/{session_id}/attachments/{doc_id}/download")
 def api_download_attachment(session_id: str, doc_id: int):
-    """Download an agent-created attachment: from disk if it still exists,
-    otherwise from the snapshot stored at ingest time."""
+    """Download immutable captured content, never the original live file."""
     att = sessions_repo.get_attachment(session_id, doc_id)
     if not att:
         raise HTTPException(status_code=404, detail="attachment not found")
     filename = _safe_filename(att.get("filename"), f"attachment-{doc_id}")
     mime = att.get("mime") or "application/octet-stream"
 
-    stored = att.get("stored_path")
-    if stored and Path(stored).is_file():
-        return FileResponse(stored, media_type=mime, filename=filename)
-
-    content = att.get("content")
-    if content is not None:
-        body = content.encode("utf-8") if isinstance(content, str) else content
+    body = attachments.attachment_bytes(att)
+    if body is not None:
         return Response(
             content=body,
             media_type=mime,
@@ -107,7 +109,7 @@ def api_download_attachment(session_id: str, doc_id: int):
         )
     raise HTTPException(
         status_code=404,
-        detail="attachment content is unavailable (binary or larger than the snapshot limit)",
+        detail="attachment content was not captured or is no longer available",
     )
 
 

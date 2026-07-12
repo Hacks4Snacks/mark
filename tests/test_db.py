@@ -38,6 +38,12 @@ def test_tags_has_manual_column():
     assert "manual" in cols
 
 
+def test_attachment_provenance_columns_exist():
+    with db.connect() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
+    assert {"storage_kind", "sha256", "capture_version"} <= cols
+
+
 def test_meta_round_trip():
     assert db.get_meta("missing") is None
     assert db.get_meta("missing", "fallback") == "fallback"
@@ -89,5 +95,94 @@ def test_migrations_backfill_pre_column_db(tmp_path):
         ).fetchone()
         version = con.execute("PRAGMA user_version").fetchone()[0]
         assert version == migrations.CURRENT_VERSION
+    finally:
+        con.close()
+
+
+def test_attachment_provenance_migration_quarantines_legacy_cli(tmp_path):
+    import hashlib
+
+    path = tmp_path / "legacy-attachments.db"
+    con = sqlite3.connect(path)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA foreign_keys=ON")
+        con.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT)")
+        con.execute(
+            "CREATE TABLE documents ("
+            "id INTEGER PRIMARY KEY, session_id TEXT REFERENCES sessions(id) "
+            "ON DELETE CASCADE, kind TEXT, filename TEXT, stored_path TEXT, "
+            "mime TEXT, size_bytes INTEGER, content TEXT)"
+        )
+        con.execute(
+            "CREATE TABLE source_file_stat (path TEXT PRIMARY KEY, signature TEXT)"
+        )
+        con.executemany(
+            "INSERT INTO sessions(id, source) VALUES (?, ?)",
+            [("cli-session", "cli"), ("vscode-session", "vscode")],
+        )
+        con.executemany(
+            "INSERT INTO documents(session_id, kind, filename, stored_path, "
+            "mime, size_bytes, content) VALUES (?, 'attachment', ?, ?, ?, ?, ?)",
+            [
+                (
+                    "cli-session",
+                    "captured-secret.txt",
+                    "/tmp/live-secret.txt",
+                    "text/plain",
+                    13,
+                    "legacy secret",
+                ),
+                (
+                    "vscode-session",
+                    "memory.md",
+                    "/tmp/memory.md",
+                    "text/markdown",
+                    11,
+                    "trusted note",
+                ),
+            ],
+        )
+        con.executemany(
+            "INSERT INTO source_file_stat(path, signature) VALUES (?, ?)",
+            [
+                ("srcfp:copilot_cli", "aggregate"),
+                ("cli:cli-session", "session"),
+                ("srcfp:vscode", "keep"),
+            ],
+        )
+        con.execute(f"PRAGMA user_version = {migrations.CURRENT_VERSION - 1}")
+        con.commit()
+
+        migrations.run_migrations(con)
+        con.commit()
+
+        assert (
+            con.execute(
+                "SELECT 1 FROM documents WHERE session_id = 'cli-session'"
+            ).fetchone()
+            is None
+        )
+        memory = con.execute(
+            "SELECT storage_kind, sha256, capture_version, content "
+            "FROM documents WHERE session_id = 'vscode-session'"
+        ).fetchone()
+        assert memory["storage_kind"] == "inline"
+        assert memory["capture_version"] == 1
+        assert memory["sha256"] == hashlib.sha256(b"trusted note").hexdigest()
+        assert memory["content"] == "trusted note"
+        assert con.execute(
+            "SELECT size_bytes FROM documents WHERE session_id = 'vscode-session'"
+        ).fetchone()[0] == len(b"trusted note")
+        assert (
+            con.execute(
+                "SELECT stored_path FROM documents WHERE session_id = 'vscode-session'"
+            ).fetchone()[0]
+            is None
+        )
+        signatures = {
+            row["path"] for row in con.execute("SELECT path FROM source_file_stat")
+        }
+        assert signatures == {"srcfp:vscode"}
     finally:
         con.close()

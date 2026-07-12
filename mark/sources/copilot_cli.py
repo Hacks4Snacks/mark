@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import mimetypes
 import sqlite3
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .. import attachments as attachment_store
 from .. import config
 from ..persist import load_file_signatures, record_file_signature, write_session
 from .base import (
@@ -106,12 +106,23 @@ def _read_session_metrics(session_id: str, state_dir: Path) -> dict[str, Any] | 
     }
 
 
-def _hash_cli_session(updated_at: str | None, turns: list[dict[str, Any]]) -> str:
+def _hash_cli_session(
+    updated_at: str | None,
+    turns: list[dict[str, Any]],
+    files_modified: list[str] | None = None,
+) -> str:
     h = hashlib.sha256()
+    h.update(f"attachment-capture-v{attachment_store.CAPTURE_VERSION}\0".encode())
     h.update((updated_at or "").encode("utf-8"))
     for t in turns:
         h.update((t["user_message"] or "").encode("utf-8", "ignore"))
         h.update((t["assistant_response"] or "").encode("utf-8", "ignore"))
+        for path in t.get("files") or []:
+            h.update(b"\0write\0")
+            h.update(path.encode("utf-8", "ignore"))
+    for path in files_modified or []:
+        h.update(b"\0shutdown-write\0")
+        h.update(path.encode("utf-8", "ignore"))
     return h.hexdigest()
 
 
@@ -217,11 +228,13 @@ _FILE_ARG_KEYS = ("filePath", "file_path", "path", "filename", "target_file", "u
 def _tool_file_path(name: str | None, args: Any) -> str | None:
     if not name or name not in _FILE_WRITE_TOOLS or not isinstance(args, dict):
         return None
+    paths: list[str] = []
     for key in _FILE_ARG_KEYS:
         val = args.get(key)
         if isinstance(val, str) and val.strip():
-            return uri_to_path(val.strip()) or val.strip()
-    return None
+            paths.append(uri_to_path(val.strip()) or val.strip())
+    unique = list(dict.fromkeys(paths))
+    return unique[0] if len(unique) == 1 else None
 
 
 def _join_segments(segments: list[list[str]]) -> str:
@@ -271,6 +284,7 @@ def _events_to_turns(
     turns: list[dict[str, Any]] = []
     files_modified: list[str] = []
     cur_turn: dict[str, Any] | None = None
+    write_ledger: dict[str, dict[str, Any]] = {}
 
     def new_turn(user: str, ts: str | None) -> dict[str, Any]:
         return {
@@ -321,19 +335,15 @@ def _events_to_turns(
                     if isinstance(rt, str) and rt.strip():
                         tsep = "\n\n" if cur_turn["thinking"] else ""
                         cur_turn["thinking"] += tsep + rt.strip()
-                    # The tool calls themselves arrive as tool.execution_start
-                    # events (the ordered, authoritative stream); here we only
-                    # mirror names/files so a request that never executes (e.g.
-                    # permission-denied) still appears in the tool/file lists.
+                    # The ordered execution stream below is authoritative for
+                    # outcomes. Keep requested tool names for trace fidelity,
+                    # but never trust a requested path as a completed write.
                     for tr in data.get("toolRequests") or []:
                         if not isinstance(tr, dict):
                             continue
                         nm = tr.get("name")
                         if nm:
                             cur_turn["tools"].append(nm)
-                        fp = _tool_file_path(nm, tr.get("arguments"))
-                        if fp:
-                            cur_turn["files"].append(fp)
                 elif et == "tool.execution_start":
                     if cur_turn is None:
                         cur_turn = new_turn("", ts)
@@ -342,21 +352,57 @@ def _events_to_turns(
                     if nm:
                         cur_turn["tools"].append(nm)
                     fp = _tool_file_path(nm, args)
-                    if fp:
-                        cur_turn["files"].append(fp)
                     # Inline the agent's actions in order: this is what makes a
                     # mostly-autonomous run (one prompt, dozens of tool turns)
                     # read as a conversation instead of just its first prose and
                     # its last.
                     call_id = data.get("toolCallId")
-                    if call_id is not None:
-                        cur_turn["_calls"][call_id] = len(cur_turn["segments"])
+                    valid_call_id = isinstance(call_id, str) and bool(call_id.strip())
+                    if valid_call_id:
+                        entry = write_ledger.setdefault(
+                            call_id,
+                            {
+                                "starts": 0,
+                                "paths": [],
+                                "terminals": [],
+                                "turn": None,
+                                "invalid": False,
+                            },
+                        )
+                        entry["starts"] += 1
+                        if entry["turn"] is None:
+                            entry["turn"] = cur_turn
+                        if fp:
+                            entry["paths"].append(fp)
+                        if entry["starts"] == 1:
+                            cur_turn["_calls"][call_id] = len(cur_turn["segments"])
+                        else:
+                            for turn in (entry["turn"], cur_turn):
+                                calls = turn.get("_calls")
+                                if calls is not None:
+                                    calls.pop(call_id, None)
                     cur_turn["segments"].append(["tool", tool_trace(nm, args)])
                 elif et == "tool.execution_complete":
-                    # Annotate only failures; successes are implied by the call.
+                    call_id = data.get("toolCallId")
+                    valid_call_id = isinstance(call_id, str) and bool(call_id.strip())
+                    if valid_call_id:
+                        entry = write_ledger.setdefault(
+                            call_id,
+                            {
+                                "starts": 0,
+                                "paths": [],
+                                "terminals": [],
+                                "turn": None,
+                                "invalid": False,
+                            },
+                        )
+                        if entry["starts"] == 0:
+                            entry["invalid"] = True
+                        entry["terminals"].append(data.get("success"))
+                    # Annotate only explicit failures; successes are implied.
                     if cur_turn is None or data.get("success") is not False:
                         continue
-                    idx = cur_turn["_calls"].get(data.get("toolCallId"))
+                    idx = cur_turn["_calls"].get(call_id)
                     if idx is not None and idx < len(cur_turn["segments"]):
                         seg = cur_turn["segments"][idx]
                         # Mark the header line so a fenced multi-line arg stays intact.
@@ -372,41 +418,22 @@ def _events_to_turns(
         return None
     if cur_turn is not None:
         turns.append(_finish_event_turn(cur_turn))
+    for entry in write_ledger.values():
+        turn = entry["turn"]
+        if (
+            turn is not None
+            and not entry["invalid"]
+            and entry["starts"] == 1
+            and len(entry["paths"]) == 1
+            and len(entry["terminals"]) == 1
+            and entry["terminals"][0] is True
+        ):
+            turn["files"].append(entry["paths"][0])
+    for turn in turns:
+        turn["files"] = list(dict.fromkeys(turn["files"]))
     turns = [t for t in turns if t["user_message"] or t["assistant_response"]]
     files_modified = list(dict.fromkeys(files_modified))
     return turns, files_modified
-
-
-def _read_attachment(path: str) -> dict[str, Any] | None:
-    """Snapshot an agent-created file as a viewable attachment (text only)."""
-    try:
-        p = Path(path)
-        if not p.is_file():
-            return None
-        size = p.stat().st_size
-    except OSError:
-        return None
-    mime = mimetypes.guess_type(p.name)[0]
-    base = {
-        "filename": p.name,
-        "stored_path": str(p),
-        "mime": mime,
-        "size_bytes": size,
-        "content": None,
-    }
-    if size > config.MAX_ATTACHMENT_BYTES:
-        return base
-    try:
-        raw = p.read_bytes()
-    except OSError:
-        return None
-    if b"\x00" in raw[:8192]:
-        return base
-    try:
-        base["content"] = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return base
-    return base
 
 
 class CopilotCliSource(WatchedSource):
@@ -435,6 +462,22 @@ class CopilotCliSource(WatchedSource):
                 parts.append(f"c{suffix}:{st.st_mtime_ns}:{st.st_size}")
             except OSError:
                 pass
+        state_dir = Path(
+            cfg.options.get("state_dir") or config.SESSION_STATE_DIR
+        ).expanduser()
+        event_hash = hashlib.sha256()
+        event_count = 0
+        for event_path in sorted(
+            state_dir.glob("*/events.jsonl"), key=lambda p: p.parent.name
+        ):
+            try:
+                st = event_path.stat()
+            except OSError:
+                continue
+            event_count += 1
+            event_hash.update(event_path.parent.name.encode("utf-8", "ignore"))
+            event_hash.update(f":{st.st_mtime_ns}:{st.st_size}\0".encode())
+        parts.append(f"events:{event_count}:{event_hash.hexdigest()}")
         return "|".join(parts)
 
     def ingest(
@@ -453,7 +496,9 @@ class CopilotCliSource(WatchedSource):
         src = cfg.roots[0]
         if not src.exists():
             return counts
-        state_dir = Path(cfg.options.get("state_dir") or config.SESSION_STATE_DIR)
+        state_dir = Path(
+            cfg.options.get("state_dir") or config.SESSION_STATE_DIR
+        ).expanduser()
 
         sigs = load_file_signatures(cur, prefix="cli:")
         # Cheap pre-check on the live store (read-only, no backup): if no session's
@@ -507,7 +552,7 @@ class CopilotCliSource(WatchedSource):
                     files_modified = []
                 if not turns:
                     continue
-                content_hash = _hash_cli_session(s["updated_at"], turns)
+                content_hash = _hash_cli_session(s["updated_at"], turns, files_modified)
                 prior = existing.get(sid)
                 if prior is not None and prior == content_hash and not rebuild:
                     record_file_signature(cur, f"cli:{sid}", sig)
@@ -520,9 +565,8 @@ class CopilotCliSource(WatchedSource):
                     metrics["duration_seconds"] = ts_diff_seconds(
                         s["created_at"], s["updated_at"]
                     )
-                # Agent-created/modified files become session attachments. The
-                # git-diff-derived filesModified list is authoritative; supplement
-                # it with paths seen in structured file-write tool calls.
+                # Successful writes and shutdown code changes are candidates,
+                # but only files contained by this session's workspace are read.
                 agent_files: list[str] = list(files_modified)
                 for t in turns:
                     agent_files.extend(t["files"])
@@ -531,7 +575,11 @@ class CopilotCliSource(WatchedSource):
                 extra_files.extend((p, "agent", None) for p in files_modified)
                 attachments: list[dict[str, Any]] = []
                 for fp in agent_files:
-                    att = _read_attachment(fp)
+                    att = attachment_store.snapshot_file(
+                        fp,
+                        workspace=s["cwd"],
+                        session_id=sid,
+                    )
                     if att:
                         attachments.append(att)
                 session = {

@@ -100,16 +100,12 @@ function renderDetail(s) {
 
   const attachments = (s.attachments || []);
   const attDownloadHref = (a) =>
-    (a.id != null && (a.content != null || a.stored_path))
+    (a.id != null && a.downloadable)
       ? `/api/sessions/${encodeURIComponent(s.id)}/attachments/${encodeURIComponent(a.id)}/download`
       : null;
-  // Memory-tool notes (kept where the agent wrote them) are shown apart from any
-  // other agent-created files; they are told apart by their on-disk location.
-  const isMemoryAtt = (a) =>
-    (a.stored_path || "").replace(/\\/g, "/").includes("memory-tool/memories");
   const attIndexed = attachments.map((a, i) => ({ a, i }));
-  const memAtts = attIndexed.filter(({ a }) => isMemoryAtt(a));
-  const agentAtts = attIndexed.filter(({ a }) => !isMemoryAtt(a));
+  const memAtts = attIndexed.filter(({ a }) => a.category === "memory");
+  const agentAtts = attIndexed.filter(({ a }) => a.category !== "memory");
   const asideList = (items, ic) => `<div class="aside-files">${
     items.map(({ a, i }) => {
       const dl = attDownloadHref(a);
@@ -144,7 +140,7 @@ function renderDetail(s) {
         ? `<div class="md">${a.html}</div>`
         : a.content != null
           ? `<pre class="att-pre">${esc(a.content)}</pre>`
-          : `<p class="muted">Not stored (binary or larger than the snapshot limit). Path: ${esc(a.stored_path || "")}</p>`;
+          : `<p class="muted">Content was not captured or is no longer available.</p>`;
       return `<details class="attachment" id="att-${i}"><summary>${icon(ic, { size: 13 })} ${meta}${dlLink}</summary>${inner}</details>`;
     }).join("");
   if (memAtts.length) {

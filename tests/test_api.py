@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -568,6 +569,135 @@ def test_note_create_then_searchable(client):
 
 def test_missing_session_is_404(client):
     assert client.get("/api/sessions/nope").status_code == 404
+
+
+def test_attachment_download_uses_immutable_snapshot(
+    client, make_session, persist_session, tmp_path
+):
+    from mark import attachments
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    original = workspace / "artifact.bin"
+    original_bytes = b"\x00captured binary\xff"
+    original.write_bytes(original_bytes)
+    attachment = attachments.snapshot_file(
+        str(original), workspace=str(workspace), session_id="attachment-session"
+    )
+    assert attachment is not None
+    session = make_session(sid="attachment-session")
+    session["attachments"] = [attachment]
+    persist_session(session)
+
+    doc_id = client.get("/api/sessions/attachment-session").json()["attachments"][0][
+        "id"
+    ]
+    detail_attachment = client.get("/api/sessions/attachment-session").json()[
+        "attachments"
+    ][0]
+    assert "stored_path" not in detail_attachment
+    assert detail_attachment["category"] == "agent"
+    assert detail_attachment["downloadable"] is True
+    original.write_bytes(b"changed live file")
+    response = client.get(
+        f"/api/sessions/attachment-session/attachments/{doc_id}/download"
+    )
+    assert response.status_code == 200
+    assert response.content == original_bytes
+
+    snapshot = attachments.managed_snapshot(
+        attachment["stored_path"],
+        sha256=attachment["sha256"],
+        size_bytes=attachment["size_bytes"],
+    )
+    assert snapshot is not None
+    snapshot.unlink()
+    unavailable = client.get(
+        f"/api/sessions/attachment-session/attachments/{doc_id}/download"
+    )
+    assert unavailable.status_code == 404
+    assert unavailable.json()["detail"] == (
+        "attachment content was not captured or is no longer available"
+    )
+
+
+def test_attachment_download_rejects_legacy_live_path(
+    client, make_session, persist_session, tmp_path
+):
+    live = tmp_path / "legacy-secret.bin"
+    live.write_bytes(b"must never be served")
+    session = make_session(sid="legacy-attachment")
+    session["attachments"] = [
+        {
+            "filename": live.name,
+            "stored_path": str(live),
+            "mime": "application/octet-stream",
+            "size_bytes": live.stat().st_size,
+            "content": None,
+        }
+    ]
+    persist_session(session)
+
+    doc_id = client.get("/api/sessions/legacy-attachment").json()["attachments"][0][
+        "id"
+    ]
+    response = client.get(
+        f"/api/sessions/legacy-attachment/attachments/{doc_id}/download"
+    )
+    assert response.status_code == 404
+    assert response.content != live.read_bytes()
+
+
+def test_attachment_download_rejects_legacy_inline_content(
+    client, make_session, persist_session
+):
+    session = make_session(sid="legacy-inline")
+    session["attachments"] = [
+        {
+            "filename": "legacy-secret.txt",
+            "stored_path": "/tmp/legacy-secret.txt",
+            "mime": "text/plain",
+            "size_bytes": len("legacy secret"),
+            "content": "legacy secret",
+        }
+    ]
+    persist_session(session)
+
+    detail = client.get("/api/sessions/legacy-inline").json()
+    attachment = detail["attachments"][0]
+    assert attachment["content"] is None
+    assert "stored_path" not in attachment
+    assert attachment["downloadable"] is False
+    response = client.get(
+        f"/api/sessions/legacy-inline/attachments/{attachment['id']}/download"
+    )
+    assert response.status_code == 404
+    assert b"legacy secret" not in response.content
+
+
+def test_attachment_download_rejects_corrupted_snapshot(
+    client, make_session, persist_session, tmp_path
+):
+    from mark import attachments
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    original = workspace / "artifact.bin"
+    original.write_bytes(b"captured bytes")
+    attachment = attachments.snapshot_file(
+        str(original), workspace=str(workspace), session_id="corrupt-session"
+    )
+    assert attachment is not None
+    session = make_session(sid="corrupt-session")
+    session["attachments"] = [attachment]
+    persist_session(session)
+    Path(attachment["stored_path"]).write_bytes(b"tampered bytes")
+
+    doc_id = client.get("/api/sessions/corrupt-session").json()["attachments"][0]["id"]
+    response = client.get(
+        f"/api/sessions/corrupt-session/attachments/{doc_id}/download"
+    )
+    assert response.status_code == 404
 
 
 def test_collection_crud_and_membership(client):

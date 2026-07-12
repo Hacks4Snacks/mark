@@ -211,8 +211,9 @@ def write_session(cur, session: dict[str, Any]) -> None:
     for att in session.get("attachments", []):
         cur.execute(
             """INSERT INTO documents
-               (session_id, kind, filename, stored_path, mime, size_bytes, content)
-               VALUES (?,?,?,?,?,?,?)""",
+               (session_id, kind, filename, stored_path, mime, size_bytes, content,
+                storage_kind, sha256, capture_version)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (
                 sid,
                 "attachment",
@@ -221,6 +222,9 @@ def write_session(cur, session: dict[str, Any]) -> None:
                 att.get("mime"),
                 att.get("size_bytes"),
                 att.get("content"),
+                att.get("storage_kind"),
+                att.get("sha256"),
+                att.get("capture_version"),
             ),
         )
 

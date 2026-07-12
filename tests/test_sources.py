@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
+from pathlib import Path
 
 from mark.sources import IMPORT_SOURCES, WATCHED_SOURCES, claude_code, vscode
 from mark.sources.chatgpt import ChatGptSource
@@ -667,6 +669,662 @@ def test_copilot_cli_events_inline_agentic_trace(tmp_path):
     tool_names = set(json.loads(s["turns"][0]["tools"]))
     assert {"view", "rg", "apply_patch", "bash"} <= tool_names
     assert any(f["file_path"] == edited for f in s["files"])
+
+
+def test_copilot_cli_records_only_successful_write_paths(tmp_path):
+    """Requested and failed writes stay in the trace but never become files."""
+    from mark.sources.copilot_cli import _events_to_turns
+
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    requested = "/repo/requested-only.txt"
+    failed = "/repo/failed.txt"
+    succeeded = "/repo/succeeded.txt"
+    events = [
+        {"type": "user.message", "data": {"content": "edit files"}},
+        {
+            "type": "assistant.message",
+            "data": {
+                "content": "Working on it.",
+                "toolRequests": [
+                    {
+                        "name": "create_file",
+                        "arguments": {"filePath": requested},
+                    }
+                ],
+            },
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "failed",
+                "toolName": "create_file",
+                "arguments": {"filePath": failed},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "failed", "success": False},
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "succeeded",
+                "toolName": "edit_file",
+                "arguments": {"filePath": succeeded},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "succeeded", "success": True},
+        },
+    ]
+    (sdir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+
+    parsed = _events_to_turns("sess1", state_dir)
+    assert parsed is not None
+    turns, files_modified = parsed
+    assert files_modified == []
+    assert turns[0]["files"] == [succeeded]
+    assert requested not in turns[0]["files"]
+    assert failed not in turns[0]["files"]
+    assert "— failed" in turns[0]["assistant_response"]
+
+
+def test_copilot_cli_duplicate_call_id_never_promotes_path(tmp_path):
+    from mark.sources.copilot_cli import _events_to_turns
+
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    events = [
+        {"type": "user.message", "data": {"content": "edit"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "duplicate",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/first.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "duplicate",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/never-completed.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "duplicate", "success": True},
+        },
+    ]
+    (sdir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+
+    parsed = _events_to_turns("sess1", state_dir)
+    assert parsed is not None
+    turns, _ = parsed
+    assert turns[0]["files"] == []
+
+
+def test_copilot_cli_conflicting_completions_never_promote_path(tmp_path):
+    from mark.sources.copilot_cli import _events_to_turns
+
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    events = [
+        {"type": "user.message", "data": {"content": "edit"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "write",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/file.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "write", "success": True},
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "write", "success": False},
+        },
+    ]
+    (sdir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+
+    parsed = _events_to_turns("sess1", state_dir)
+    assert parsed is not None
+    assert parsed[0][0]["files"] == []
+
+
+def test_copilot_cli_call_id_reuse_across_turns_never_promotes(tmp_path):
+    from mark.sources.copilot_cli import _events_to_turns
+
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    events = [
+        {"type": "user.message", "data": {"content": "first"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "reused",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/first.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "reused", "success": True},
+        },
+        {"type": "user.message", "data": {"content": "second"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "reused",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/second.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "reused", "success": True},
+        },
+    ]
+    (sdir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+
+    parsed = _events_to_turns("sess1", state_dir)
+    assert parsed is not None
+    assert all(turn["files"] == [] for turn in parsed[0])
+
+
+def test_copilot_cli_invalid_terminal_order_and_type_never_promote(tmp_path):
+    from mark.sources.copilot_cli import _events_to_turns
+
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    events = [
+        {"type": "user.message", "data": {"content": "edit"}},
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "before", "success": True},
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "before",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/before.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "numeric",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/numeric.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "numeric", "success": 1},
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "paths",
+                "toolName": "create_file",
+                "arguments": {
+                    "filePath": "/repo/one.txt",
+                    "path": "/repo/two.txt",
+                },
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "paths", "success": True},
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "   ",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/blank-id.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "   ", "success": True},
+        },
+    ]
+    (sdir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+
+    parsed = _events_to_turns("sess1", state_dir)
+    assert parsed is not None
+    assert parsed[0][0]["files"] == []
+
+
+def test_copilot_cli_completion_changes_session_hash(tmp_path):
+    from mark.sources.copilot_cli import _events_to_turns, _hash_cli_session
+
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    path = sdir / "events.jsonl"
+    events = [
+        {"type": "user.message", "data": {"content": "edit"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "write",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/delayed.txt"},
+            },
+        },
+    ]
+    path.write_text("\n".join(json.dumps(e) for e in events), encoding="utf-8")
+    before = _events_to_turns("sess1", state_dir)
+    assert before is not None
+    before_hash = _hash_cli_session("same", before[0], before[1])
+
+    events.append(
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "write", "success": True},
+        }
+    )
+    path.write_text("\n".join(json.dumps(e) for e in events), encoding="utf-8")
+    after = _events_to_turns("sess1", state_dir)
+    assert after is not None
+    after_hash = _hash_cli_session("same", after[0], after[1])
+
+    assert before[0][0]["files"] == []
+    assert after[0][0]["files"] == ["/repo/delayed.txt"]
+    assert before_hash != after_hash
+
+
+def test_copilot_cli_fingerprint_changes_with_event_log(tmp_path):
+    from mark import config
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    store = tmp_path / "session-store.db"
+    store.write_bytes(b"store")
+    state_dir = tmp_path / "session-state"
+    events = state_dir / "sess1" / "events.jsonl"
+    events.parent.mkdir(parents=True)
+    events.write_text('{"type":"user.message"}\n')
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(state_dir)},
+    )
+    source = CopilotCliSource()
+    before = source.fingerprint(cfg)
+    events.write_text(
+        '{"type":"user.message"}\n'
+        '{"type":"tool.execution_complete","data":{"success":true}}\n'
+    )
+    after = source.fingerprint(cfg)
+
+    assert before != after
+
+
+def test_copilot_cli_reingests_delayed_completion(tmp_path):
+    from mark import config, db
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    created = workspace / "created.txt"
+    created.write_text("captured after completion")
+    store = tmp_path / "session-store.db"
+    con = sqlite3.connect(store)
+    con.execute(
+        "CREATE TABLE sessions (id TEXT, cwd TEXT, repository TEXT, summary TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    con.execute(
+        "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+        (
+            "sess1",
+            str(workspace),
+            None,
+            None,
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+        ),
+    )
+    con.commit()
+    con.close()
+
+    state_dir = tmp_path / "session-state"
+    events_path = state_dir / "sess1" / "events.jsonl"
+    events_path.parent.mkdir(parents=True)
+    events = [
+        {"type": "user.message", "data": {"content": "create file"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "write",
+                "toolName": "create_file",
+                "arguments": {"filePath": str(created)},
+            },
+        },
+    ]
+    events_path.write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(state_dir)},
+    )
+    source = CopilotCliSource()
+    with db.connect() as conn:
+        cur = conn.cursor()
+        first = source.ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        existing = {
+            row["id"]: row["content_hash"]
+            for row in cur.execute("SELECT id, content_hash FROM sessions")
+        }
+        assert first["added"] == 1
+        assert (
+            cur.execute(
+                "SELECT COUNT(*) FROM documents WHERE session_id = 'sess1'"
+            ).fetchone()[0]
+            == 0
+        )
+
+        events.append(
+            {
+                "type": "tool.execution_complete",
+                "data": {"toolCallId": "write", "success": True},
+            }
+        )
+        events_path.write_text(
+            "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+        )
+        second = source.ingest(cur, existing, cfg, rebuild=False)
+        conn.commit()
+        attachment = cur.execute(
+            "SELECT storage_kind, sha256 FROM documents "
+            "WHERE session_id = 'sess1' AND kind = 'attachment'"
+        ).fetchone()
+
+    assert second["updated"] == 1
+    assert attachment["storage_kind"] == "managed"
+    assert attachment["sha256"]
+
+
+def test_copilot_cli_ingest_snapshots_only_workspace_files(tmp_path):
+    from mark import attachments, config, db
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    inside = workspace / "inside.bin"
+    inside_bytes = b"\x00inside snapshot\xff"
+    inside.write_bytes(inside_bytes)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside secret")
+
+    store = tmp_path / "session-store.db"
+    con = sqlite3.connect(store)
+    con.execute(
+        "CREATE TABLE sessions (id TEXT, cwd TEXT, repository TEXT, summary TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    con.execute(
+        "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+        (
+            "sess1",
+            str(workspace),
+            None,
+            None,
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+        ),
+    )
+    con.commit()
+    con.close()
+
+    events = [
+        {"type": "user.message", "data": {"content": "write files"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "inside",
+                "toolName": "create_file",
+                "arguments": {"filePath": str(inside)},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "inside", "success": True},
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "outside",
+                "toolName": "create_file",
+                "arguments": {"filePath": str(outside)},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "outside", "success": True},
+        },
+    ]
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    (sdir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(state_dir)},
+    )
+    with db.connect() as conn:
+        result = CopilotCliSource().ingest(conn.cursor(), {}, cfg, rebuild=False)
+        conn.commit()
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT filename, stored_path, content, sha256, size_bytes "
+                "FROM documents "
+                "WHERE session_id = 'sess1' AND kind = 'attachment'"
+            )
+        ]
+
+    assert result["added"] == 1
+    assert [row["filename"] for row in rows] == ["inside.bin"]
+    snapshot = attachments.managed_snapshot(
+        rows[0]["stored_path"],
+        sha256=rows[0]["sha256"],
+        size_bytes=rows[0]["size_bytes"],
+    )
+    assert snapshot is not None
+    assert snapshot.read_bytes() == inside_bytes
+    assert rows[0]["content"] is None
+    assert str(outside) not in {row["stored_path"] for row in rows}
+
+
+def test_attachment_snapshot_is_workspace_contained_and_immutable(tmp_path):
+    from mark import attachments
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    original = workspace / "artifact.bin"
+    original_bytes = b"\x00original binary\xff"
+    original.write_bytes(original_bytes)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private outside data")
+    escape = workspace / "escape.txt"
+    escape.symlink_to(outside)
+
+    captured = attachments.snapshot_file(
+        "artifact.bin", workspace=str(workspace), session_id="session-1"
+    )
+    assert captured is not None
+    assert captured["content"] is None
+    snapshot = attachments.managed_snapshot(
+        captured["stored_path"],
+        sha256=captured["sha256"],
+        size_bytes=captured["size_bytes"],
+    )
+    assert snapshot is not None
+    assert snapshot.read_bytes() == original_bytes
+    assert snapshot.stat().st_mode & 0o777 == 0o600
+
+    original.write_bytes(b"changed after ingest")
+    assert snapshot.read_bytes() == original_bytes
+    assert (
+        attachments.snapshot_file(
+            str(outside), workspace=str(workspace), session_id="session-1"
+        )
+        is None
+    )
+    assert (
+        attachments.snapshot_file(
+            str(escape), workspace=str(workspace), session_id="session-1"
+        )
+        is None
+    )
+    assert attachments.managed_snapshot(str(outside)) is None
+
+
+def test_attachment_snapshot_rejects_broad_workspace(tmp_path, monkeypatch):
+    from mark import attachments
+
+    home = tmp_path / "home"
+    home.mkdir()
+    secret = home / "secret.txt"
+    secret.write_text("secret")
+    monkeypatch.setattr(attachments.Path, "home", lambda: home)
+
+    assert (
+        attachments.snapshot_file(
+            str(secret), workspace=str(home), session_id="session-1"
+        )
+        is None
+    )
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    monkeypatch.setattr(attachments.tempfile, "gettempdir", lambda: str(shared))
+    assert (
+        attachments.snapshot_file(
+            str(secret), workspace=str(shared), session_id="session-1"
+        )
+        is None
+    )
+    for broad in ("/System", "/private", "/Volumes"):
+        if Path(broad).is_dir():
+            assert attachments._trusted_root(broad, reject_broad=True) is None
+
+
+def test_attachment_snapshot_rejects_macos_firmlink_alias(tmp_path):
+    from mark import attachments
+
+    alias_root = Path("/System/Volumes/Data/private/tmp")
+    canonical_root = Path("/private/tmp")
+    if not alias_root.is_dir() or not canonical_root.is_dir():
+        return
+    try:
+        same_root = os.path.samefile(alias_root, canonical_root)
+    except OSError:
+        return
+    if not same_root:
+        return
+
+    fixture = canonical_root / f"mark-f01-{tmp_path.name}.txt"
+    fixture.write_text("fixture only")
+    try:
+        alias_fixture = alias_root / fixture.name
+        assert (
+            attachments.snapshot_file(
+                str(alias_fixture),
+                workspace=str(alias_root),
+                session_id="session-1",
+            )
+            is None
+        )
+    finally:
+        fixture.unlink(missing_ok=True)
+
+
+def test_attachment_snapshot_caps_content(tmp_path, monkeypatch):
+    from mark import attachments, config
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    large = workspace / "large.txt"
+    large.write_text("too large")
+    monkeypatch.setattr(config, "MAX_ATTACHMENT_BYTES", 4)
+
+    captured = attachments.snapshot_file(
+        str(large), workspace=str(workspace), session_id="session-1"
+    )
+    assert captured is not None
+    assert captured["size_bytes"] == len("too large")
+    assert captured["content"] is None
+    assert captured["stored_path"] is None
+
+
+def test_attachment_snapshot_accepts_exact_cap(tmp_path, monkeypatch):
+    from mark import attachments, config
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    exact = workspace / "exact.bin"
+    exact.write_bytes(b"1234")
+    monkeypatch.setattr(config, "MAX_ATTACHMENT_BYTES", 4)
+
+    captured = attachments.snapshot_file(
+        str(exact), workspace=str(workspace), session_id="session-1"
+    )
+    assert captured is not None
+    assert captured["storage_kind"] == "managed"
+    assert attachments.attachment_bytes(captured) == b"1234"
+
+
+def test_inline_attachment_requires_supported_exact_provenance(monkeypatch):
+    import hashlib
+
+    from mark import attachments, config
+
+    raw = b"trusted"
+    base = {
+        "capture_version": attachments.CAPTURE_VERSION,
+        "storage_kind": "inline",
+        "content": raw.decode(),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "size_bytes": len(raw),
+    }
+    assert attachments.attachment_bytes(base) == raw
+    assert attachments.attachment_bytes({**base, "capture_version": 999}) is None
+    assert attachments.attachment_bytes({**base, "size_bytes": 1}) is None
+    assert attachments.attachment_bytes({**base, "sha256": "0" * 64}) is None
+    monkeypatch.setattr(config, "MAX_ATTACHMENT_BYTES", len(raw) - 1)
+    assert attachments.attachment_bytes(base) is None
 
 
 def test_cursor_indexes_composer_from_vscdb(tmp_path):
