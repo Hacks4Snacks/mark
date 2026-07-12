@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from . import config, db, embeddings, persist
+from . import attachments, config, db, embeddings, persist
 from .sources import IMPORT_SOURCES, WATCHED_SOURCES
 from .sources.base import ProgressCb
 
@@ -223,6 +223,10 @@ def _ingest_all(
                     progress(f"Error reading {source.key}: {error}")
             conn.commit()
 
+    # Database references are now authoritative; reclaim snapshots replaced by
+    # reingest and any orphan captures left by a failed adapter/savepoint.
+    attachments.cleanup_unreferenced()
+
     result: dict[str, Any] = {"added": 0, "updated": 0, "skipped": 0}
     result.update(counts)
     result["sources"] = source_results
@@ -313,6 +317,8 @@ def _import_export(
             if progress and n % 50 == 0:
                 progress(f"Imported {n} {src.key} conversations...")
         conn.commit()
+
+    attachments.cleanup_unreferenced()
 
     # Embed only when this import actually wrote something (or a prior pass was
     # interrupted), so re-importing an unchanged export doesn't rescan chunks.

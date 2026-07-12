@@ -69,10 +69,7 @@ def write_session(cur, session: dict[str, Any]) -> None:
     manual_tags = cur.execute(
         "SELECT tag, score FROM tags WHERE session_id = ? AND manual = 1", (sid,)
     ).fetchall()
-    # A user's hide choice is a preference, not session content, so it must also
-    # survive the row being replaced — otherwise a re-scan would unhide it.
-    prior = cur.execute("SELECT hidden FROM sessions WHERE id = ?", (sid,)).fetchone()
-    was_hidden = bool(prior["hidden"]) if prior else False
+    prior = cur.execute("SELECT 1 FROM sessions WHERE id = ?", (sid,)).fetchone()
     # Re-indexing replaces the row, cascading away its chunks and their vectors.
     # For an actively-growing session that would re-embed identical text on every
     # pass, so snapshot existing vectors keyed by chunk content and carry them
@@ -86,8 +83,19 @@ def write_session(cur, session: dict[str, Any]) -> None:
             (sid,),
         )
     }
-    # Replace any prior copy of this session (cascades to children).
-    cur.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+    # Replace only ingestion-owned children. The parent row stays in place so
+    # user-owned collection include/exclude rows never cascade away.
+    if prior:
+        for table in (
+            "turns",
+            "documents",
+            "session_files",
+            "session_refs",
+            "code_blocks",
+            "tags",
+            "chunks",
+        ):
+            cur.execute(f"DELETE FROM {table} WHERE session_id = ?", (sid,))
     cur.execute("DELETE FROM search_index WHERE session_id = ?", (sid,))
 
     turns = session["turns"]
@@ -99,7 +107,30 @@ def write_session(cur, session: dict[str, Any]) -> None:
             duration_seconds, model, input_tokens, output_tokens,
             premium_requests, aiu, est_cost_usd, tokens_estimated,
             source_path, content_hash)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     ON CONFLICT(id) DO UPDATE SET
+                         source = excluded.source,
+                         title = excluded.title,
+                         summary = NULL,
+                         workspace_id = excluded.workspace_id,
+                         repository = excluded.repository,
+                         repo_path = excluded.repo_path,
+                         requester = excluded.requester,
+                         responder = excluded.responder,
+                         created_at = excluded.created_at,
+                         updated_at = excluded.updated_at,
+                         turn_count = excluded.turn_count,
+                         duration_seconds = excluded.duration_seconds,
+                         model = excluded.model,
+                         input_tokens = excluded.input_tokens,
+                         output_tokens = excluded.output_tokens,
+                         premium_requests = excluded.premium_requests,
+                         aiu = excluded.aiu,
+                         est_cost_usd = excluded.est_cost_usd,
+                         tokens_estimated = excluded.tokens_estimated,
+                         source_path = excluded.source_path,
+                         content_hash = excluded.content_hash,
+                         indexed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
         (
             sid,
             session["source"],
@@ -124,10 +155,6 @@ def write_session(cur, session: dict[str, Any]) -> None:
             session["content_hash"],
         ),
     )
-    # Re-apply the preserved hide flag (the INSERT defaults it to visible).
-    if was_hidden:
-        cur.execute("UPDATE sessions SET hidden = 1 WHERE id = ?", (sid,))
-
     # User prompts carry the most search signal, so when a session exceeds the
     # per-session chunk cap we keep every turn's user text before spending the
     # remaining budget on assistant/tool output.

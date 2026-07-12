@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .. import db
+from .. import attachments, db, ingest
 
 # Manual topics are stored normalized (lowercase, collapsed whitespace, capped)
 # so add/remove always agree regardless of caller.
@@ -40,23 +40,25 @@ def purge(session_id: str) -> bool:
     tombstone is the one thing kept, deliberately, so a background re-scan can't
     silently re-import what the user chose to delete. This cannot be undone.
     """
-    with db.cursor() as cur:
-        row = cur.execute(
-            "SELECT source, content_hash FROM sessions WHERE id = ?", (session_id,)
-        ).fetchone()
-        if row is None:
-            return False
-        cur.execute(
-            "INSERT INTO tombstones(session_id, source, content_hash) VALUES (?,?,?) "
-            "ON CONFLICT(session_id) DO UPDATE SET source = excluded.source, "
-            "content_hash = excluded.content_hash, "
-            "deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')",
-            (session_id, row["source"], row["content_hash"]),
-        )
-        # FTS rows have no foreign key, so drop them explicitly; the session
-        # delete cascades to turns/chunks/embeddings/tags/members.
-        cur.execute("DELETE FROM search_index WHERE session_id = ?", (session_id,))
-        cur.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    with ingest.exclusive_ingest():
+        with db.cursor() as cur:
+            row = cur.execute(
+                "SELECT source, content_hash FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            cur.execute(
+                "INSERT INTO tombstones(session_id, source, content_hash) VALUES (?,?,?) "
+                "ON CONFLICT(session_id) DO UPDATE SET source = excluded.source, "
+                "content_hash = excluded.content_hash, "
+                "deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+                (session_id, row["source"], row["content_hash"]),
+            )
+            # FTS rows have no foreign key, so drop them explicitly; the session
+            # delete cascades to turns/chunks/embeddings/tags/members.
+            cur.execute("DELETE FROM search_index WHERE session_id = ?", (session_id,))
+            cur.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        attachments.cleanup_unreferenced()
         return True
 
 

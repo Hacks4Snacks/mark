@@ -104,6 +104,24 @@ def _add_attachment_provenance(conn: sqlite3.Connection) -> None:
         )
 
 
+def _classify_owned_uploads(conn: sqlite3.Connection) -> None:
+    """Mark uploaded originals as Mark-owned blobs for lifecycle cleanup."""
+    tables = {
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if "documents" not in tables:
+        return
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
+    if "storage_kind" not in cols:
+        return
+    conn.execute(
+        "UPDATE documents SET storage_kind = 'upload', capture_version = 1 "
+        "WHERE kind = 'file' AND stored_path IS NOT NULL "
+        "AND session_id IN (SELECT id FROM sessions WHERE source = 'upload')"
+    )
+
+
 # Ordered list of migrations. Append new ones; never reorder or delete.
 # The 1-based index of a migration is its schema version.
 MIGRATIONS: list[Migration] = [
@@ -113,6 +131,7 @@ MIGRATIONS: list[Migration] = [
     _add_tombstones_table,
     _add_source_file_stat_table,
     _add_attachment_provenance,
+    _classify_owned_uploads,
 ]
 
 CURRENT_VERSION = len(MIGRATIONS)

@@ -6,6 +6,9 @@ import sqlite3
 import threading
 from pathlib import Path
 
+import pytest
+
+from mark.repositories import sessions as sessions_repo
 from mark.sources import IMPORT_SOURCES, WATCHED_SOURCES, claude_code, vscode
 from mark.sources.chatgpt import ChatGptSource
 from mark.sources.grok import GrokSource
@@ -1304,6 +1307,92 @@ def test_attachment_snapshot_accepts_exact_cap(tmp_path, monkeypatch):
     assert captured is not None
     assert captured["storage_kind"] == "managed"
     assert attachments.attachment_bytes(captured) == b"1234"
+
+
+def test_attachment_reingest_removes_replaced_managed_blob(
+    tmp_path, make_session, persist_session
+):
+    from mark import attachments
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    original = workspace / "artifact.bin"
+    original.write_bytes(b"first version")
+    first = attachments.snapshot_file(
+        str(original), workspace=str(workspace), session_id="session-1"
+    )
+    assert first is not None
+    session = make_session(sid="session-1", asst="first answer")
+    session["attachments"] = [first]
+    persist_session(session)
+    first_path = Path(first["stored_path"])
+    assert first_path.exists()
+
+    original.write_bytes(b"second version")
+    second = attachments.snapshot_file(
+        str(original), workspace=str(workspace), session_id="session-1"
+    )
+    assert second is not None
+    changed = make_session(sid="session-1", asst="changed answer")
+    changed["attachments"] = [second]
+    persist_session(changed)
+    attachments.cleanup_unreferenced()
+
+    assert not first_path.exists()
+    assert Path(second["stored_path"]).exists()
+
+
+def test_attachment_cleanup_preserves_shared_managed_blob(
+    tmp_path, make_session, persist_session
+):
+    from mark import attachments
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    original = workspace / "shared.bin"
+    original.write_bytes(b"shared bytes")
+    captured = attachments.snapshot_file(
+        str(original), workspace=str(workspace), session_id="shared"
+    )
+    assert captured is not None
+    for sid in ("one", "two"):
+        session = make_session(sid=sid)
+        session["attachments"] = [captured]
+        persist_session(session)
+
+    shared_path = Path(captured["stored_path"])
+    assert sessions_repo.purge("one") is True
+    assert shared_path.exists()
+    assert sessions_repo.purge("two") is True
+    assert not shared_path.exists()
+
+
+def test_attachment_cleanup_removes_unreferenced_owned_files(tmp_path):
+    from mark import attachments, config
+
+    config.ensure_dirs()
+    upload_orphan = config.UPLOADS_DIR / "orphan.txt"
+    upload_orphan.write_text("orphan")
+    attachment_orphan = attachments.snapshot_root() / "orphan" / "blob"
+    attachment_orphan.parent.mkdir(parents=True)
+    attachment_orphan.write_bytes(b"orphan")
+
+    assert attachments.cleanup_unreferenced() == 2
+    assert not upload_orphan.exists()
+    assert not attachment_orphan.exists()
+
+
+def test_upload_failure_removes_staged_file(monkeypatch):
+    from mark import config, uploads
+
+    def fail_index(**kwargs):
+        raise RuntimeError("index failed")
+
+    monkeypatch.setattr(uploads, "_index_document_locked", fail_index)
+    with pytest.raises(RuntimeError, match="index failed"):
+        uploads.add_file("failed.txt", b"partial bytes", "text/plain")
+
+    assert not list(config.UPLOADS_DIR.glob("*"))
 
 
 def test_inline_attachment_requires_supported_exact_provenance(monkeypatch):

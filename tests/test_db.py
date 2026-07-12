@@ -151,7 +151,10 @@ def test_attachment_provenance_migration_quarantines_legacy_cli(tmp_path):
                 ("srcfp:vscode", "keep"),
             ],
         )
-        con.execute(f"PRAGMA user_version = {migrations.CURRENT_VERSION - 1}")
+        provenance_index = migrations.MIGRATIONS.index(
+            migrations._add_attachment_provenance
+        )
+        con.execute(f"PRAGMA user_version = {provenance_index}")
         con.commit()
 
         migrations.run_migrations(con)

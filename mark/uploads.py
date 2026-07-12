@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, db, embeddings, enrich, ingest
+from . import attachments, config, db, embeddings, enrich, ingest
 from .persist import window_chunks
 
 
@@ -50,15 +50,18 @@ def _index_document(
     size: int | None = None,
 ) -> str:
     with ingest.exclusive_ingest():
-        return _index_document_locked(
-            title=title,
-            kind=kind,
-            content=content,
-            filename=filename,
-            stored_path=stored_path,
-            mime=mime,
-            size=size,
-        )
+        try:
+            return _index_document_locked(
+                title=title,
+                kind=kind,
+                content=content,
+                filename=filename,
+                stored_path=stored_path,
+                mime=mime,
+                size=size,
+            )
+        finally:
+            attachments.cleanup_unreferenced()
 
 
 def _index_document_locked(
@@ -101,9 +104,20 @@ def _index_document_locked(
         )
         cur.execute(
             """INSERT INTO documents
-               (session_id, kind, filename, stored_path, mime, size_bytes, content)
-               VALUES (?,?,?,?,?,?,?)""",
-            (session_id, kind, filename, stored_path, mime, size, content),
+               (session_id, kind, filename, stored_path, mime, size_bytes, content,
+                storage_kind, capture_version)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                session_id,
+                kind,
+                filename,
+                stored_path,
+                mime,
+                size,
+                content,
+                "upload" if kind == "file" and stored_path else None,
+                1 if kind == "file" and stored_path else None,
+            ),
         )
         for tag, score in tags:
             cur.execute(
@@ -140,15 +154,19 @@ def add_file(filename: str, data: bytes, mime: str | None = None) -> str:
     safe_name = Path(filename).name or "upload.bin"
     ext = Path(safe_name).suffix.lower()
     stored = config.UPLOADS_DIR / f"{uuid.uuid4().hex}{ext}"
-    config.ensure_dirs()
-    stored.write_bytes(data)
-    content = _extract_text(safe_name, data)
-    return _index_document(
-        title=safe_name,
-        kind="file",
-        content=content,
-        filename=safe_name,
-        stored_path=str(stored),
-        mime=mime,
-        size=len(data),
-    )
+    with ingest.exclusive_ingest():
+        config.ensure_dirs()
+        try:
+            stored.write_bytes(data)
+            content = _extract_text(safe_name, data)
+            return _index_document_locked(
+                title=safe_name,
+                kind="file",
+                content=content,
+                filename=safe_name,
+                stored_path=str(stored),
+                mime=mime,
+                size=len(data),
+            )
+        finally:
+            attachments.cleanup_unreferenced()

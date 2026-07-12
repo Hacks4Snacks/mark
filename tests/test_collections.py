@@ -47,3 +47,30 @@ def test_collections_for_session_reports_membership(make_session, persist_sessio
     mine = next(r for r in rows if r["id"] == cid)
     assert mine["member"] is True
     assert mine["manual_include"] is True
+
+
+def test_manual_membership_survives_session_reingest(make_session, persist_session):
+    persist_session(make_session(sid="a", asst="first answer"))
+    cid = coll.create("Manual")
+    coll.set_member(cid, "a", "include")
+
+    persist_session(make_session(sid="a", asst="changed answer"))
+
+    assert "a" in coll.resolve_member_ids(coll.get_collection(cid))
+    mine = next(r for r in coll.collections_for_session("a") if r["id"] == cid)
+    assert mine["manual_include"] is True
+
+
+def test_rule_exclusion_survives_session_reingest(make_session, persist_session):
+    persist_session(make_session(sid="a", user="auth token timeout"))
+    cid = coll.create("Auth", rule={"q": "auth token"})
+    coll.remove_member(cid, "a")
+    assert "a" not in coll.resolve_member_ids(coll.get_collection(cid))
+
+    persist_session(
+        make_session(sid="a", user="auth token timeout", asst="changed answer")
+    )
+
+    assert "a" not in coll.resolve_member_ids(coll.get_collection(cid))
+    mine = next(r for r in coll.collections_for_session("a") if r["id"] == cid)
+    assert mine["manual_exclude"] is True

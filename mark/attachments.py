@@ -9,7 +9,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from . import config
+from . import config, db
 
 CAPTURE_VERSION = 2
 _READ_CHUNK = 64 * 1024
@@ -349,3 +349,60 @@ def attachment_text(attachment: dict[str, Any]) -> str | None:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
         return None
+
+
+def cleanup_unreferenced() -> int:
+    """Delete unreferenced regular files only from Mark-owned blob roots."""
+    roots = (config.UPLOADS_DIR, snapshot_root())
+    with db.cursor() as cur:
+        referenced_rows = cur.execute(
+            "SELECT stored_path FROM documents WHERE stored_path IS NOT NULL "
+            "AND storage_kind IN ('managed', 'upload')"
+        ).fetchall()
+
+    referenced: set[tuple[int, int]] = set()
+    for row in referenced_rows:
+        try:
+            st = os.stat(row["stored_path"], follow_symlinks=False)
+        except (OSError, TypeError, ValueError):
+            continue
+        if stat.S_ISREG(st.st_mode):
+            referenced.add((st.st_dev, st.st_ino))
+
+    removed = 0
+    for configured_root in roots:
+        try:
+            root = configured_root.expanduser().resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if not root.is_dir() or root == Path(root.anchor):
+            continue
+        directories: list[Path] = []
+        for current, dirnames, filenames in os.walk(root, followlinks=False):
+            current_path = Path(current)
+            directories.append(current_path)
+            # Never descend through symlinked directories.
+            dirnames[:] = [
+                name for name in dirnames if not (current_path / name).is_symlink()
+            ]
+            for name in filenames:
+                candidate = current_path / name
+                try:
+                    st = os.stat(candidate, follow_symlinks=False)
+                except OSError:
+                    continue
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                if (st.st_dev, st.st_ino) in referenced:
+                    continue
+                try:
+                    candidate.unlink()
+                except OSError:
+                    continue
+                removed += 1
+        for directory in reversed(directories):
+            if directory == root:
+                continue
+            with suppress(OSError):
+                directory.rmdir()
+    return removed

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from mark import db, ingest, search
 from mark.repositories import sessions as sessions_repo
 from mark.repositories import stats as stats_repo
@@ -239,3 +241,41 @@ def test_delete_api_permanently_removes(client):
 
 def test_delete_missing_session_is_404(client):
     assert client.delete("/api/sessions/nope").status_code == 404
+
+
+def test_purge_removes_owned_upload_bytes():
+    from mark import uploads
+
+    sid = uploads.add_file("owned.txt", b"owned upload bytes", "text/plain")
+    with db.cursor() as cur:
+        row = cur.execute(
+            "SELECT stored_path, storage_kind FROM documents WHERE session_id = ?",
+            (sid,),
+        ).fetchone()
+    stored = Path(row["stored_path"])
+    assert row["storage_kind"] == "upload"
+    assert stored.exists()
+
+    assert sessions_repo.purge(sid) is True
+    assert not stored.exists()
+
+
+def test_purge_never_deletes_external_legacy_path(
+    make_session, persist_session, tmp_path
+):
+    external = tmp_path / "external.txt"
+    external.write_text("must survive")
+    session = make_session(sid="legacy-external")
+    session["attachments"] = [
+        {
+            "filename": external.name,
+            "stored_path": str(external),
+            "mime": "text/plain",
+            "size_bytes": external.stat().st_size,
+            "content": None,
+        }
+    ]
+    persist_session(session)
+
+    assert sessions_repo.purge("legacy-external") is True
+    assert external.read_text() == "must survive"
