@@ -4,6 +4,7 @@ import html
 import re
 import threading
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
@@ -75,11 +76,18 @@ def _scope_where(
         clauses.append(f"{prefix}source = ?")
         params.append(scope.source)
     if scope.date_from:
-        clauses.append(f"COALESCE({prefix}updated_at, {prefix}created_at) >= ?")
+        clauses.append(
+            f"julianday(COALESCE({prefix}updated_at, {prefix}created_at)) "
+            ">= julianday(?)"
+        )
         params.append(scope.date_from)
     if scope.date_to:
-        clauses.append(f"COALESCE({prefix}updated_at, {prefix}created_at) <= ?")
-        params.append(scope.date_to + "T23:59:59Z")
+        next_day = (date.fromisoformat(scope.date_to) + timedelta(days=1)).isoformat()
+        clauses.append(
+            f"julianday(COALESCE({prefix}updated_at, {prefix}created_at)) "
+            "< julianday(?)"
+        )
+        params.append(next_day)
     if scope.tags:
         placeholders = ",".join("?" * len(scope.tags))
         clauses.append(
@@ -111,6 +119,32 @@ def _scoped_session_ids(scope: _SessionScope) -> set[str]:
                 f"SELECT s.id FROM sessions s WHERE {where}", params
             ).fetchall()
         }
+
+
+def _recent_session_ids(scope: _SessionScope, limit: int) -> set[str]:
+    with (
+        db.cursor() as cur,
+        db.temporary_id_table(cur.connection, scope.only_ids) as id_table,
+    ):
+        where, params = _scope_where(scope, id_table=id_table)
+        rows = cur.execute(
+            f"SELECT s.id FROM sessions s WHERE {where} "
+            "ORDER BY julianday(COALESCE(s.updated_at, s.created_at)) DESC LIMIT ?",
+            [*params, limit],
+        ).fetchall()
+    return {row["id"] for row in rows}
+
+
+def _timestamp_value(value: str | None) -> float:
+    if not value:
+        return float("-inf")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except ValueError:
+        return float("-inf")
 
 
 def _fts_query(q: str) -> str | None:
@@ -152,6 +186,148 @@ def _keyword_search(
         }
         for r in rows
     ]
+
+
+def scoped_session_ids(
+    *,
+    repo: str | None = None,
+    source: str | None = None,
+    tags: list[str] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    only_ids: set[str] | None = None,
+) -> set[str]:
+    """Return the complete visible set for structured filters."""
+    return _scoped_session_ids(
+        _session_scope(
+            repo=repo,
+            source=source,
+            tags=tags,
+            date_from=date_from,
+            date_to=date_to,
+            only_ids=only_ids,
+        )
+    )
+
+
+def keyword_session_ids(
+    query: str,
+    *,
+    repo: str | None = None,
+    source: str | None = None,
+    tags: list[str] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    only_ids: set[str] | None = None,
+) -> set[str]:
+    """Return every visible session containing an FTS match."""
+    match = _fts_query(query)
+    if not match:
+        return set()
+    scope = _session_scope(
+        repo=repo,
+        source=source,
+        tags=tags,
+        date_from=date_from,
+        date_to=date_to,
+        only_ids=only_ids,
+    )
+    with (
+        db.cursor() as cur,
+        db.temporary_id_table(cur.connection, scope.only_ids) as id_table,
+    ):
+        where, params = _scope_where(scope, id_table=id_table)
+        return {
+            row["session_id"]
+            for row in cur.execute(
+                "SELECT DISTINCT search_index.session_id FROM search_index "
+                "JOIN sessions s ON s.id = search_index.session_id "
+                f"WHERE search_index MATCH ? AND {where}",
+                [match, *params],
+            ).fetchall()
+        }
+
+
+def ranked_session_ids(
+    query: str,
+    *,
+    mode: str,
+    limit: int,
+    repo: str | None = None,
+    source: str | None = None,
+    tags: list[str] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    only_ids: set[str] | None = None,
+) -> tuple[list[str], bool]:
+    """Return server-bounded relevance-ranked IDs and whether more were eligible."""
+    scope = _session_scope(
+        repo=repo,
+        source=source,
+        tags=tags,
+        date_from=date_from,
+        date_to=date_to,
+        only_ids=only_ids,
+    )
+    keyword_ranked = _keyword_session_ranking(query, scope) if mode == "hybrid" else []
+    semantic_ranked = _semantic_session_ranking(query, _scoped_session_ids(scope))
+    scores: dict[str, float] = {}
+    for ranked in (keyword_ranked, semantic_ranked):
+        for rank, session_id in enumerate(ranked):
+            scores[session_id] = scores.get(session_id, 0.0) + 1.0 / (_RRF_K + rank)
+    ordered = sorted(scores, key=lambda session_id: scores[session_id], reverse=True)
+    return ordered[:limit], len(ordered) > limit
+
+
+def _keyword_session_ranking(query: str, scope: _SessionScope) -> list[str]:
+    """Rank every matching session by its best BM25 chunk."""
+    match = _fts_query(query)
+    if not match:
+        return []
+    with (
+        db.cursor() as cur,
+        db.temporary_id_table(cur.connection, scope.only_ids) as id_table,
+    ):
+        where, params = _scope_where(scope, id_table=id_table)
+        rows = cur.execute(
+            "SELECT search_index.session_id, bm25(search_index) score "
+            "FROM search_index JOIN sessions s ON s.id = search_index.session_id "
+            f"WHERE search_index MATCH ? AND {where} ORDER BY score",
+            [match, *params],
+        )
+        ranked: list[str] = []
+        seen: set[str] = set()
+        for row in rows:
+            session_id = row["session_id"]
+            if session_id not in seen:
+                seen.add(session_id)
+                ranked.append(session_id)
+    return ranked
+
+
+def _semantic_session_ranking(query: str, allowed_sessions: set[str]) -> list[str]:
+    """Rank every vector-backed session by its best chunk similarity."""
+    if not allowed_sessions:
+        return []
+    _ids, sessions, matrix = _vector_matrix()
+    if matrix.shape[0] == 0:
+        return []
+    eligible_indices = np.fromiter(
+        (
+            index
+            for index, session_id in enumerate(sessions)
+            if session_id in allowed_sessions
+        ),
+        dtype=np.int64,
+    )
+    if eligible_indices.size == 0:
+        return []
+    similarities = matrix[eligible_indices] @ embeddings.embed_texts([query])[0]
+    best: dict[str, float] = {}
+    for index, similarity in zip(eligible_indices, similarities, strict=False):
+        session_id = sessions[int(index)]
+        best[session_id] = max(best.get(session_id, -1.0), float(similarity))
+    return sorted(best, key=lambda session_id: best[session_id], reverse=True)
 
 
 def _vector_matrix():
@@ -369,6 +545,11 @@ def search_passages(
     per_session_cap: int = 3,
     only_ids: set[str] | None = None,
     candidate_factor: int = 6,
+    repo: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    recency: str = "none",
+    recent_session_limit: int = 20,
 ) -> list[dict[str, Any]]:
     """Return the top matching *passages* (chunks) for RAG context assembly.
 
@@ -382,15 +563,56 @@ def search_passages(
     if not query:
         return []
 
-    scope = _session_scope(only_ids=only_ids)
+    scope = _session_scope(
+        repo=repo,
+        date_from=date_from,
+        date_to=date_to,
+        only_ids=only_ids,
+    )
     kw = _keyword_search(query, limit * candidate_factor, scope)
     sem = _semantic_search(query, limit * candidate_factor, _scoped_session_ids(scope))
-    fused, _meta = _fuse((kw, sem))
+    recent: list[dict[str, Any]] = []
+    if recency in ("boost", "latest"):
+        recent_ids = _recent_session_ids(scope, recent_session_limit)
+        recent_scope = _session_scope(
+            repo=repo,
+            date_from=date_from,
+            date_to=date_to,
+            only_ids=recent_ids,
+        )
+        recent_kw = _keyword_search(query, limit * candidate_factor, recent_scope)
+        recent_sem = _semantic_search(
+            query,
+            limit * candidate_factor,
+            _scoped_session_ids(recent_scope),
+        )
+        recent_scores, recent_meta = _fuse((recent_kw, recent_sem))
+        recent = [
+            recent_meta[chunk_id]
+            for chunk_id in sorted(
+                recent_scores,
+                key=lambda candidate_id: recent_scores[candidate_id],
+                reverse=True,
+            )
+        ]
+    fused, _meta = _fuse((kw, sem, recent))
     if not fused:
         return []
 
     ordered = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)
     chunks = _load_chunks([cid for cid, _ in ordered])
+    sessions = _load_sessions(list({chunk["session_id"] for chunk in chunks.values()}))
+    if recency == "latest":
+        ordered.sort(
+            key=lambda item: (
+                _timestamp_value(
+                    sessions.get(chunks[item[0]]["session_id"], {}).get("updated_at")
+                    or sessions.get(chunks[item[0]]["session_id"], {}).get("created_at")
+                ),
+                item[1],
+            ),
+            reverse=True,
+        )
 
     picked: list[tuple[int, float]] = []
     per_session: dict[str, int] = {}
@@ -410,7 +632,6 @@ def search_passages(
     if not picked:
         return []
 
-    sessions = _load_sessions([chunks[cid]["session_id"] for cid, _ in picked])
     max_score = picked[0][1] or 1.0
     passages: list[dict[str, Any]] = []
     for cid, score in picked:
@@ -423,6 +644,10 @@ def search_passages(
                 "chunk_id": cid,
                 "session_id": cm["session_id"],
                 "turn_index": cm["turn_index"],
+                "source_type": cm["source_type"],
+                "timestamp": cm.get("timestamp")
+                or s.get("updated_at")
+                or s.get("created_at"),
                 "content": cm["content"],
                 "score": round(score / max_score, 4),
                 "title": s.get("title"),
@@ -547,9 +772,7 @@ def _load_chunk_text(ids: list[int]) -> dict[int, str]:
         return {}
     with (
         db.cursor() as cur,
-        db.temporary_id_table(
-            cur.connection, ids, id_type="INTEGER"
-        ) as id_table,
+        db.temporary_id_table(cur.connection, ids, id_type="INTEGER") as id_table,
     ):
         rows = cur.execute(
             "SELECT c.id, c.content FROM chunks c "
@@ -564,13 +787,14 @@ def _load_chunks(ids: list[int]) -> dict[int, dict[str, Any]]:
         return {}
     with (
         db.cursor() as cur,
-        db.temporary_id_table(
-            cur.connection, ids, id_type="INTEGER"
-        ) as id_table,
+        db.temporary_id_table(cur.connection, ids, id_type="INTEGER") as id_table,
     ):
         rows = cur.execute(
-            "SELECT c.id, c.session_id, c.turn_index, c.source_type, c.content "
-            f"FROM chunks c JOIN {id_table} scope ON scope.id = c.id"
+            "SELECT c.id, c.session_id, c.turn_index, c.source_type, c.content, "
+            "t.timestamp FROM chunks c "
+            f"JOIN {id_table} scope ON scope.id = c.id "
+            "LEFT JOIN turns t ON t.session_id = c.session_id "
+            "AND t.turn_index = c.turn_index"
         ).fetchall()
     return {r["id"]: dict(r) for r in rows}
 

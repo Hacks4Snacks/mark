@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import db
+from .. import db, visibility
 
 # Shell-ish languages treated as runnable "commands" in the library.
 SHELL_LANGS = (
@@ -22,12 +22,15 @@ SHELL_LANGS = (
 
 def languages() -> list[dict[str, Any]]:
     """Distinct code-block languages with counts, most common first."""
+    visible, visible_params = visibility.sql_where("s")
+    params: list[Any] = list(visible_params)
     with db.cursor() as cur:
         rows = cur.execute(
             "SELECT cb.language AS language, COUNT(*) AS count "
-            "FROM code_blocks cb "
+            "FROM code_blocks cb JOIN sessions s ON s.id = cb.session_id "
             "WHERE cb.language IS NOT NULL AND cb.language != '' "
-            "GROUP BY cb.language ORDER BY count DESC, language"
+            f"AND {visible} GROUP BY cb.language ORDER BY count DESC, language",
+            params,
         ).fetchall()
     return [{"language": r["language"], "count": r["count"]} for r in rows]
 
@@ -40,7 +43,9 @@ def snippets(
         "cb.content IS NOT NULL",
         "LENGTH(TRIM(cb.content)) > 1",
     ]
-    params: list[Any] = []
+    visible, visible_params = visibility.sql_where("s")
+    params: list[Any] = list(visible_params)
+    where.append(visible)
     if commands:
         placeholders = ",".join("?" * len(SHELL_LANGS))
         where.append(f"LOWER(cb.language) IN ({placeholders})")

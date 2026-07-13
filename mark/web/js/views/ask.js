@@ -143,7 +143,18 @@ export function renderAskSourcesInto(box, sources) {
   if (!sources || !sources.length) { box.hidden = true; return; }
   box.hidden = false;
   box.innerHTML = `<h4>Sources</h4><div class="ask-src-list">${
-    sources.map((s) => `<a class="ask-src" data-id="${esc(s.id)}" title="${esc(s.title || "")}"><b>[${s.n}]</b> <span class="ask-src-icon">${srcMeta(s.source).icon}</span> <span class="ask-src-title">${esc(s.title || "Untitled")}</span></a>`).join("")
+    sources.map((s) => `<details class="ask-src">
+      <summary><b>[${s.n}]</b> <span class="ask-src-icon">${srcMeta(s.source).icon}</span> <span class="ask-src-title">${esc(s.title || "Untitled")}</span></summary>
+      <div class="ask-src-evidence">
+        ${(s.passages || []).map((p) => `<div class="ask-src-passage">
+          <span class="muted">${p.turn_index == null ? "Document" : `Turn ${p.turn_index + 1}`}${p.timestamp ? ` · ${esc(String(p.timestamp).slice(0, 10))}` : ""}</span>
+          <p>${esc(p.excerpt || "")}</p>
+        </div>`).join("")}
+        <button type="button" class="btn btn-ghost ask-src-open" data-id="${esc(s.id)}">Open conversation</button>
+      </div>
+    </details>`).join("")
   }</div>`;
-  $$(".ask-src", box).forEach((a) => a.addEventListener("click", () => openSession(a.dataset.id)));
+  $$(".ask-src-open", box).forEach((button) =>
+    button.addEventListener("click", () => openSession(button.dataset.id))
+  );
 }

@@ -88,6 +88,27 @@ def test_hidden_excluded_from_stats_and_usage(make_session, persist_session):
     assert usage_repo.usage()["totals"]["sessions"] == after
 
 
+def test_hidden_session_excluded_from_snippet_library(make_session, persist_session):
+    from mark.repositories import snippets as snippets_repo
+
+    visible = _persist(
+        make_session,
+        persist_session,
+        sid="visible-code",
+        code_blocks=[{"language": "python", "content": "print('visible')"}],
+    )
+    hidden = _persist(
+        make_session,
+        persist_session,
+        sid="hidden-code",
+        code_blocks=[{"language": "rust", "content": 'println!("hidden")'}],
+    )
+    sessions_repo.set_hidden(hidden, True)
+
+    assert {row["session_id"] for row in snippets_repo.snippets()} == {visible}
+    assert {row["language"] for row in snippets_repo.languages()} == {"python"}
+
+
 def test_set_hidden_unknown_session_returns_false():
     assert sessions_repo.set_hidden("nope", True) is False
 
@@ -170,6 +191,26 @@ def test_disabled_cline_hides_dynamic_family_sources(
     cline_info = next(source for source in api_sources() if source["key"] == "cline")
     assert cline_info["enabled"] is False
     assert cline_info["indexed"] == 2
+
+
+def test_disabled_adapter_excluded_from_snippet_library(
+    make_session, persist_session, monkeypatch
+):
+    from mark.repositories import snippets as snippets_repo
+
+    session = make_session(
+        sid="dynamic-code",
+        source="myagent",
+        code_blocks=[{"language": "go", "content": 'fmt.Println("hidden")'}],
+    )
+    session["source_adapter"] = "cline"
+    persist_session(session)
+    assert snippets_repo.snippets(language="go")
+
+    monkeypatch.setenv("MARK_SOURCE_CLINE_ENABLED", "0")
+
+    assert snippets_repo.snippets(language="go") == []
+    assert "go" not in {row["language"] for row in snippets_repo.languages()}
 
 
 # ---------- API surface ----------

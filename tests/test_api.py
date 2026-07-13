@@ -1091,6 +1091,27 @@ def test_note_create_then_searchable(client):
     assert detail.json()["title"] == "Note"
 
 
+def test_note_and_render_fields_are_bounded(client):
+    from mark import config
+
+    note = client.post(
+        "/api/notes",
+        json={"title": "N", "text": "x" * (config.MAX_NOTE_TEXT_CHARS + 1)},
+    )
+    title = client.post(
+        "/api/notes",
+        json={"title": "x" * (config.MAX_NOTE_TITLE_CHARS + 1), "text": "body"},
+    )
+    render = client.post(
+        "/api/render",
+        json={"text": "x" * (config.MAX_RENDER_TEXT_CHARS + 1)},
+    )
+
+    assert note.status_code == 422
+    assert title.status_code == 422
+    assert render.status_code == 422
+
+
 def test_search_api_requires_all_selected_topics(client):
     both = client.post(
         "/api/notes", json={"title": "Both", "text": "topic api probe"}
@@ -1298,6 +1319,159 @@ def test_collection_crud_and_membership(client):
 
     assert client.delete(f"/api/collections/{cid}").status_code == 200
     assert client.get(f"/api/collections/{cid}").status_code == 404
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"unknown": True},
+        {"q": "x", "mode": "invalid"},
+        {"q": "x", "sort": "invalid"},
+        {"date_from": "2026-02-01", "date_to": "2026-01-01"},
+        {"tags": ["x" * 41]},
+        {"tags": [f"tag-{index}" for index in range(21)]},
+        {"q": "x", "limit": 1000},
+    ],
+)
+def test_collection_rule_rejects_invalid_contracts(client, rule):
+    response = client.post("/api/collections", json={"name": "Invalid", "rule": rule})
+
+    assert response.status_code == 422
+
+
+def test_collection_member_state_is_typed(client):
+    sid = client.post("/api/notes", json={"title": "N", "text": "body"}).json()["id"]
+    cid = client.post("/api/collections", json={"name": "C"}).json()["id"]
+
+    response = client.post(
+        f"/api/collections/{cid}/members",
+        json={"session_id": sid, "state": "unknown"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_collection_members_are_paginated(client):
+    from mark import collections, db
+
+    with db.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO sessions(id, source, title, hidden) "
+            "VALUES (?, 'upload', ?, 0)",
+            ((f"member-{index}", f"Member {index}") for index in range(205)),
+        )
+    cid = collections.create("Paged")
+    for index in range(205):
+        collections.set_member(cid, f"member-{index}")
+
+    first = client.get(f"/api/collections/{cid}").json()
+    second = client.get(
+        f"/api/collections/{cid}",
+        params={"members_offset": 100, "members_limit": 100},
+    ).json()
+    last = client.get(
+        f"/api/collections/{cid}",
+        params={"members_offset": 200, "members_limit": 100},
+    ).json()
+
+    assert first["count"] == 205
+    assert len(first["members"]) == 100
+    assert first["has_more_members"] is True
+    assert len(second["members"]) == 100
+    assert second["has_more_members"] is True
+    assert len(last["members"]) == 5
+    assert last["has_more_members"] is False
+
+
+def test_collection_member_sort_is_global_across_pages(client):
+    from mark import collections, db
+
+    with db.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO sessions(id, source, title, hidden) "
+            "VALUES (?, 'upload', ?, 0)",
+            ((f"sorted-{index:03d}", f"{204 - index:03d}") for index in range(205)),
+        )
+    cid = collections.create("Sorted")
+    for index in range(205):
+        collections.set_member(cid, f"sorted-{index:03d}")
+
+    first = client.get(
+        f"/api/collections/{cid}",
+        params={"members_sort": "title", "members_limit": 100},
+    ).json()
+    second = client.get(
+        f"/api/collections/{cid}",
+        params={
+            "members_sort": "title",
+            "members_offset": 100,
+            "members_limit": 100,
+            "include_overview": False,
+        },
+    ).json()
+
+    titles = [member["title"] for member in first["members"] + second["members"]]
+    assert titles == sorted(titles)
+    assert second["overview"] is None
+
+
+def test_collection_recent_sort_normalizes_timestamp_offsets(client):
+    from mark import collections, db
+
+    with db.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO sessions(id, source, title, updated_at, hidden) "
+            "VALUES (?, 'upload', ?, ?, 0)",
+            [
+                ("older", "Older", "2026-07-14T00:30:00+02:00"),
+                ("newer", "Newer", "2026-07-13T23:30:00Z"),
+            ],
+        )
+    cid = collections.create("Chronological")
+    collections.set_member(cid, "older")
+    collections.set_member(cid, "newer")
+
+    response = client.get(
+        f"/api/collections/{cid}", params={"members_sort": "recent"}
+    ).json()
+
+    assert [member["id"] for member in response["members"]] == ["newer", "older"]
+
+
+def test_collection_rule_sort_round_trips_on_patch(client):
+    created = client.post(
+        "/api/collections",
+        json={"name": "Sorted", "rule": {"repo": "repo", "sort": "title"}},
+    ).json()
+
+    patched = client.patch(
+        f"/api/collections/{created['id']}",
+        json={
+            "name": "Renamed",
+            "rule": created["rule"],
+        },
+    ).json()
+
+    assert patched["rule"]["sort"] == "title"
+
+
+def test_global_and_collection_ask_fields_are_bounded(client):
+    from mark import config
+
+    too_long = "x" * (config.MAX_ASK_QUESTION_CHARS + 1)
+    global_ask = client.post("/api/ask", json={"question": too_long})
+    bad_limit = client.post(
+        "/api/ask",
+        json={"question": "valid", "limit": config.MAX_ASK_SESSION_LIMIT + 1},
+    )
+    cid = client.post("/api/collections", json={"name": "C"}).json()["id"]
+    collection_ask = client.post(
+        f"/api/collections/{cid}/ask", json={"question": too_long}
+    )
+
+    assert global_ask.status_code == 422
+    assert bad_limit.status_code == 422
+    assert collection_ask.status_code == 422
 
 
 def test_add_and_remove_tag(client):

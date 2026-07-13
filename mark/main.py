@@ -9,6 +9,7 @@ __all__ = ["app", "main"]
 def main() -> None:
     import uvicorn
 
+    config.validate()
     config.ensure_dirs()
     print(f"Mark - http://{config.HOST}:{config.PORT}")
     uvicorn.run(app, host=config.HOST, port=config.PORT)

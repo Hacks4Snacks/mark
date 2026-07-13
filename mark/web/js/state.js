@@ -11,6 +11,7 @@ export const state = {
   source: null,
   repo: null,
   tags: new Set(),
+  facets: { repositories: [], tags: [], sources: [] },
   dateFrom: "",
   dateTo: "",
   view: "list",

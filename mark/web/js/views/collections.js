@@ -52,6 +52,7 @@ export function currentRule() {
   if (state.tags.size) rule.tags = [...state.tags];
   if (state.dateFrom) rule.date_from = state.dateFrom;
   if (state.dateTo) rule.date_to = state.dateTo;
+  if (state.sort && state.sort !== "recent") rule.sort = state.sort;
   return rule;
 }
 
@@ -76,6 +77,13 @@ function ruleParts(r) {
 function ruleSummary(r) {
   if (ruleIsEmpty(r)) return `<span class="muted">manual selection only</span>`;
   return ruleParts(r).map((p) => `<span class="crs-chip">${p.html}</span>`).join("");
+}
+
+function membershipPolicyHTML(c) {
+  if (c.rule_error) return `<span class="crs-chip">${icon("alert", { size: 13 })} Invalid saved rule</span>`;
+  const policy = c.membership_policy;
+  if (!policy || policy.kind !== "ranked") return "";
+  return `<span class="crs-chip">Top ${policy.cap} by relevance${policy.truncated ? " · capped" : ""}</span>`;
 }
 
 function rulePreviewHTML(r, max = 2) {
@@ -137,20 +145,6 @@ function filterCollections(cols) {
     const hay = `${c.name || ""} ${c.description || ""}`.toLowerCase();
     return hay.includes(gridQuery);
   });
-}
-
-function sortMembers(members, sort) {
-  const list = [...members];
-  if (sort === "oldest") {
-    list.sort((a, b) => String(a.updated_at || a.created_at).localeCompare(String(b.updated_at || b.created_at)));
-  } else if (sort === "turns") {
-    list.sort((a, b) => (b.turn_count || 0) - (a.turn_count || 0));
-  } else if (sort === "title") {
-    list.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
-  } else {
-    list.sort((a, b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at)));
-  }
-  return list;
 }
 
 export async function showCollections(opts = {}) {
@@ -243,7 +237,9 @@ function collectionCardHTML(c) {
   const kindLabel = auto ? "auto-updating" : "manual";
   const kindIcon = auto ? icon("sparkles", { size: 12 }) : icon("archive", { size: 12 });
   const updated = fmtRelativeTime(c.updated_at);
-  const preview = auto ? `<div class="coll-card-rules">${rulePreviewHTML(c.rule, 2)}</div>` : "";
+  const policy = membershipPolicyHTML(c);
+  const preview = auto || policy
+    ? `<div class="coll-card-rules">${rulePreviewHTML(c.rule, 2)} ${policy}</div>` : "";
   return `<div class="coll-card ${accent}${pinned ? " coll-card-pinned" : ""}" data-id="${esc(c.id)}">
     <button type="button" class="coll-pin-btn${pinned ? " on" : ""}" data-id="${esc(c.id)}" data-pinned="${pinned ? "1" : "0"}" title="${pinned ? "Unpin" : "Pin to top"}" aria-label="${pinned ? "Unpin collection" : "Pin collection"}">${icon("star", { size: 14 })}</button>
     <div class="coll-card-icon">${collIconHTML(c.icon)}</div>
@@ -290,6 +286,18 @@ export async function openCollection(id, opts = {}) {
   }
 }
 
+async function loadMoreMembers(c) {
+  const offset = (c.members || []).length;
+  try {
+    const next = await api(
+      `/api/collections/${encodeURIComponent(c.id)}?members_offset=${offset}&members_limit=${c.members_limit || 100}&members_sort=${encodeURIComponent(memberSort)}&include_overview=false`
+    );
+    c.members = [...(c.members || []), ...(next.members || [])];
+    c.has_more_members = next.has_more_members;
+    renderCollection(c);
+  } catch (e) { toast(e.message, true); }
+}
+
 function collAskExamples(c, ov) {
   const examples = [
     `Summarize what I worked on in \u201C${c.name}\u201D`,
@@ -324,7 +332,7 @@ function renderCollection(c) {
   const t = ov.totals || {};
   const view = $("#collectionView");
   const accent = collAccentClass(c.color);
-  memberSort = "recent";
+  memberSort = c.members_sort || (c.rule && c.rule.sort) || "recent";
 
   const stats = [
     [`${t.sessions || 0}`, "sessions", ""],
@@ -345,12 +353,15 @@ function renderCollection(c) {
   const activityChart = activityColChart(ov.by_day || [], { title: "Sessions over time" });
   const sourceChart = sessionBarChart("By source", ov.by_source || [], "source");
 
-  const members = sortMembers(c.members || [], memberSort);
+  const members = c.members || [];
   const membersHTML = members.length
     ? members.map((m) =>
       `<div class="coll-member">${cardHTML(m)}<button class="coll-remove" data-id="${esc(m.id)}" title="Remove from this collection" aria-label="Remove from collection">${icon("x", { size: 14 })}</button></div>`
     ).join("")
     : `<div class="empty"><div class="big">${icon("archive", { size: 40 })}</div>No sessions in this collection yet.${ruleIsEmpty(c.rule) ? " Open a conversation and use \u201CCollection\u201D to add it." : ""}</div>`;
+  const loadMoreMembersHTML = c.has_more_members
+    ? `<button type="button" class="btn btn-block" id="collLoadMore">Load more sessions</button>`
+    : "";
 
   const pinned = !!c.pinned;
 
@@ -373,7 +384,7 @@ function renderCollection(c) {
         <span class="crs-label">Auto-includes</span>
         <button type="button" class="btn btn-ghost coll-rule-edit" id="collEditFilters">${icon("pencil", { size: 14 })} Edit filters</button>
       </div>
-      <div class="coll-rule-line">${ruleSummary(c.rule)} ${span}</div>
+      <div class="coll-rule-line">${c.rule_error ? esc(c.rule_error) : ruleSummary(c.rule)} ${membershipPolicyHTML(c)} ${span}</div>
       <p class="coll-rule-hint muted">Manual adds and removes stick across re-syncs.</p>
     </div>
 
@@ -409,7 +420,7 @@ function renderCollection(c) {
 
     <div class="list-head coll-members-head">
       <h2>Sessions</h2>
-      <span class="muted">${(c.members || []).length} session${(c.members || []).length === 1 ? "" : "s"}</span>
+      <span class="muted">${c.count || 0} session${c.count === 1 ? "" : "s"}</span>
       <select id="collMemberSort" class="coll-member-sort" aria-label="Sort sessions">
         <option value="recent">Most recent</option>
         <option value="oldest">Oldest</option>
@@ -417,7 +428,7 @@ function renderCollection(c) {
         <option value="title">Title A–Z</option>
       </select>
     </div>
-    <div class="results coll-members">${membersHTML}</div>`;
+    <div class="results coll-members">${membersHTML}${loadMoreMembersHTML}</div>`;
 
   $("#collBack").addEventListener("click", () => showCollections());
   $("#collEdit").addEventListener("click", () => openCollectionDialog({ mode: "edit", coll: c }));
@@ -430,18 +441,19 @@ function renderCollection(c) {
 
   $("#collMemberSort").addEventListener("change", (e) => {
     memberSort = e.target.value;
-    const sorted = sortMembers(c.members || [], memberSort);
-    const host = $(".coll-members", view);
-    if (!host) return;
-    host.innerHTML = sorted.length
-      ? sorted.map((m) =>
-        `<div class="coll-member">${cardHTML(m)}<button class="coll-remove" data-id="${esc(m.id)}" title="Remove from this collection" aria-label="Remove from collection">${icon("x", { size: 14 })}</button></div>`
-      ).join("")
-      : `<div class="empty"><div class="big">${icon("archive", { size: 40 })}</div>No sessions in this collection yet.</div>`;
-    wireMemberClicks(c);
+    api(`/api/collections/${encodeURIComponent(c.id)}?members_offset=0&members_limit=${c.members_limit || 100}&members_sort=${encodeURIComponent(memberSort)}&include_overview=false`)
+      .then((next) => {
+        c.members = next.members || [];
+        c.members_sort = next.members_sort;
+        c.has_more_members = next.has_more_members;
+        renderCollection(c);
+      })
+      .catch((error) => toast(error.message, true));
   });
 
   wireMemberClicks(c);
+  $("#collLoadMore")?.addEventListener("click", () => loadMoreMembers(c));
+  $("#collMemberSort").value = memberSort;
 
   if (state.askEnabled) {
     $("#collAskToggle").addEventListener("click", () => {
@@ -525,6 +537,7 @@ function readRuleFromDialog() {
   const tags = tagsRaw ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean) : [];
   const date_from = $("#collRuleFrom").value || null;
   const date_to = $("#collRuleTo").value || null;
+  const sort = $("#collRuleSort").value || "recent";
   const modeBtn = $("#collRuleMode button.active");
   const mode = modeBtn ? modeBtn.dataset.mode : "hybrid";
   const rule = {};
@@ -535,6 +548,7 @@ function readRuleFromDialog() {
   if (date_from) rule.date_from = date_from;
   if (date_to) rule.date_to = date_to;
   if (q && mode && mode !== "hybrid") rule.mode = mode;
+  if (sort !== "recent") rule.sort = sort;
   return ruleIsEmpty(rule) ? null : rule;
 }
 
@@ -546,6 +560,7 @@ function fillRuleDialog(rule) {
   $("#collRuleTags").value = (r.tags || []).join(", ");
   $("#collRuleFrom").value = r.date_from || "";
   $("#collRuleTo").value = r.date_to || "";
+  $("#collRuleSort").value = r.sort || "recent";
   const mode = r.mode || "hybrid";
   $$("#collRuleMode button").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
   syncRuleModeVisibility();
@@ -627,6 +642,15 @@ export function openCollectionDialog({ mode = "create", coll = null, rule = null
   $("#collDescription").value = (coll && coll.description) || "";
   $("#collPinned").checked = !!(coll && coll.pinned);
   setDialogColor(coll && coll.color);
+  const sourceSelect = $("#collRuleSource");
+  const currentSource = (initialRule && initialRule.source) || "";
+  const sourceRows = (state.facets && state.facets.sources) || [];
+  sourceSelect.innerHTML = `<option value="">Any source</option>` + sourceRows
+    .map((source) => `<option value="${esc(source.source)}">${esc(srcMeta(source.source).label)}</option>`)
+    .join("");
+  if (currentSource && !sourceRows.some((source) => source.source === currentSource)) {
+    sourceSelect.insertAdjacentHTML("beforeend", `<option value="${esc(currentSource)}">${esc(srcMeta(currentSource).label)}</option>`);
+  }
   fillRuleDialog(initialRule);
   $("#collectionDialog").showModal();
   setTimeout(() => {

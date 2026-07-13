@@ -79,6 +79,27 @@ def temporary_id_table(
         conn.execute(f"DROP TABLE IF EXISTS {table}")
 
 
+@contextmanager
+def temporary_turn_table(
+    conn: sqlite3.Connection, keys: Iterable[tuple[str, int]]
+) -> Iterator[str]:
+    """Materialize exact ``(session_id, turn_index)`` pairs for bounded joins."""
+    table = f"_mark_turns_{uuid4().hex}"
+    conn.execute(
+        f"CREATE TEMP TABLE {table}("
+        "session_id TEXT NOT NULL, turn_index INTEGER NOT NULL, "
+        "PRIMARY KEY(session_id, turn_index)) WITHOUT ROWID"
+    )
+    try:
+        conn.executemany(
+            f"INSERT OR IGNORE INTO {table}(session_id, turn_index) VALUES (?, ?)",
+            keys,
+        )
+        yield table
+    finally:
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+
 def get_meta(key: str, default: str | None = None) -> str | None:
     with cursor() as cur:
         row = cur.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()

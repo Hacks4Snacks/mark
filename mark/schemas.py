@@ -1,54 +1,119 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from . import config
+
+
+class CollectionRule(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    q: str | None = Field(default=None, max_length=config.MAX_COLLECTION_QUERY_CHARS)
+    mode: Literal["hybrid", "semantic", "keyword"] = "hybrid"
+    repo: str | None = Field(
+        default=None, max_length=config.MAX_COLLECTION_FILTER_CHARS
+    )
+    source: str | None = Field(
+        default=None, max_length=config.MAX_COLLECTION_FILTER_CHARS
+    )
+    tags: list[str] = Field(default_factory=list, max_length=config.MAX_COLLECTION_TAGS)
+    date_from: date | None = None
+    date_to: date | None = None
+    sort: Literal["recent", "oldest", "turns", "title"] = "recent"
+
+    @field_validator("q", "repo", "source", mode="after")
+    @classmethod
+    def empty_string_to_none(cls, value: str | None) -> str | None:
+        return value or None
+
+    @field_validator("tags", mode="after")
+    @classmethod
+    def normalize_tags(cls, tags: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for raw in tags:
+            tag = " ".join(raw.strip().lower().split())
+            if not tag:
+                continue
+            if len(tag) > config.MAX_TAG_CHARS:
+                raise ValueError(
+                    f"topics must be at most {config.MAX_TAG_CHARS} characters"
+                )
+            if tag not in normalized:
+                normalized.append(tag)
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_dates(self) -> CollectionRule:
+        if self.date_from and self.date_to and self.date_from > self.date_to:
+            raise ValueError("date_from must not be after date_to")
+        return self
 
 
 class AskIn(BaseModel):
-    question: str
-    limit: int | None = None
+    question: str = Field(min_length=1, max_length=config.MAX_ASK_QUESTION_CHARS)
+    limit: int | None = Field(default=None, ge=1, le=config.MAX_ASK_SESSION_LIMIT)
+
+    @field_validator("question")
+    @classmethod
+    def strip_question(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("question must not be empty")
+        return value.strip()
 
 
 class RenderIn(BaseModel):
-    text: str
+    text: str = Field(max_length=config.MAX_RENDER_TEXT_CHARS)
 
 
 class CollectionIn(BaseModel):
-    name: str
-    description: str | None = None
-    icon: str | None = None
-    color: str | None = None
-    rule: dict[str, Any] | None = None
+    name: str = Field(min_length=1, max_length=config.MAX_COLLECTION_NAME_CHARS)
+    description: str | None = Field(
+        default=None, max_length=config.MAX_COLLECTION_DESCRIPTION_CHARS
+    )
+    icon: str | None = Field(default=None, max_length=80)
+    color: Literal["purple", "cyan", "green", "amber", "rose"] | None = None
+    rule: CollectionRule | None = None
     pinned: bool = False
 
 
 class CollectionPatch(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    icon: str | None = None
-    color: str | None = None
-    rule: dict[str, Any] | None = None
+    name: str | None = Field(default=None, max_length=config.MAX_COLLECTION_NAME_CHARS)
+    description: str | None = Field(
+        default=None, max_length=config.MAX_COLLECTION_DESCRIPTION_CHARS
+    )
+    icon: str | None = Field(default=None, max_length=80)
+    color: Literal["purple", "cyan", "green", "amber", "rose"] | None = None
+    rule: CollectionRule | None = None
     pinned: bool | None = None
 
 
 class MemberIn(BaseModel):
     session_id: str
-    state: str = "include"
+    state: Literal["include", "exclude"] = "include"
 
 
 class CollAskIn(BaseModel):
-    question: str
-    limit: int | None = None
+    question: str = Field(min_length=1, max_length=config.MAX_ASK_QUESTION_CHARS)
+    limit: int | None = Field(default=None, ge=1, le=config.MAX_ASK_SESSION_LIMIT)
+
+    @field_validator("question")
+    @classmethod
+    def strip_question(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("question must not be empty")
+        return value.strip()
 
 
 class TagIn(BaseModel):
-    tag: str
+    tag: str = Field(min_length=1, max_length=config.MAX_TAG_CHARS)
 
 
 class NoteIn(BaseModel):
-    title: str = "Untitled note"
-    text: str = ""
+    title: str = Field(default="Untitled note", max_length=config.MAX_NOTE_TITLE_CHARS)
+    text: str = Field(default="", max_length=config.MAX_NOTE_TEXT_CHARS)
 
 
 class OkResponse(BaseModel):

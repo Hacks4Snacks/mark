@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import config, db, embeddings, search
@@ -16,6 +19,18 @@ _GEN_TIMEOUT = 180
 # character budget for packing context. Deliberately low so we under-fill rather
 # than overflow num_ctx (real text runs ~3.5-4 chars/token).
 _CHARS_PER_TOKEN = 3.5
+_LAST_DAYS_RE = re.compile(r"\b(?:last|past)\s+(\d{1,3})\s+days?\b", re.I)
+_SINCE_RE = re.compile(r"\bsince\s+(\d{4}-\d{2}-\d{2})\b", re.I)
+
+
+@dataclass(frozen=True)
+class AskQueryPlan:
+    retrieval_query: str
+    repository: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    recency: str = "none"
+
 
 _SYSTEM = (
     "You are Mark, answering a question about the user's OWN past AI coding "
@@ -107,11 +122,66 @@ def _effective_num_ctx(model: str) -> int:
     return max(2048, min(probed, config.ASK_NUM_CTX_CAP))
 
 
+def plan_query(
+    question: str, *, now: datetime | None = None, repositories: list[str] | None = None
+) -> AskQueryPlan:
+    """Resolve deterministic repository and date intent without fuzzy guessing."""
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    today = now.date()
+    low = question.lower()
+    candidates = repositories
+    if candidates is None:
+        candidates = [row["name"] for row in search.facets()["repositories"]]
+    matched_repositories = [
+        name
+        for name in sorted(candidates, key=len, reverse=True)
+        if re.search(rf"(?<![\w-]){re.escape(name.lower())}(?![\w-])", low)
+    ]
+    repository = matched_repositories[0] if len(matched_repositories) == 1 else None
+
+    date_from = date_to = None
+    if re.search(r"\btoday\b", low):
+        date_from = date_to = today.isoformat()
+    elif re.search(r"\byesterday\b", low):
+        date_from = date_to = (today - timedelta(days=1)).isoformat()
+    elif re.search(r"\b(?:past|last) week\b", low):
+        date_from = (today - timedelta(days=6)).isoformat()
+        date_to = today.isoformat()
+    elif match := _LAST_DAYS_RE.search(question):
+        days = max(1, min(int(match.group(1)), 365))
+        date_from = (today - timedelta(days=days - 1)).isoformat()
+        date_to = today.isoformat()
+    elif match := _SINCE_RE.search(question):
+        try:
+            date_from = datetime.fromisoformat(match.group(1)).date().isoformat()
+            date_to = today.isoformat()
+        except ValueError:
+            pass
+
+    if re.search(r"\b(?:most recent|latest|newest)\b", low):
+        recency = "latest"
+    elif re.search(r"\brecent(?:ly)?\b", low):
+        recency = "boost"
+    else:
+        recency = "none"
+
+    return AskQueryPlan(
+        retrieval_query=question,
+        repository=repository,
+        date_from=date_from,
+        date_to=date_to,
+        recency=recency,
+    )
+
+
 def _truncate(text: str, cap: int) -> str:
     text = (text or "").strip()
-    if cap <= 0 or len(text) <= cap:
+    if cap <= 0:
+        return ""
+    if len(text) <= cap:
         return text
-    return text[:cap].rstrip() + " …"
+    suffix = " …"
+    return text[: max(0, cap - len(suffix))].rstrip() + suffix
 
 
 def _format_turn(turn: dict[str, Any], cap: int) -> str:
@@ -125,30 +195,49 @@ def _format_turn(turn: dict[str, Any], cap: int) -> str:
     return _truncate("\n".join(parts), cap)
 
 
-def _load_turns_map(session_ids: list[str]) -> dict[str, dict[int, dict[str, Any]]]:
-    """Fetch turns for the given sessions, keyed by session then turn index, so a
-    matched passage can be widened with its neighbouring turns."""
-    if not session_ids:
+def _load_turns_map(
+    passages: list[dict[str, Any]], radius: int
+) -> dict[str, dict[int, dict[str, Any]]]:
+    """Fetch only neighboring turns needed by the candidate passages."""
+    wanted = {
+        (passage["session_id"], turn_index)
+        for passage in passages
+        if passage.get("turn_index") is not None
+        for turn_index in range(
+            max(0, passage["turn_index"] - radius),
+            passage["turn_index"] + radius + 1,
+        )
+    }
+    if not wanted:
         return {}
     out: dict[str, dict[int, dict[str, Any]]] = {}
     with (
         db.cursor() as cur,
-        db.temporary_id_table(cur.connection, session_ids) as id_table,
+        db.temporary_turn_table(cur.connection, wanted) as turn_table,
     ):
         rows = cur.execute(
-            "SELECT t.session_id, t.turn_index, t.user_message, "
-            "t.assistant_response FROM turns t "
-            f"JOIN {id_table} scope ON scope.id = t.session_id"
-        ).fetchall()
-    for r in rows:
-        out.setdefault(r["session_id"], {})[r["turn_index"]] = {
-            "user_message": r["user_message"],
-            "assistant_response": r["assistant_response"],
-        }
+            "SELECT t.session_id, t.turn_index, "
+            "substr(t.user_message, 1, ?) user_message, "
+            "substr(t.assistant_response, 1, ?) assistant_response FROM turns t "
+            f"JOIN {turn_table} wanted ON wanted.session_id = t.session_id "
+            "AND wanted.turn_index = t.turn_index",
+            (config.ASK_NEIGHBOR_CHARS, config.ASK_NEIGHBOR_CHARS),
+        )
+        for r in rows:
+            out.setdefault(r["session_id"], {})[r["turn_index"]] = {
+                "user_message": _truncate(
+                    r["user_message"] or "", config.ASK_NEIGHBOR_CHARS
+                ),
+                "assistant_response": _truncate(
+                    r["assistant_response"] or "", config.ASK_NEIGHBOR_CHARS
+                ),
+            }
     return out
 
 
-def _rerank(question: str, passages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _rerank(
+    question: str, passages: list[dict[str, Any]], *, recency: str = "none"
+) -> list[dict[str, Any]]:
     """Reorder passages by cross-encoder relevance when a reranker is available;
     otherwise keep the fused retrieval order."""
     if len(passages) <= 1:
@@ -156,8 +245,50 @@ def _rerank(question: str, passages: list[dict[str, Any]]) -> list[dict[str, Any
     scores = embeddings.rerank(question, [p["content"] for p in passages])
     if not scores:
         return passages
+    if recency == "latest":
+        return [
+            passages[index]
+            for index in sorted(
+                range(len(passages)),
+                key=lambda index: (
+                    _utc_timestamp(passages[index].get("timestamp")),
+                    scores[index],
+                ),
+                reverse=True,
+            )
+        ]
+    if recency == "boost":
+        cross_encoder_order = sorted(
+            range(len(passages)), key=lambda index: scores[index], reverse=True
+        )
+        cross_encoder_rank = {
+            passage_index: rank
+            for rank, passage_index in enumerate(cross_encoder_order)
+        }
+        return [
+            passages[index]
+            for index in sorted(
+                range(len(passages)),
+                key=lambda index: (
+                    1.0 / (60 + cross_encoder_rank[index]) + 1.0 / (60 + index)
+                ),
+                reverse=True,
+            )
+        ]
     order = sorted(range(len(passages)), key=lambda i: scores[i], reverse=True)
     return [passages[i] for i in order]
+
+
+def _utc_timestamp(value: str | None) -> float:
+    if not value:
+        return float("-inf")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except ValueError:
+        return float("-inf")
 
 
 def _passage_body(
@@ -185,8 +316,11 @@ def _passage_body(
         return _truncate(passage["content"], match_cap)
 
     turns = turns_map.get(sid, {})
-    parts: list[str] = []
-    # Preceding context turns.
+    match = _truncate(passage["content"], match_cap)
+    parts: list[str] = [match]
+    emitted_turns.add((sid, ti))
+    # Neighbors follow the matched evidence so first-block truncation can never
+    # omit the passage represented by its citation metadata.
     for j in range(ti - radius, ti):
         if (sid, j) in emitted_turns or j not in turns:
             continue
@@ -194,10 +328,6 @@ def _passage_body(
         if txt:
             parts.append(txt)
             emitted_turns.add((sid, j))
-    # The matched slice itself (chunks are already 'User:'/'Assistant:'-prefixed).
-    parts.append(_truncate(passage["content"], match_cap))
-    emitted_turns.add((sid, ti))
-    # Following context turns.
     for j in range(ti + 1, ti + radius + 1):
         if (sid, j) in emitted_turns or j not in turns:
             continue
@@ -224,25 +354,30 @@ def build_context(
     fixed session count. ``max_sessions`` is an optional hard cap (``None`` = no
     cap). Multiple passages from one session share its citation number.
     """
+    plan = plan_query(question)
     passages = search.search_passages(
-        question,
+        plan.retrieval_query,
         limit=config.ASK_MAX_CANDIDATE_PASSAGES,
         per_session_cap=config.ASK_PER_SESSION_PASSAGES,
         only_ids=session_ids,
+        repo=plan.repository,
+        date_from=plan.date_from,
+        date_to=plan.date_to,
+        recency=plan.recency,
+        recent_session_limit=config.ASK_RECENT_SESSION_CANDIDATES,
     )
     if not passages:
         return "", []
-    passages = _rerank(question, passages)
+    passages = _rerank(question, passages, recency=plan.recency)
 
     radius = config.ASK_NEIGHBOR_TURNS
     match_cap = config.ASK_MAX_TURN_CHARS
     neighbor_cap = config.ASK_NEIGHBOR_CHARS
-    turns_map = (
-        _load_turns_map(list({p["session_id"] for p in passages})) if radius > 0 else {}
-    )
+    turns_map = _load_turns_map(passages, radius) if radius > 0 else {}
 
     cite: dict[str, int] = {}
     sources: list[dict[str, Any]] = []
+    sources_by_id: dict[str, dict[str, Any]] = {}
     emitted_chunks: set[int] = set()
     emitted_turns: set[tuple[str, int]] = set()
     blocks: list[str] = []
@@ -259,38 +394,61 @@ def build_context(
         if max_sessions is not None and sid not in cite and len(cite) >= max_sessions:
             continue
 
+        trial_chunks = set(emitted_chunks)
+        trial_turns = set(emitted_turns)
         body = _passage_body(
-            p, turns_map, radius, match_cap, neighbor_cap, emitted_chunks, emitted_turns
+            p, turns_map, radius, match_cap, neighbor_cap, trial_chunks, trial_turns
         )
         if not body:
             continue
 
-        if sid not in cite:
-            n = len(cite) + 1
-            cite[sid] = n
-            sources.append(
-                {
-                    "n": n,
-                    "id": sid,
-                    "title": p.get("title"),
-                    "source": p.get("source"),
-                    "repository": p.get("repository"),
-                    "updated_at": p.get("updated_at"),
-                }
-            )
-        header = (
-            f"[{cite[sid]}] {p.get('title') or 'Untitled'} "
-            f"(source={p.get('source')}, repo={p.get('repository') or '-'})\n"
+        citation_number = cite.get(sid, len(cite) + 1)
+        header = _truncate(
+            f"[{citation_number}] {p.get('title') or 'Untitled'} "
+            f"(source={p.get('source')}, repo={p.get('repository') or '-'})\n",
+            min(300, char_budget),
         )
         block = header + body
-        cost = len(block) + len(sep)
-        if blocks and used + cost > char_budget:
+        separator_cost = len(sep) if blocks else 0
+        if blocks and used + separator_cost + len(block) > char_budget:
             break  # budget full; passages are relevance-ordered so stop here.
-        if not blocks and cost > char_budget:
+        if not blocks and len(block) > char_budget:
             # Always include at least the single best passage, trimmed to fit.
-            block = header + _truncate(body, max(0, char_budget - len(header)))
+            block = (header + _truncate(body, char_budget - len(header)))[:char_budget]
+            trial_chunks = set(emitted_chunks)
+            trial_chunks.add(p["chunk_id"])
+            trial_turns = set(emitted_turns)
+            if p.get("turn_index") is not None:
+                trial_turns.add((sid, p["turn_index"]))
+        if sid not in cite:
+            cite[sid] = citation_number
+            source = {
+                "n": citation_number,
+                "id": sid,
+                "title": p.get("title"),
+                "source": p.get("source"),
+                "repository": p.get("repository"),
+                "updated_at": p.get("updated_at"),
+                "passages": [],
+            }
+            sources.append(source)
+            sources_by_id[sid] = source
+        sources_by_id[sid]["passages"].append(
+            {
+                "chunk_id": p["chunk_id"],
+                "turn_index": p.get("turn_index"),
+                "source_type": p.get("source_type"),
+                "timestamp": p.get("timestamp"),
+                "score": p.get("score"),
+                "excerpt": _truncate(
+                    p.get("content") or "", config.ASK_SOURCE_EXCERPT_CHARS
+                ),
+            }
+        )
+        emitted_chunks = trial_chunks
+        emitted_turns = trial_turns
         blocks.append(block)
-        used += cost
+        used += separator_cost + len(block)
 
     return sep.join(blocks), sources
 
@@ -316,8 +474,12 @@ def stream_answer(
     model = st["model"]
     num_ctx = _effective_num_ctx(model)
     prompt_tokens = max(1024, num_ctx - config.ASK_RESERVE_OUTPUT_TOKENS)
-    # ~10% slack for the system prompt, the question, and chat-template tokens.
-    char_budget = max(2000, int(prompt_tokens * 0.9 * _CHARS_PER_TOKEN))
+    input_char_budget = int(prompt_tokens * 0.9 * _CHARS_PER_TOKEN)
+    wrapper = "Question: \n\nContext from your past conversations:\n\n"
+    char_budget = max(
+        0,
+        input_char_budget - len(_SYSTEM) - len(wrapper) - len(question),
+    )
     # No default session cap: breadth is bounded by the context window above. An
     # explicit caller-supplied limit still applies when provided.
     max_sessions = limit if (limit and limit > 0) else None

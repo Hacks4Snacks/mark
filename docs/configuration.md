@@ -80,6 +80,8 @@ not mounted.
 | `MARK_ASK_NEIGHBOR_TURNS`         | `1`                             | Surrounding turns included on each side of a matched passage                  |
 | `MARK_ASK_MAX_TURN_CHARS`         | `4000`                          | Cap on characters from the matched passage itself                             |
 | `MARK_ASK_NEIGHBOR_CHARS`         | `800`                           | Cap on characters from each surrounding neighbour turn (drives breadth)       |
+| `MARK_ASK_SOURCE_EXCERPT_CHARS`   | `320`                           | Supporting excerpt shown beneath each citation                               |
+| `MARK_ASK_RECENT_SESSION_CANDIDATES` | `20`                         | Recent sessions considered as an extra lane for recency intent                |
 | `MARK_ASK_RERANK`                 | `1`                             | Cross-encoder reranking of passages (needs `semantic` extra; `0` disables)    |
 | `MARK_RERANK_MODEL`               | `Xenova/ms-marco-MiniLM-L-6-v2` | fastembed cross-encoder used for reranking                                    |
 
@@ -88,6 +90,11 @@ many distinct sessions as fit the model's context window, so a larger
 `MARK_ASK_NUM_CTX_CAP` (or a roomier model) yields more sources.
 
 See [Ask your history](ask.md).
+
+Numeric settings are validated at startup with named errors. In particular,
+`MARK_MAX_CHUNK_CHARS` must exceed the 200-character chunk overlap,
+per-session Ask passages cannot exceed the total candidate count, and reserved
+answer tokens must be smaller than the configured context ceiling.
 
 ## Uploads & attachments
 

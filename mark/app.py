@@ -12,6 +12,7 @@ from .api import build_api_router
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    config.validate()
     db.init_db()
     ingest.ensure_index_ready(initialize=False)
     background.start()

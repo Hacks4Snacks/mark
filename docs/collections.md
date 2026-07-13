@@ -16,6 +16,11 @@ match the rule flow into the collection automatically. You never have to re-add
 them. Rules with multiple topics require every selected topic, matching the
 search sidebar's **match all** behavior.
 
+Filter-only and keyword rules include **every** matching conversation. Semantic
+and hybrid rules are relevance-ranked and use Mark's server-owned top-500 cap;
+the collection shows this policy explicitly instead of silently truncating its
+membership. Manual pins and exclusions still override either policy.
+
 On top of the rule you keep two manual overrides that **stick across re-syncs**:
 
 - **Pin** a session the rule missed → it stays in, always.
@@ -65,6 +70,9 @@ Open a collection to see its members plus a rolled-up **overview**:
 
 This is the fastest way to answer *"how much did the auth refactor cost me, and
 what did it touch?"*
+
+Large member lists load in bounded pages while the displayed count and overview
+continue to cover the collection's complete resolved membership.
 
 ## Ask a collection
 

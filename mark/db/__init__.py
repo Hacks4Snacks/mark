@@ -6,6 +6,7 @@ from .connection import (
     get_meta,
     set_meta,
     temporary_id_table,
+    temporary_turn_table,
     transaction,
 )
 from .migrations import run_migrations
@@ -19,6 +20,7 @@ __all__ = [
     "init_db",
     "set_meta",
     "temporary_id_table",
+    "temporary_turn_table",
     "transaction",
 ]
 

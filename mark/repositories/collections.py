@@ -98,22 +98,40 @@ def delete_member(cid: str, session_id: str, now: str) -> None:
         cur.execute("UPDATE collections SET updated_at = ? WHERE id = ?", (now, cid))
 
 
-def session_rows(ids: list[str]) -> list[dict[str, Any]]:
-    """Raw session rows for ``ids``, newest first (undated last)."""
+def session_rows(
+    ids: list[str], *, offset: int = 0, limit: int | None = None, sort: str = "recent"
+) -> list[dict[str, Any]]:
+    """Raw session rows for ``ids`` with stable server-side sorting/pagination."""
     if not ids:
         return []
+    order = {
+        "recent": (
+            "COALESCE(s.updated_at, s.created_at) IS NULL, "
+            "julianday(COALESCE(s.updated_at, s.created_at)) DESC, s.id"
+        ),
+        "oldest": (
+            "COALESCE(s.updated_at, s.created_at) IS NULL, "
+            "julianday(COALESCE(s.updated_at, s.created_at)) ASC, s.id"
+        ),
+        "turns": "s.turn_count DESC, s.id",
+        "title": "s.title COLLATE NOCASE ASC, s.id",
+    }.get(
+        sort,
+        "julianday(COALESCE(s.updated_at, s.created_at)) DESC, s.id",
+    )
     with (
         db.cursor() as cur,
         db.temporary_id_table(cur.connection, ids) as id_table,
     ):
-        return [
-            dict(r)
-            for r in cur.execute(
-                f"SELECT s.* FROM sessions s JOIN {id_table} scope ON scope.id = s.id "
-                "ORDER BY COALESCE(s.updated_at, s.created_at) IS NULL, "
-                "COALESCE(s.updated_at, s.created_at) DESC"
-            ).fetchall()
-        ]
+        sql = (
+            f"SELECT s.* FROM sessions s JOIN {id_table} scope ON scope.id = s.id "
+            f"ORDER BY {order}"
+        )
+        params: list[int] = []
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend((limit, offset))
+        return [dict(r) for r in cur.execute(sql, params).fetchall()]
 
 
 def member_aggregates(ids: list[str]) -> dict[str, Any]:

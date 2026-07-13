@@ -278,13 +278,6 @@
           <div class="coll-row">
             <select id="collRuleSource" aria-label="Source filter">
               <option value="">Any source</option>
-              <option value="vscode">VS Code</option>
-              <option value="cli">Copilot CLI</option>
-              <option value="cline">Cline</option>
-              <option value="cursor">Cursor</option>
-              <option value="chatgpt">ChatGPT</option>
-              <option value="copilot">Copilot</option>
-              <option value="upload">Upload</option>
             </select>
             <input id="collRuleRepo" placeholder="Repository" />
           </div>
@@ -294,6 +287,12 @@
             <span class="date-sep" aria-hidden="true"><span class="bi" data-icon="arrow-right" data-icon-size="14"></span></span>
             <input type="date" id="collRuleTo" aria-label="To date" />
           </div>
+          <select id="collRuleSort" aria-label="Member sort">
+            <option value="recent">Most recent</option>
+            <option value="oldest">Oldest</option>
+            <option value="turns">Longest</option>
+            <option value="title">Title A–Z</option>
+          </select>
           <div class="segmented coll-mode-toggle" id="collRuleMode" role="tablist" aria-label="Search mode" hidden>
             <button type="button" data-mode="hybrid" class="active">Hybrid</button>
             <button type="button" data-mode="semantic">Semantic</button>

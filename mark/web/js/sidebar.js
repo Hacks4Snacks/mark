@@ -24,6 +24,7 @@ export async function loadStats() {
 
 export async function loadFacets() {
   const f = await api("/api/facets");
+  state.facets = f;
 
   $("#sourceFilters").innerHTML = (f.sources || [])
     .map((s) => `<div class="chip" data-source="${esc(s.source)}">${srcMeta(s.source).icon} ${esc(srcMeta(s.source).label)} <span class="c">${s.count}</span></div>`)

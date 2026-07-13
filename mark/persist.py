@@ -19,13 +19,15 @@ def _clean(text: str | None) -> str | None:
 
 
 def window_chunks(
-    text: str, *, limit: int | None = None, overlap: int = 200
+    text: str, *, limit: int | None = None, overlap: int = config.CHUNK_OVERLAP_CHARS
 ) -> list[str]:
     """Split text into overlapping windows bounded by ``limit`` characters.
 
     Shared by turn indexing here and document uploads so both chunk identically.
     """
     cap = limit or config.MAX_CHUNK_CHARS
+    if cap <= overlap:
+        raise ValueError("chunk limit must be greater than overlap")
     if len(text) <= cap:
         return [text] if text else []
     chunks, start = [], 0
