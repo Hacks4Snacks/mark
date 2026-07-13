@@ -275,8 +275,9 @@ export function renderActiveFilters() {
 
   if (!chips.length) { el.hidden = true; el.innerHTML = ""; return; }
   el.hidden = false;
+  const filterLabel = state.tags.size > 1 ? "Matching all" : "Filtered by";
   el.innerHTML =
-    `<span class="af-label">Filtered by</span>` +
+    `<span class="af-label">${filterLabel}</span>` +
     chips.map((c) => `<button class="af-chip" data-type="${c.type}" data-val="${esc(c.val)}">${c.raw ? c.label : esc(c.label)}<span class="x">${icon("x", { size: 12 })}</span></button>`).join("") +
     `<button class="af-clear" id="afClear">Clear all</button>`;
 }

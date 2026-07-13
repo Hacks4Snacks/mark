@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+
 from mark import collections as coll
 
 
@@ -26,6 +28,82 @@ def test_rule_membership(make_session, persist_session):
     ids = coll.resolve_member_ids(coll.get_collection(cid))
     assert "a" in ids
     assert "b" not in ids
+
+
+def test_rule_with_multiple_topics_requires_all(make_session, persist_session):
+    from mark.repositories import sessions as sessions_repo
+
+    for sid in ("both", "alpha-only"):
+        persist_session(make_session(sid=sid, user="collection topic probe"))
+    sessions_repo.add_tag("both", "alpha")
+    sessions_repo.add_tag("both", "beta")
+    sessions_repo.add_tag("alpha-only", "alpha")
+
+    cid = coll.create(
+        "Both topics",
+        rule={"q": "collection topic probe", "tags": ["alpha", "beta"]},
+    )
+
+    assert coll.resolve_member_ids(coll.get_collection(cid)) == {"both"}
+
+
+def test_large_collection_avoids_sqlite_variable_limit(monkeypatch):
+    from mark import ask, db, search
+    from mark.db import connection
+
+    session_ids = [f"large-{index}" for index in range(1001)]
+    with db.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO sessions(id, source, title, hidden) VALUES (?, 'upload', ?, 0)",
+            ((sid, sid) for sid in session_ids),
+        )
+        conn.executemany(
+            "INSERT INTO chunks(session_id, source_type, content) "
+            "VALUES (?, 'document', 'largecollectionprobe')",
+            ((sid,) for sid in session_ids),
+        )
+        conn.execute(
+            "INSERT INTO search_index(content, title, tags, chunk_id, session_id, "
+            "source_type, turn_index) "
+            "SELECT c.content, s.title, '', c.id, s.id, 'document', NULL "
+            "FROM chunks c JOIN sessions s ON s.id = c.session_id"
+        )
+    cid = coll.create(
+        "Large",
+        rule={"q": "largecollectionprobe", "mode": "keyword", "limit": 1001},
+    )
+
+    real_connect = connection.connect
+
+    def limited_connect():
+        conn = real_connect()
+        conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+        return conn
+
+    monkeypatch.setattr(connection, "connect", limited_connect)
+    monkeypatch.setattr(db, "connect", limited_connect)
+    collection = coll.get_collection(cid)
+
+    assert len(coll.resolve_member_ids(collection)) == 1001
+    assert len(coll.members_as_cards(cid)) == 1001
+    assert coll.overview(cid)["totals"]["sessions"] == 1001
+    passages = search.search_passages(
+        "largecollectionprobe",
+        limit=1001,
+        per_session_cap=1,
+        only_ids=set(session_ids),
+        candidate_factor=1,
+    )
+    assert len(passages) == 1001
+    assert ask._load_turns_map(session_ids) == {}
+    context, sources = ask.build_context(
+        "largecollectionprobe",
+        char_budget=1000,
+        max_sessions=1,
+        session_ids=set(session_ids),
+    )
+    assert context
+    assert len(sources) == 1
 
 
 def test_removing_a_rule_match_sticks_as_exclude(make_session, persist_session):

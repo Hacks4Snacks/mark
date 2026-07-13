@@ -585,6 +585,7 @@ class CopilotCliSource(WatchedSource):
                 session = {
                     "id": sid,
                     "source": "cli",
+                    "source_adapter": self.key,
                     "title": derive_title(turns),
                     "workspace_id": None,
                     "repository": repo_from_cwd(s["repository"], s["cwd"]),

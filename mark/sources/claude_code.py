@@ -399,6 +399,7 @@ class ClaudeCodeSource(WatchedSource):
             record_file_signature(cur, f"cc:{sp}", sig)
             if not session:
                 continue
+            session["source_adapter"] = self.key
             prior = existing.get(session["id"])
             if prior is not None and prior == session["content_hash"] and not rebuild:
                 counts["skipped"] += 1

@@ -471,6 +471,7 @@ class CursorSource(WatchedSource):
                         wsmap.get(composer_id, {}),
                         Path(store),
                     )
+                    session["source_adapter"] = self.key
                     _write_session(cur, session)
                     counts["added" if prior is None else "updated"] += 1
                     seen += 1

@@ -45,6 +45,8 @@ def api_sources() -> list[dict[str, Any]]:
     since disabling keeps already-indexed rows.
     """
     by_source = stats_repo.source_counts()
+    by_adapter = stats_repo.source_adapter_counts()
+    legacy_by_source = stats_repo.legacy_source_counts()
     out: list[dict[str, Any]] = []
     for s in ingest.WATCHED_SOURCES:
         cfg = config.resolve_source_config(s.default_config())
@@ -56,7 +58,8 @@ def api_sources() -> list[dict[str, Any]]:
                 "enabled": cfg.enabled,
                 "roots": [str(r) for r in cfg.roots],
                 "exists": any(Path(r).exists() for r in cfg.roots),
-                "indexed": sum(by_source.get(n, 0) for n in s.row_sources),
+                "indexed": by_adapter.get(s.key, 0)
+                + sum(legacy_by_source.get(n, 0) for n in s.row_sources),
             }
         )
     for imp in ingest.IMPORT_SOURCES:

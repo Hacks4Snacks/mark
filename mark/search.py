@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import re
 import threading
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -22,6 +23,96 @@ _vec_cache: dict[str, Any] = {
 }
 
 
+@dataclass(frozen=True)
+class _SessionScope:
+    repo: str | None
+    source: str | None
+    tags: tuple[str, ...]
+    date_from: str | None
+    date_to: str | None
+    only_ids: frozenset[str] | None
+    only_hidden: bool
+
+
+def _session_scope(
+    *,
+    repo: str | None = None,
+    source: str | None = None,
+    tags: list[str] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    only_ids: set[str] | None = None,
+    only_hidden: bool = False,
+) -> _SessionScope:
+    normalized_tags = tuple(
+        dict.fromkeys(tag.strip() for tag in (tags or []) if tag.strip())
+    )
+    return _SessionScope(
+        repo=repo,
+        source=source,
+        tags=normalized_tags,
+        date_from=date_from,
+        date_to=date_to,
+        only_ids=None if only_ids is None else frozenset(only_ids),
+        only_hidden=only_hidden,
+    )
+
+
+def _scope_where(
+    scope: _SessionScope, alias: str = "s", id_table: str | None = None
+) -> tuple[str, list[Any]]:
+    prefix = f"{alias}." if alias else ""
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    vclause, vparams = visibility.sql_where(alias, only_hidden=scope.only_hidden)
+    clauses.append(vclause)
+    params.extend(vparams)
+    if scope.repo:
+        clauses.append(f"{prefix}repository = ?")
+        params.append(scope.repo)
+    if scope.source:
+        clauses.append(f"{prefix}source = ?")
+        params.append(scope.source)
+    if scope.date_from:
+        clauses.append(f"COALESCE({prefix}updated_at, {prefix}created_at) >= ?")
+        params.append(scope.date_from)
+    if scope.date_to:
+        clauses.append(f"COALESCE({prefix}updated_at, {prefix}created_at) <= ?")
+        params.append(scope.date_to + "T23:59:59Z")
+    if scope.tags:
+        placeholders = ",".join("?" * len(scope.tags))
+        clauses.append(
+            f"{prefix}id IN ("
+            "SELECT scoped_tags.session_id FROM tags scoped_tags "
+            f"WHERE scoped_tags.tag IN ({placeholders}) "
+            "GROUP BY scoped_tags.session_id "
+            "HAVING COUNT(DISTINCT scoped_tags.tag) = ?"
+            ")"
+        )
+        params.extend(scope.tags)
+        params.append(len(scope.tags))
+    if scope.only_ids is not None:
+        if id_table is None:
+            raise ValueError("an ID scope requires a temporary table")
+        clauses.append(f"{prefix}id IN (SELECT id FROM {id_table})")
+    return " AND ".join(clauses), params
+
+
+def _scoped_session_ids(scope: _SessionScope) -> set[str]:
+    with (
+        db.cursor() as cur,
+        db.temporary_id_table(cur.connection, scope.only_ids) as id_table,
+    ):
+        where, params = _scope_where(scope, id_table=id_table)
+        return {
+            row["id"]
+            for row in cur.execute(
+                f"SELECT s.id FROM sessions s WHERE {where}", params
+            ).fetchall()
+        }
+
+
 def _fts_query(q: str) -> str | None:
     tokens = [t for t in _TOKEN_RE.findall(q.lower()) if len(t) > 1]
     if not tokens:
@@ -29,18 +120,28 @@ def _fts_query(q: str) -> str | None:
     return " OR ".join(f'"{t}"*' for t in tokens)
 
 
-def _keyword_search(query: str, limit: int) -> list[dict[str, Any]]:
+def _keyword_search(
+    query: str, limit: int, scope: _SessionScope
+) -> list[dict[str, Any]]:
     match = _fts_query(query)
     if not match:
         return []
-    sql = (
-        "SELECT chunk_id, session_id, turn_index, "
-        "  snippet(search_index, 0, '\x02', '\x03', '...', 14) AS snip, "
-        "  bm25(search_index) AS score "
-        "FROM search_index WHERE search_index MATCH ? ORDER BY score LIMIT ?"
-    )
-    with db.cursor() as cur:
-        rows = cur.execute(sql, (match, limit)).fetchall()
+    with (
+        db.cursor() as cur,
+        db.temporary_id_table(cur.connection, scope.only_ids) as id_table,
+    ):
+        where, scope_params = _scope_where(scope, id_table=id_table)
+        sql = (
+            "SELECT search_index.chunk_id, search_index.session_id, "
+            "  search_index.turn_index, "
+            "  snippet(search_index, 0, '\x02', '\x03', '...', 14) AS snip, "
+            "  bm25(search_index) AS score "
+            "FROM search_index "
+            "JOIN sessions s ON s.id = search_index.session_id "
+            f"WHERE search_index MATCH ? AND {where} "
+            "ORDER BY score LIMIT ?"
+        )
+        rows = cur.execute(sql, [match, *scope_params, limit]).fetchall()
     # bm25 returns more-negative = better; rank ascending.
     return [
         {
@@ -97,19 +198,31 @@ def _vector_matrix():
         return ids, sessions, matrix
 
 
-def _semantic_search(query: str, limit: int) -> list[dict[str, Any]]:
+def _semantic_search(
+    query: str, limit: int, allowed_sessions: set[str]
+) -> list[dict[str, Any]]:
+    if not allowed_sessions:
+        return []
     ids, sessions, matrix = _vector_matrix()
     if matrix.shape[0] == 0:
         return []
+    eligible = np.fromiter(
+        (session_id in allowed_sessions for session_id in sessions),
+        dtype=np.bool_,
+        count=len(sessions),
+    )
+    eligible_indices = np.flatnonzero(eligible)
+    if eligible_indices.size == 0:
+        return []
     qvec = embeddings.embed_texts([query])[0]
-    sims = matrix @ qvec
-    k = min(limit, len(ids))
+    sims = matrix[eligible_indices] @ qvec
+    k = min(limit, len(eligible_indices))
     top = np.argpartition(-sims, k - 1)[:k]
     top = top[np.argsort(-sims[top])]
     return [
         {
-            "chunk_id": ids[i],
-            "session_id": sessions[i],
+            "chunk_id": ids[eligible_indices[i]],
+            "session_id": sessions[eligible_indices[i]],
             "turn_index": None,
             "snippet": None,
             "sim": float(sims[i]),
@@ -164,33 +277,6 @@ def _fuse(
     return fused, meta
 
 
-def _allowed_sessions(repo, source, tags, date_from, date_to) -> set[str] | None:
-    clauses, params = [], []
-    if repo:
-        clauses.append("s.repository = ?")
-        params.append(repo)
-    if source:
-        clauses.append("s.source = ?")
-        params.append(source)
-    if date_from:
-        clauses.append("COALESCE(s.updated_at, s.created_at) >= ?")
-        params.append(date_from)
-    if date_to:
-        clauses.append("COALESCE(s.updated_at, s.created_at) <= ?")
-        params.append(date_to + "T23:59:59Z")
-    sql = "SELECT s.id FROM sessions s"
-    if tags:
-        placeholders = ",".join("?" * len(tags))
-        sql += f" JOIN tags t ON t.session_id = s.id AND t.tag IN ({placeholders})"
-        params = list(tags) + params
-    if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
-    if not tags and not clauses:
-        return None  # no filtering
-    with db.cursor() as cur:
-        return {r["id"] for r in cur.execute(sql, params).fetchall()}
-
-
 def search(
     query: str,
     *,
@@ -219,12 +305,25 @@ def search(
             only_hidden=only_hidden,
         )
 
-    allowed = _allowed_sessions(repo, source, tags, date_from, date_to)
-    if only_ids is not None:
-        allowed = set(only_ids) if allowed is None else (allowed & only_ids)
-
-    kw = _keyword_search(query, limit * 6) if mode in ("hybrid", "keyword") else []
-    sem = _semantic_search(query, limit * 6) if mode in ("hybrid", "semantic") else []
+    scope = _session_scope(
+        repo=repo,
+        source=source,
+        tags=tags,
+        date_from=date_from,
+        date_to=date_to,
+        only_ids=only_ids,
+        only_hidden=only_hidden,
+    )
+    kw = (
+        _keyword_search(query, limit * 6, scope)
+        if mode in ("hybrid", "keyword")
+        else []
+    )
+    sem = (
+        _semantic_search(query, limit * 6, _scoped_session_ids(scope))
+        if mode in ("hybrid", "semantic")
+        else []
+    )
 
     # Reciprocal Rank Fusion at the chunk level.
     fused, meta = _fuse((kw, sem))
@@ -233,8 +332,6 @@ def search(
     by_session: dict[str, tuple[float, int]] = {}
     for cid, score in fused.items():
         sid = meta[cid]["session_id"]
-        if allowed is not None and sid not in allowed:
-            continue
         if sid not in by_session or score > by_session[sid][0]:
             by_session[sid] = (score, cid)
 
@@ -285,8 +382,9 @@ def search_passages(
     if not query:
         return []
 
-    kw = _keyword_search(query, limit * candidate_factor)
-    sem = _semantic_search(query, limit * candidate_factor)
+    scope = _session_scope(only_ids=only_ids)
+    kw = _keyword_search(query, limit * candidate_factor, scope)
+    sem = _semantic_search(query, limit * candidate_factor, _scoped_session_ids(scope))
     fused, _meta = _fuse((kw, sem))
     if not fused:
         return []
@@ -366,34 +464,34 @@ def browse(
     only_ids: set[str] | None = None,
     only_hidden: bool = False,
 ) -> list[dict[str, Any]]:
-    allowed = _allowed_sessions(repo, source, tags, date_from, date_to)
-    if only_ids is not None:
-        allowed = set(only_ids) if allowed is None else (allowed & only_ids)
+    scope = _session_scope(
+        repo=repo,
+        source=source,
+        tags=tags,
+        date_from=date_from,
+        date_to=date_to,
+        only_ids=only_ids,
+        only_hidden=only_hidden,
+    )
     order = {
-        "recent": "COALESCE(updated_at, created_at) DESC",
+        "recent": "COALESCE(s.updated_at, s.created_at) DESC",
         # nulls last so undated sessions don't masquerade as the "oldest".
-        "oldest": "COALESCE(updated_at, created_at) IS NULL, COALESCE(updated_at, created_at) ASC",
-        "turns": "turn_count DESC",
-        "title": "title COLLATE NOCASE ASC",
-    }.get(sort, "COALESCE(updated_at, created_at) DESC")
+        "oldest": (
+            "COALESCE(s.updated_at, s.created_at) IS NULL, "
+            "COALESCE(s.updated_at, s.created_at) ASC"
+        ),
+        "turns": "s.turn_count DESC",
+        "title": "s.title COLLATE NOCASE ASC",
+    }.get(sort, "COALESCE(s.updated_at, s.created_at) DESC")
 
-    clauses: list[str] = []
-    params: list[Any] = []
-    if allowed is not None:
-        if not allowed:
-            return []
-        placeholders = ",".join("?" * len(allowed))
-        clauses.append(f"id IN ({placeholders})")
-        params.extend(allowed)
-    vclause, vparams = visibility.sql_where(only_hidden=only_hidden)
-    clauses.append(vclause)
-    params.extend(vparams)
-
-    sql = "SELECT * FROM sessions WHERE " + " AND ".join(clauses)
-    sql += f" ORDER BY {order} LIMIT ?"
-    params.append(limit)
-
-    with db.cursor() as cur:
+    with (
+        db.cursor() as cur,
+        db.temporary_id_table(cur.connection, scope.only_ids) as id_table,
+    ):
+        where, params = _scope_where(scope, id_table=id_table)
+        sql = f"SELECT s.* FROM sessions s WHERE {where}"
+        sql += f" ORDER BY {order} LIMIT ?"
+        params.append(limit)
         rows = [dict(r) for r in cur.execute(sql, params).fetchall()]
     attach_tags(rows)
     for r in rows:
@@ -407,14 +505,17 @@ def _load_sessions(
 ) -> dict[str, dict[str, Any]]:
     if not ids:
         return {}
-    vclause, vparams = visibility.sql_where(only_hidden=only_hidden)
-    with db.cursor() as cur:
-        placeholders = ",".join("?" * len(ids))
+    vclause, vparams = visibility.sql_where("s", only_hidden=only_hidden)
+    with (
+        db.cursor() as cur,
+        db.temporary_id_table(cur.connection, ids) as id_table,
+    ):
         rows = [
             dict(r)
             for r in cur.execute(
-                f"SELECT * FROM sessions WHERE id IN ({placeholders}) AND {vclause}",
-                [*ids, *vparams],
+                f"SELECT s.* FROM sessions s JOIN {id_table} scope ON scope.id = s.id "
+                f"WHERE {vclause}",
+                vparams,
             ).fetchall()
         ]
     attach_tags(rows)
@@ -425,12 +526,14 @@ def attach_tags(rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
     ids = [r["id"] for r in rows]
-    with db.cursor() as cur:
-        placeholders = ",".join("?" * len(ids))
+    with (
+        db.cursor() as cur,
+        db.temporary_id_table(cur.connection, ids) as id_table,
+    ):
         tag_rows = cur.execute(
-            f"SELECT session_id, tag FROM tags WHERE session_id IN ({placeholders}) "
-            "ORDER BY score DESC",
-            ids,
+            "SELECT t.session_id, t.tag FROM tags t "
+            f"JOIN {id_table} scope ON scope.id = t.session_id "
+            "ORDER BY t.score DESC"
         ).fetchall()
     by_sid: dict[str, list[str]] = {}
     for tr in tag_rows:
@@ -442,11 +545,15 @@ def attach_tags(rows: list[dict[str, Any]]) -> None:
 def _load_chunk_text(ids: list[int]) -> dict[int, str]:
     if not ids:
         return {}
-    with db.cursor() as cur:
-        placeholders = ",".join("?" * len(ids))
+    with (
+        db.cursor() as cur,
+        db.temporary_id_table(
+            cur.connection, ids, id_type="INTEGER"
+        ) as id_table,
+    ):
         rows = cur.execute(
-            f"SELECT id, content FROM chunks WHERE id IN ({placeholders})",
-            ids,
+            "SELECT c.id, c.content FROM chunks c "
+            f"JOIN {id_table} scope ON scope.id = c.id"
         ).fetchall()
     return {r["id"]: r["content"] for r in rows}
 
@@ -455,12 +562,15 @@ def _load_chunks(ids: list[int]) -> dict[int, dict[str, Any]]:
     """Load chunk rows (id, session, turn, type, content) keyed by chunk id."""
     if not ids:
         return {}
-    with db.cursor() as cur:
-        placeholders = ",".join("?" * len(ids))
+    with (
+        db.cursor() as cur,
+        db.temporary_id_table(
+            cur.connection, ids, id_type="INTEGER"
+        ) as id_table,
+    ):
         rows = cur.execute(
-            "SELECT id, session_id, turn_index, source_type, content "
-            f"FROM chunks WHERE id IN ({placeholders})",
-            ids,
+            "SELECT c.id, c.session_id, c.turn_index, c.source_type, c.content "
+            f"FROM chunks c JOIN {id_table} scope ON scope.id = c.id"
         ).fetchall()
     return {r["id"]: dict(r) for r in rows}
 

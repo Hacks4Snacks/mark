@@ -131,12 +131,14 @@ def _load_turns_map(session_ids: list[str]) -> dict[str, dict[int, dict[str, Any
     if not session_ids:
         return {}
     out: dict[str, dict[int, dict[str, Any]]] = {}
-    with db.cursor() as cur:
-        placeholders = ",".join("?" * len(session_ids))
+    with (
+        db.cursor() as cur,
+        db.temporary_id_table(cur.connection, session_ids) as id_table,
+    ):
         rows = cur.execute(
-            "SELECT session_id, turn_index, user_message, assistant_response "
-            f"FROM turns WHERE session_id IN ({placeholders})",
-            session_ids,
+            "SELECT t.session_id, t.turn_index, t.user_message, "
+            "t.assistant_response FROM turns t "
+            f"JOIN {id_table} scope ON scope.id = t.session_id"
         ).fetchall()
     for r in rows:
         out.setdefault(r["session_id"], {})[r["turn_index"]] = {

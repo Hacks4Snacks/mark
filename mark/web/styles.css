@@ -235,6 +235,7 @@ mark { background: var(--mark); color: var(--mark-ink); border-radius: 3px; padd
 .stat-card .l { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .6px; }
 
 .filter-group h4 { margin: 0 0 9px; font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--faint); }
+.filter-group h4 .filter-semantics { margin-left: 5px; color: var(--muted); font-weight: 500; text-transform: none; letter-spacing: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 7px; }
 .chip {
   background: var(--chip); border: 1px solid transparent; color: var(--muted);

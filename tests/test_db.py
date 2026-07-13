@@ -48,6 +48,18 @@ def test_embedding_generation_meta_exists():
     assert db.get_meta("embed_generation") == "0"
 
 
+def test_tag_scope_index_exists():
+    with db.connect() as conn:
+        indexes = {r["name"] for r in conn.execute("PRAGMA index_list(tags)")}
+    assert "idx_tags_tag_session" in indexes
+
+
+def test_sessions_has_source_adapter_column():
+    with db.connect() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    assert "source_adapter" in cols
+
+
 def test_meta_round_trip():
     assert db.get_meta("missing") is None
     assert db.get_meta("missing", "fallback") == "fallback"
@@ -94,11 +106,54 @@ def test_migrations_backfill_pre_column_db(tmp_path):
         assert "manual" in {r[1] for r in con.execute("PRAGMA table_info(tags)")}
         assert "thinking" in {r[1] for r in con.execute("PRAGMA table_info(turns)")}
         assert "hidden" in {r[1] for r in con.execute("PRAGMA table_info(sessions)")}
+        assert "source_adapter" in {
+            r[1] for r in con.execute("PRAGMA table_info(sessions)")
+        }
+        assert "idx_tags_tag_session" in {
+            r["name"] for r in con.execute("PRAGMA index_list(tags)")
+        }
         assert con.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tombstones'"
         ).fetchone()
         version = con.execute("PRAGMA user_version").fetchone()[0]
         assert version == migrations.CURRENT_VERSION
+    finally:
+        con.close()
+
+
+def test_source_adapter_migration_backfills_dynamic_cline_task(tmp_path):
+    path = tmp_path / "legacy-cline.db"
+    con = sqlite3.connect(path)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, "
+            "source_path TEXT, source_adapter TEXT)"
+        )
+        con.executemany(
+            "INSERT INTO sessions(id, source, source_path) VALUES (?, ?, ?)",
+            [
+                (
+                    "myagent-1700000000000",
+                    "myagent",
+                    "/home/me/globalStorage/vendor.myagent/tasks/1700000000000",
+                ),
+                ("upload-1", "upload", "/tmp/tasks/report.txt"),
+            ],
+        )
+        migration_index = migrations.MIGRATIONS.index(
+            migrations._add_source_adapter_column
+        )
+        con.execute(f"PRAGMA user_version = {migration_index}")
+        migrations.run_migrations(con)
+        con.commit()
+
+        rows = {
+            r["id"]: r["source_adapter"]
+            for r in con.execute("SELECT id, source_adapter FROM sessions")
+        }
+        assert rows["myagent-1700000000000"] == "cline"
+        assert rows["upload-1"] is None
     finally:
         con.close()
 

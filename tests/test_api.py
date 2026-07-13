@@ -583,6 +583,28 @@ def test_note_create_then_searchable(client):
     assert detail.json()["title"] == "Note"
 
 
+def test_search_api_requires_all_selected_topics(client):
+    both = client.post(
+        "/api/notes", json={"title": "Both", "text": "topic api probe"}
+    ).json()["id"]
+    alpha_only = client.post(
+        "/api/notes", json={"title": "Alpha", "text": "topic api probe"}
+    ).json()["id"]
+    for sid, tags in ((both, ("alpha", "beta")), (alpha_only, ("alpha",))):
+        for tag in tags:
+            assert (
+                client.post(f"/api/sessions/{sid}/tags", json={"tag": tag}).status_code
+                == 200
+            )
+
+    response = client.get(
+        "/api/search", params={"q": "topic api probe", "tags": "alpha,beta"}
+    )
+
+    assert response.status_code == 200
+    assert {result["id"] for result in response.json()["results"]} == {both}
+
+
 def test_note_write_succeeds_when_semantic_backfill_fails(client, monkeypatch):
     from mark import embeddings
 

@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from .connection import connect, cursor, get_meta, set_meta, transaction
+from .connection import (
+    connect,
+    cursor,
+    get_meta,
+    set_meta,
+    temporary_id_table,
+    transaction,
+)
 from .migrations import run_migrations
 from .schema import SCHEMA
 
@@ -11,6 +18,7 @@ __all__ = [
     "get_meta",
     "init_db",
     "set_meta",
+    "temporary_id_table",
     "transaction",
 ]
 

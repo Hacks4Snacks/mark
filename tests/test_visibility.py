@@ -123,6 +123,55 @@ def test_disabled_source_restored_on_reenable(
     assert sid in {r["id"] for r in search.browse()}
 
 
+def test_disabled_cline_hides_dynamic_family_sources(
+    make_session, persist_session, monkeypatch
+):
+    from mark import ask, collections
+    from mark.api.sources import api_sources
+
+    ids = []
+    for sid, label in (("configured", "myagent"), ("unknown", "new-fork")):
+        session = make_session(
+            sid=sid,
+            source=label,
+            user="dynamicclineprobe",
+        )
+        session["source_adapter"] = "cline"
+        persist_session(session)
+        ids.append(sid)
+    cid = collections.create("Cline family")
+    for sid in ids:
+        collections.set_member(cid, sid)
+    ingest._embed_pending()
+
+    assert set(ids) <= {r["id"] for r in search.browse()}
+    assert set(ids) <= {
+        r["id"] for r in search.search("dynamicclineprobe", mode="keyword")
+    }
+    assert set(ids) <= {
+        r["id"] for r in search.search("dynamicclineprobe", mode="semantic")
+    }
+    assert set(ids) <= {
+        r["session_id"] for r in search.search_passages("dynamicclineprobe")
+    }
+    monkeypatch.setenv("MARK_SOURCE_CLINE_ENABLED", "0")
+
+    assert not ({r["id"] for r in search.browse()} & set(ids))
+    assert not {r["id"] for r in search.search("dynamicclineprobe", mode="keyword")}
+    assert not {r["id"] for r in search.search("dynamicclineprobe", mode="semantic")}
+    assert search.search_passages("dynamicclineprobe", only_ids=set(ids)) == []
+    assert collections.resolve_member_ids(collections.get_collection(cid)) == set()
+    context, sources = ask.build_context(
+        "dynamicclineprobe", char_budget=2000, session_ids=set(ids)
+    )
+    assert context == ""
+    assert sources == []
+    assert stats_repo.source_adapter_counts()["cline"] == 2
+    cline_info = next(source for source in api_sources() if source["key"] == "cline")
+    assert cline_info["enabled"] is False
+    assert cline_info["indexed"] == 2
+
+
 # ---------- API surface ----------
 
 

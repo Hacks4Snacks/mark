@@ -34,7 +34,9 @@ Every filter is additive — combine as many as you like. The result count and a
 - **Repositories** — the repos a session touched (auto-detected from workspace
   metadata).
 - **Topics** — the locally generated topic tags (a tag cloud). You can also add
-  or remove tags by hand — see [Managing your archive](managing-your-archive.md#topics--tags).
+  or remove tags by hand. Selecting multiple topics uses **match all** semantics:
+  a conversation must contain every selected topic. See
+  [Managing your archive](managing-your-archive.md#topics--tags).
 - **Date range** — a from/to window on each session's activity.
 - **Show hidden only** — surface sessions you've hidden so you can review or
   restore them.

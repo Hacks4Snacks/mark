@@ -475,6 +475,42 @@ def test_cline_parses_task_history(tmp_path):
     assert s["created_at"] <= s["updated_at"]
 
 
+def test_cline_ingest_persists_adapter_for_configured_and_unknown_sources(tmp_path):
+    from mark import config, db
+    from mark.sources.cline import ClineSource
+
+    root = tmp_path / "globalStorage"
+    messages = [
+        {"role": "user", "content": "dynamic source", "ts": 1700000000000},
+        {"role": "assistant", "content": "indexed", "ts": 1700000001000},
+    ]
+    for extension, task_id in (
+        ("vendor.configured", "1700000000000"),
+        ("vendor.unknown-fork", "1700000000001"),
+    ):
+        task = root / extension / "tasks" / task_id
+        task.mkdir(parents=True)
+        (task / "api_conversation_history.json").write_text(json.dumps(messages))
+    cfg = config.SourceConfig(
+        key="cline",
+        roots=[root],
+        options={"extensions": {"vendor.configured": "myagent"}},
+    )
+    with db.connect() as conn:
+        cur = conn.cursor()
+        counts = ClineSource().ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        rows = {
+            r["source"]: r["source_adapter"]
+            for r in cur.execute(
+                "SELECT source, source_adapter FROM sessions ORDER BY source"
+            )
+        }
+
+    assert counts["added"] == 2
+    assert rows == {"myagent": "cline", "unknown-fork": "cline"}
+
+
 def test_copilot_cli_indexes_store_sessions(tmp_path):
     """The Copilot CLI store (sessions+turns tables) is snapshotted and indexed."""
     from mark import config, db, search

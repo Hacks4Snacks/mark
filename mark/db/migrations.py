@@ -148,6 +148,68 @@ def _add_embedding_fingerprint_column(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE embeddings ADD COLUMN fingerprint TEXT")
 
 
+def _add_tag_scope_index(conn: sqlite3.Connection) -> None:
+    """Support intersection filtering by tag without scanning the tag table."""
+    tables = {
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if "tags" in tables:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tags_tag_session ON tags(tag, session_id)"
+        )
+
+
+def _add_source_adapter_column(conn: sqlite3.Connection) -> None:
+    """Persist stable watched-adapter ownership separately from display source."""
+    tables = {
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if "sessions" not in tables:
+        return
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    if "source_adapter" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN source_adapter TEXT")
+
+    fixed = {
+        "vscode": "vscode",
+        "cli": "copilot_cli",
+        "copilot_memory": "copilot_memory",
+        "cursor": "cursor",
+        "claude-code": "claude_code",
+        "cline": "cline",
+        "zoocode": "cline",
+        "roo": "cline",
+        "kilocode": "cline",
+    }
+    for source, adapter in fixed.items():
+        conn.execute(
+            "UPDATE sessions SET source_adapter = ? "
+            "WHERE source_adapter IS NULL AND source = ?",
+            (adapter, source),
+        )
+
+    # Cline-family display names are configurable and unknown forks derive
+    # their label from the extension id. Their task path is the durable legacy
+    # signal that they were owned by the Cline watched adapter.
+    if "source_path" in cols:
+        for row in conn.execute(
+            "SELECT id, source, source_path FROM sessions "
+            "WHERE source_adapter IS NULL AND source_path IS NOT NULL"
+        ).fetchall():
+            parts = row["source_path"].replace("\\", "/").rstrip("/").split("/")
+            if (
+                len(parts) >= 2
+                and parts[-2] == "tasks"
+                and row["id"] == f"{row['source']}-{parts[-1]}"
+            ):
+                conn.execute(
+                    "UPDATE sessions SET source_adapter = 'cline' WHERE id = ?",
+                    (row["id"],),
+                )
+
+
 # Ordered list of migrations. Append new ones; never reorder or delete.
 # The 1-based index of a migration is its schema version.
 MIGRATIONS: list[Migration] = [
@@ -160,6 +222,8 @@ MIGRATIONS: list[Migration] = [
     _classify_owned_uploads,
     _add_embedding_generation,
     _add_embedding_fingerprint_column,
+    _add_tag_scope_index,
+    _add_source_adapter_column,
 ]
 
 CURRENT_VERSION = len(MIGRATIONS)

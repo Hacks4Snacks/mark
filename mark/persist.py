@@ -113,14 +113,17 @@ def _write_session(cur, session: dict[str, Any]) -> None:
     m = session.get("metrics") or {}
     cur.execute(
         """INSERT INTO sessions
-           (id, source, title, workspace_id, repository, repo_path, requester,
+           (id, source, source_adapter, title, workspace_id, repository, repo_path, requester,
             responder, created_at, updated_at, turn_count,
             duration_seconds, model, input_tokens, output_tokens,
             premium_requests, aiu, est_cost_usd, tokens_estimated,
             source_path, content_hash)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                      ON CONFLICT(id) DO UPDATE SET
                          source = excluded.source,
+                         source_adapter = COALESCE(
+                             excluded.source_adapter, sessions.source_adapter
+                         ),
                          title = excluded.title,
                          summary = NULL,
                          workspace_id = excluded.workspace_id,
@@ -145,6 +148,7 @@ def _write_session(cur, session: dict[str, Any]) -> None:
         (
             sid,
             session["source"],
+            session.get("source_adapter"),
             session["title"],
             session["workspace_id"],
             session["repository"],

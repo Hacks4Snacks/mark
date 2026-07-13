@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from collections.abc import Iterator
+from typing import Literal
+from uuid import uuid4
 
 from .. import config
 
@@ -46,6 +48,35 @@ def transaction() -> Iterator[sqlite3.Connection]:
         raise
     finally:
         conn.close()
+
+
+@contextmanager
+def temporary_id_table(
+    conn: sqlite3.Connection,
+    ids: Iterable[str | int] | None,
+    *,
+    id_type: Literal["TEXT", "INTEGER"] = "TEXT",
+) -> Iterator[str | None]:
+    """Materialize an optional ID scope without consuming bind variables.
+
+    SQLite's supported bind-variable ceiling varies by build. A temporary table
+    keeps large collection scopes portable while preserving one global SQL
+    ranking operation. The generated table name is internal and connection-local.
+    """
+    if ids is None:
+        yield None
+        return
+
+    table = f"_mark_ids_{uuid4().hex}"
+    conn.execute(f"CREATE TEMP TABLE {table}(id {id_type} PRIMARY KEY) WITHOUT ROWID")
+    try:
+        conn.executemany(
+            f"INSERT OR IGNORE INTO {table}(id) VALUES (?)",
+            ((value,) for value in ids),
+        )
+        yield table
+    finally:
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
 
 
 def get_meta(key: str, default: str | None = None) -> str | None:

@@ -13,7 +13,8 @@ the same local SQLite database — nothing leaves your machine.
 Each collection can carry a **rule** — a saved search and its filters (query,
 repo, topic, source, date range). Whenever Mark indexes new sessions, any that
 match the rule flow into the collection automatically. You never have to re-add
-them.
+them. Rules with multiple topics require every selected topic, matching the
+search sidebar's **match all** behavior.
 
 On top of the rule you keep two manual overrides that **stick across re-syncs**:
 

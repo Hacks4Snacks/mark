@@ -3,6 +3,7 @@ from __future__ import annotations
 import multiprocessing
 import threading
 
+import numpy as np
 import pytest
 
 from mark import search, uploads
@@ -58,6 +59,155 @@ def test_semantic_search_over_embedded_note():
     )
     res = search.search("token timeout", mode="semantic")
     assert any(r["id"] == sid for r in res)
+
+
+def _scoped_search_fixture(make_session, persist_session, scope_kind):
+    from mark.repositories import sessions as sessions_repo
+
+    target = make_session(
+        sid="eligible",
+        title="Eligible",
+        user=("filler " * 400) + "scopeprobe",
+        source="target-source" if scope_kind == "source" else "upload",
+        repository="target-repo" if scope_kind == "repo" else "repo",
+    )
+    if scope_kind == "date":
+        target["created_at"] = target["updated_at"] = "2026-06-01T00:00:00Z"
+    persist_session(target)
+
+    for index in range(8):
+        distractor = make_session(
+            sid=f"distractor-{index}",
+            title=f"Distractor {index}",
+            user="scopeprobe scopeprobe scopeprobe",
+            source="other-source" if scope_kind == "source" else "upload",
+            repository="other-repo" if scope_kind == "repo" else "repo",
+        )
+        if scope_kind == "date":
+            distractor["created_at"] = distractor["updated_at"] = "2025-06-01T00:00:00Z"
+        persist_session(distractor)
+
+    if scope_kind == "tag":
+        sessions_repo.add_tag("eligible", "target-tag")
+        for index in range(8):
+            sessions_repo.add_tag(f"distractor-{index}", "other-tag")
+    if scope_kind == "hidden":
+        sessions_repo.set_hidden("eligible", True)
+
+    kwargs = {
+        "repo": {"repo": "target-repo"},
+        "source": {"source": "target-source"},
+        "date": {"date_from": "2026-01-01"},
+        "tag": {"tags": ["target-tag"]},
+        "only_ids": {"only_ids": {"eligible"}},
+        "hidden": {"only_hidden": True},
+    }[scope_kind]
+    return kwargs
+
+
+def _controlled_semantic_matrix(monkeypatch):
+    from mark import db, embeddings
+
+    with db.cursor() as cur:
+        rows = cur.execute(
+            "SELECT id, session_id FROM chunks "
+            "WHERE content LIKE '%scopeprobe%' ORDER BY session_id"
+        ).fetchall()
+    ids = [row["id"] for row in rows]
+    sessions = [row["session_id"] for row in rows]
+    vectors = np.array(
+        [[0.1 if sid == "eligible" else 1.0, 0.0] for sid in sessions],
+        dtype=np.float32,
+    )
+    monkeypatch.setattr(search, "_vector_matrix", lambda: (ids, sessions, vectors))
+    monkeypatch.setattr(
+        embeddings,
+        "embed_texts",
+        lambda _texts: np.array([[1.0, 0.0]], dtype=np.float32),
+    )
+
+
+@pytest.mark.parametrize(
+    "scope_kind", ["repo", "source", "date", "tag", "only_ids", "hidden"]
+)
+@pytest.mark.parametrize("mode", ["keyword", "semantic"])
+def test_scope_is_applied_before_candidate_truncation(
+    make_session, persist_session, monkeypatch, scope_kind, mode
+):
+    kwargs = _scoped_search_fixture(make_session, persist_session, scope_kind)
+    if mode == "semantic":
+        _controlled_semantic_matrix(monkeypatch)
+
+    results = search.search("scopeprobe", mode=mode, limit=1, **kwargs)
+
+    assert [result["id"] for result in results] == ["eligible"]
+
+
+def test_large_only_ids_scope_avoids_sqlite_variable_limit(
+    make_session, persist_session, monkeypatch
+):
+    import sqlite3
+
+    from mark import db
+    from mark.db import connection
+
+    persist_session(make_session(sid="eligible", user="largeidprobe"))
+    real_connect = connection.connect
+
+    def limited_connect():
+        conn = real_connect()
+        conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+        return conn
+
+    monkeypatch.setattr(connection, "connect", limited_connect)
+    monkeypatch.setattr(db, "connect", limited_connect)
+    only_ids = {"eligible", *(f"missing-{index}" for index in range(1000))}
+
+    assert [
+        result["id"]
+        for result in search.search(
+            "largeidprobe", mode="keyword", only_ids=only_ids, limit=1
+        )
+    ] == ["eligible"]
+    assert [result["id"] for result in search.browse(only_ids=only_ids, limit=1)] == [
+        "eligible"
+    ]
+
+
+def test_multiple_tags_require_every_selected_tag(make_session, persist_session):
+    from mark.repositories import sessions as sessions_repo
+
+    for sid in ("both", "alpha-only", "beta-only"):
+        persist_session(make_session(sid=sid, user="tagintersection"))
+    sessions_repo.add_tag("both", "alpha")
+    sessions_repo.add_tag("both", "beta")
+    sessions_repo.add_tag("alpha-only", "alpha")
+    sessions_repo.add_tag("beta-only", "beta")
+
+    expected = {"both"}
+    assert {
+        result["id"]
+        for result in search.search(
+            "tagintersection", mode="keyword", tags=["alpha", "beta"]
+        )
+    } == expected
+    assert {
+        result["id"] for result in search.browse(tags=["alpha", "beta"])
+    } == expected
+
+
+def test_duplicate_selected_tags_do_not_change_intersection(
+    make_session, persist_session
+):
+    from mark.repositories import sessions as sessions_repo
+
+    persist_session(make_session(sid="both"))
+    sessions_repo.add_tag("both", "alpha")
+    sessions_repo.add_tag("both", "beta")
+
+    assert {
+        result["id"] for result in search.browse(tags=[" alpha ", "alpha", "beta"])
+    } == {"both"}
 
 
 def test_reindex_preserves_embeddings_for_unchanged_chunks(make_session):
