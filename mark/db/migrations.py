@@ -122,6 +122,32 @@ def _classify_owned_uploads(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_embedding_generation(conn: sqlite3.Connection) -> None:
+    """Initialize semantic-index generation metadata for legacy databases."""
+    tables = {
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if "meta" not in tables:
+        return
+    conn.execute(
+        "INSERT OR IGNORE INTO meta(key, value) VALUES('embed_generation', '0')"
+    )
+
+
+def _add_embedding_fingerprint_column(conn: sqlite3.Connection) -> None:
+    """Add per-row semantic identity; legacy rows remain unclassified."""
+    tables = {
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if "embeddings" not in tables:
+        return
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(embeddings)")}
+    if "fingerprint" not in cols:
+        conn.execute("ALTER TABLE embeddings ADD COLUMN fingerprint TEXT")
+
+
 # Ordered list of migrations. Append new ones; never reorder or delete.
 # The 1-based index of a migration is its schema version.
 MIGRATIONS: list[Migration] = [
@@ -132,6 +158,8 @@ MIGRATIONS: list[Migration] = [
     _add_source_file_stat_table,
     _add_attachment_provenance,
     _classify_owned_uploads,
+    _add_embedding_generation,
+    _add_embedding_fingerprint_column,
 ]
 
 CURRENT_VERSION = len(MIGRATIONS)

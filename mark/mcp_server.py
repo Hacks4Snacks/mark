@@ -5,7 +5,7 @@ import re
 
 from mcp.server.fastmcp import FastMCP
 
-from . import db, exporting, search
+from . import db, exporting, ingest, search
 
 mcp = FastMCP("mark")
 
@@ -104,6 +104,7 @@ def list_recent(
 def main() -> None:
     """Console entry point: initialise the DB, then serve over stdio."""
     db.init_db()
+    ingest.ensure_index_ready(initialize=False)
     mcp.run()
 
 

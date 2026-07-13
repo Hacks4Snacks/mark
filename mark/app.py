@@ -6,13 +6,14 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import background, config, db
+from . import background, config, db, ingest
 from .api import build_api_router
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     db.init_db()
+    ingest.ensure_index_ready(initialize=False)
     background.start()
     try:
         yield

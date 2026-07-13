@@ -12,7 +12,7 @@ from . import db, embeddings, visibility
 _RRF_K = 60
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
-# Cached embedding matrix: rebuilt only when row count or model changes.
+# Cached embedding matrix: rebuilt whenever the persisted semantic generation changes.
 _vec_lock = threading.Lock()
 _vec_cache: dict[str, Any] = {
     "key": None,
@@ -54,32 +54,44 @@ def _keyword_search(query: str, limit: int) -> list[dict[str, Any]]:
 
 
 def _vector_matrix():
-    model = embeddings.get_embedder().name
-    with db.cursor() as cur:
-        count = cur.execute(
-            "SELECT COUNT(*) FROM embeddings WHERE model = ?", (model,)
-        ).fetchone()[0]
-    key = f"{model}:{count}"
-    if _vec_cache["key"] == key:
-        return _vec_cache["ids"], _vec_cache["sessions"], _vec_cache["matrix"]
+    embedder = embeddings.get_embedder()
     with _vec_lock:
-        if _vec_cache["key"] == key:
-            return _vec_cache["ids"], _vec_cache["sessions"], _vec_cache["matrix"]
         ids: list[int] = []
         sessions: list[str] = []
         vectors: list[np.ndarray] = []
-        with db.cursor() as cur:
-            for r in cur.execute(
-                "SELECT chunk_id, session_id, vector FROM embeddings WHERE model = ?",
-                (model,),
-            ):
-                ids.append(r["chunk_id"])
-                sessions.append(r["session_id"])
-                vectors.append(embeddings.from_blob(r["vector"]))
+        conn = db.connect()
+        try:
+            conn.execute("BEGIN")
+            cur = conn.cursor()
+            fingerprint, generation = embeddings.index_state(cur)
+            key = f"{embedder.fingerprint}:{generation}"
+            if _vec_cache["key"] == key:
+                return (
+                    _vec_cache["ids"],
+                    _vec_cache["sessions"],
+                    _vec_cache["matrix"],
+                )
+            if fingerprint == embedder.fingerprint:
+                for r in cur.execute(
+                    "SELECT chunk_id, session_id, vector FROM embeddings "
+                    "WHERE fingerprint = ? AND model = ? AND dim = ? "
+                    "AND length(vector) = ?",
+                    (
+                        embedder.fingerprint,
+                        embedder.name,
+                        embedder.dim,
+                        embedder.dim * 4,
+                    ),
+                ):
+                    ids.append(r["chunk_id"])
+                    sessions.append(r["session_id"])
+                    vectors.append(embeddings.from_blob(r["vector"]))
+        finally:
+            conn.close()
         matrix = (
             np.vstack(vectors)
             if vectors
-            else np.zeros((0, embeddings.get_embedder().dim), dtype=np.float32)
+            else np.zeros((0, embedder.dim), dtype=np.float32)
         )
         _vec_cache.update(key=key, ids=ids, sessions=sessions, matrix=matrix)
         return ids, sessions, matrix

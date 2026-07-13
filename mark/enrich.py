@@ -316,8 +316,8 @@ def _keywords_freq(text: str, top_k: int = 6) -> list[tuple[str, float]]:
 
 
 def enrich_text(title: str, text: str) -> tuple[str, list[tuple[str, float]]]:
-    """Enrichment for uploaded documents/notes."""
+    """Embedding-free enrichment for uploaded documents/notes."""
     turn = [{"user_message": title, "assistant_response": text}]
-    summary = _summarize(turn)
-    tags = _keywords(f"{title}\n{_plaintext(text)}")
+    summary = _summarize_fast(turn)
+    tags = _keywords_freq(f"{title}\n{_plaintext(text)}")
     return summary, tags

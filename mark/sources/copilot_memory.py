@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
-from ..persist import load_file_signatures, record_file_signature, write_session
+from ..persist import _write_session, load_file_signatures, record_file_signature
 from .base import FENCE_RE, URL_RE, ProgressCb, WatchedSource
 from .vscode import load_workspace_map
 
@@ -235,7 +235,7 @@ class CopilotMemorySource(WatchedSource):
             if prior is not None and prior == session["content_hash"] and not rebuild:
                 skipped += 1
                 continue
-            write_session(cur, session)
+            _write_session(cur, session)
             added += 1 if prior is None else 0
             updated += 0 if prior is None else 1
             if progress:

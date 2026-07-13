@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .. import attachments, db, ingest
+from .. import attachments, db, embeddings, ingest
 
 # Manual topics are stored normalized (lowercase, collapsed whitespace, capped)
 # so add/remove always agree regardless of caller.
@@ -57,7 +57,16 @@ def purge(session_id: str) -> bool:
             # FTS rows have no foreign key, so drop them explicitly; the session
             # delete cascades to turns/chunks/embeddings/tags/members.
             cur.execute("DELETE FROM search_index WHERE session_id = ?", (session_id,))
+            had_vectors = (
+                cur.execute(
+                    "SELECT 1 FROM embeddings WHERE session_id = ? LIMIT 1",
+                    (session_id,),
+                ).fetchone()
+                is not None
+            )
             cur.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            if had_vectors:
+                embeddings.bump_generation(cur)
         attachments.cleanup_unreferenced()
         return True
 

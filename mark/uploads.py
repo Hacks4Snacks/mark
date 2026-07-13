@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import attachments, config, db, embeddings, enrich, ingest
+from . import attachments, config, db, enrich, ingest
 from .persist import window_chunks
 
 
@@ -79,8 +79,6 @@ def _index_document_locked(
     summary, tags = enrich.enrich_text(title, content)
     chunks = window_chunks(content.strip()) or [title]
 
-    emb = embeddings.get_embedder()
-    vectors = emb.embed(chunks)
     tag_text = " ".join(t for t, _ in tags)
 
     with db.transaction() as conn:
@@ -124,7 +122,7 @@ def _index_document_locked(
                 "INSERT OR IGNORE INTO tags(session_id, tag, score) VALUES (?,?,?)",
                 (session_id, tag, score),
             )
-        for i, (piece, vec) in enumerate(zip(chunks, vectors, strict=False)):
+        for i, piece in enumerate(chunks):
             cur.execute(
                 "INSERT INTO chunks(session_id, source_type, turn_index, content) VALUES (?,?,?,?)",
                 (session_id, "document", i, piece),
@@ -135,11 +133,11 @@ def _index_document_locked(
                 "VALUES (?,?,?,?,?,?,?)",
                 (piece, title, tag_text, chunk_id, session_id, "document", i),
             )
-            cur.execute(
-                "INSERT OR REPLACE INTO embeddings(chunk_id, session_id, model, dim, vector) VALUES (?,?,?,?,?)",
-                (chunk_id, session_id, emb.name, emb.dim, embeddings.to_blob(vec)),
-            )
+        from . import embeddings
+
+        embeddings.mark_index_dirty(cur)
         conn.commit()
+    ingest._try_embed_pending()
     return session_id
 
 

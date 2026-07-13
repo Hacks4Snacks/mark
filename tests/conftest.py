@@ -101,10 +101,8 @@ def persist_session():
     """Persist a canonical session dict into the test database."""
 
     def _persist(session):
-        from mark import db, persist
+        from mark import persist
 
-        with db.connect() as conn:
-            persist.write_session(conn.cursor(), session)
-            conn.commit()
+        persist.write_session(session)
 
     return _persist

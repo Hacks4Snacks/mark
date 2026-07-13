@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from . import config, enrich
+from . import config, db, embeddings, enrich
 
 # NUL/C0 control characters (except tab/newline/carriage-return) and the U+FFFD
 # replacement character — broken-UTF-8 noise that pollutes stored text and search.
@@ -59,7 +59,13 @@ def record_file_signature(cur, path: str, signature: str) -> None:
     )
 
 
-def write_session(cur, session: dict[str, Any]) -> None:
+def write_session(session: dict[str, Any]) -> None:
+    """Persist one session atomically under the cross-process semantic lock."""
+    with embeddings.writer_lock(), db.transaction() as conn:
+        _write_session(conn.cursor(), session)
+
+
+def _write_session(cur, session: dict[str, Any]) -> None:
     sid = session["id"]
     # A permanently deleted session is tombstoned; honor it here — the single
     # chokepoint every source writes through — so a re-scan can't resurrect it.
@@ -74,10 +80,15 @@ def write_session(cur, session: dict[str, Any]) -> None:
     # For an actively-growing session that would re-embed identical text on every
     # pass, so snapshot existing vectors keyed by chunk content and carry them
     # onto the rebuilt chunks below; only genuinely new content then re-embeds.
-    preserved_vectors: dict[str, tuple[str, int, bytes]] = {
-        row["content"]: (row["model"], row["dim"], row["vector"])
+    preserved_vectors: dict[str, tuple[str, int, str | None, bytes]] = {
+        row["content"]: (
+            row["model"],
+            row["dim"],
+            row["fingerprint"],
+            row["vector"],
+        )
         for row in cur.execute(
-            "SELECT c.content, e.model, e.dim, e.vector "
+            "SELECT c.content, e.model, e.dim, e.fingerprint, e.vector "
             "FROM chunks c JOIN embeddings e ON e.chunk_id = c.id "
             "WHERE c.session_id = ?",
             (sid,),
@@ -221,10 +232,15 @@ def write_session(cur, session: dict[str, Any]) -> None:
         keep = preserved_vectors.get(piece)
         if keep is not None:
             cur.execute(
-                "INSERT OR REPLACE INTO embeddings(chunk_id, session_id, model, dim, vector) "
-                "VALUES (?,?,?,?,?)",
-                (chunk_id, sid, keep[0], keep[1], keep[2]),
+                "INSERT OR REPLACE INTO embeddings"
+                "(chunk_id, session_id, model, dim, fingerprint, vector) "
+                "VALUES (?,?,?,?,?,?)",
+                (chunk_id, sid, keep[0], keep[1], keep[2], keep[3]),
             )
+    if chunk_rows:
+        embeddings.mark_index_dirty(cur)
+    if preserved_vectors:
+        embeddings.bump_generation(cur)
 
     # Session-level file references (e.g. from the Copilot CLI store).
     for path, tool, turn_index in session.get("extra_files", []):

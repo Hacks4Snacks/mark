@@ -13,10 +13,17 @@ router = APIRouter()
 
 
 def _status_payload() -> dict[str, Any]:
-    model = db.get_meta("embed_model") or ""
+    semantic = ingest.semantic_status()
+    model = semantic["model"]
     st = background.status_snapshot()
     st["embed_model"] = model
-    st["semantic"] = bool(model) and not model.startswith("builtin")
+    st["semantic_active"] = semantic["active"]
+    st["semantic"] = semantic["active"] and not model.startswith("builtin")
+    st["semantic_pending"] = semantic["pending"]
+    st["semantic_generation"] = semantic["generation"]
+    st["semantic_fingerprint"] = semantic["fingerprint"]
+    st["semantic_target_fingerprint"] = semantic["target_fingerprint"]
+    st["semantic_error"] = semantic["error"]
     st["auto_sync"] = config.AUTO_SYNC
     st["sync_interval"] = config.SYNC_INTERVAL
     st["last_ingest"] = db.get_meta("last_ingest")

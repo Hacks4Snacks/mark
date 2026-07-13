@@ -116,10 +116,27 @@ def test_chatgpt_import_into_db(persist_session):
     with db.connect() as conn:
         cur = conn.cursor()
         for session in src.parse_export(_sample_export()):
-            persist.write_session(cur, session)
+            persist._write_session(cur, session)
         conn.commit()
     res = search.search("refresh token", mode="keyword")
     assert any(r["id"] == "chatgpt-abc" for r in res)
+
+
+def test_export_import_succeeds_when_semantic_backfill_fails(monkeypatch):
+    from mark import db, ingest, search
+
+    monkeypatch.setattr(
+        ingest,
+        "_embed_pending",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    result = ingest.import_export("conversations.json", _sample_export())
+
+    assert result["matched"] == "chatgpt"
+    assert result["imported"] == 1
+    assert search.get_session("chatgpt-abc") is not None
+    assert db.get_meta("embed_pending") == "1"
+    assert ingest.semantic_status()["error"] == "offline"
 
 
 def test_grok_detect():
@@ -161,7 +178,7 @@ def test_grok_import_into_db(persist_session):
     with db.connect() as conn:
         cur = conn.cursor()
         for session in src.parse_export(_sample_grok_export()):
-            persist.write_session(cur, session)
+            persist._write_session(cur, session)
         conn.commit()
     res = search.search("refresh token", mode="keyword")
     assert any(r["id"] == "grok-9a8a350b-45b4-4847-9c14-20acba8d2faa" for r in res)
@@ -1826,7 +1843,7 @@ def test_ingest_all_isolates_failed_source_and_continues(monkeypatch, make_sessi
             return "failing-fp"
 
         def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
-            ingest.persist.write_session(
+            ingest.persist._write_session(
                 cur,
                 make_session(
                     sid="rolled-back",

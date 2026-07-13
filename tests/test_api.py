@@ -520,6 +520,22 @@ def test_ask_enabled_exposes_routes(client):
     assert client.get("/api/ask/status").status_code == 200
 
 
+def test_status_distinguishes_active_builtin_semantic_index(client):
+    response = client.post(
+        "/api/notes", json={"title": "Status", "text": "semantic status body"}
+    )
+    assert response.status_code == 200
+    status = client.get("/api/status").json()
+    assert status["semantic_pending"] is False
+    assert status["semantic_fingerprint"]
+    assert status["semantic_target_fingerprint"] is None
+    assert status["semantic_generation"] > 0
+    # Historical ``semantic`` means transformer quality; active builtin search
+    # is represented independently by the active fingerprint + pending fields.
+    assert status["semantic"] is False
+    assert status["semantic_active"] is True
+
+
 def test_ask_disabled_by_default_hides_routes(monkeypatch):
     # With the feature flag off (the shipped default) the ask routes are not
     # mounted and the collection-scoped ask is guarded at request time.
@@ -565,6 +581,26 @@ def test_note_create_then_searchable(client):
     detail = client.get(f"/api/sessions/{sid}")
     assert detail.status_code == 200
     assert detail.json()["title"] == "Note"
+
+
+def test_note_write_succeeds_when_semantic_backfill_fails(client, monkeypatch):
+    from mark import embeddings
+
+    monkeypatch.setattr(
+        embeddings,
+        "get_embedder",
+        lambda: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    response = client.post(
+        "/api/notes",
+        json={"title": "Durable", "text": "saved despite embedding failure"},
+    )
+    assert response.status_code == 200
+    sid = response.json()["id"]
+    assert client.get(f"/api/sessions/{sid}").status_code == 200
+    status = client.get("/api/status").json()
+    assert status["semantic_pending"] is True
+    assert status["semantic_error"] == "offline"
 
 
 def test_missing_session_is_404(client):

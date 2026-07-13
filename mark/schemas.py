@@ -102,6 +102,12 @@ class StatusResponse(BaseModel):
     finished_at: str | None = None
     embed_model: str = ""
     semantic: bool = False
+    semantic_active: bool = False
+    semantic_pending: bool = False
+    semantic_generation: int = 0
+    semantic_fingerprint: str | None = None
+    semantic_target_fingerprint: str | None = None
+    semantic_error: str | None = None
     auto_sync: bool = False
     sync_interval: int = 0
     last_ingest: str | None = None

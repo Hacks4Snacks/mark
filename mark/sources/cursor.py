@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
-from ..persist import load_file_signatures, record_file_signature, write_session
+from ..persist import _write_session, load_file_signatures, record_file_signature
 from .base import (
     FENCE_RE,
     URL_RE,
@@ -471,7 +471,7 @@ class CursorSource(WatchedSource):
                         wsmap.get(composer_id, {}),
                         Path(store),
                     )
-                    write_session(cur, session)
+                    _write_session(cur, session)
                     counts["added" if prior is None else "updated"] += 1
                     seen += 1
                     if progress and seen % 25 == 0:

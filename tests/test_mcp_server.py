@@ -87,6 +87,11 @@ def test_list_recent_empty():
 def test_main_initialises_db_then_runs(monkeypatch):
     calls = []
     monkeypatch.setattr(mcp_server.db, "init_db", lambda: calls.append("init"))
+    monkeypatch.setattr(
+        mcp_server.ingest,
+        "ensure_index_ready",
+        lambda **kwargs: calls.append("ready"),
+    )
     monkeypatch.setattr(mcp_server.mcp, "run", lambda: calls.append("run"))
     mcp_server.main()
-    assert calls == ["init", "run"]
+    assert calls == ["init", "ready", "run"]

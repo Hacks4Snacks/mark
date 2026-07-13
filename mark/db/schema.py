@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS embeddings (
     session_id  TEXT NOT NULL,
     model       TEXT NOT NULL,
     dim         INTEGER NOT NULL,
+    fingerprint TEXT,
     vector      BLOB NOT NULL
 );
 

@@ -1,16 +1,29 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
 import threading
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from itertools import pairwise
+from pathlib import Path
 
 import numpy as np
 
 from . import config
 
+INDEX_SCHEMA_VERSION = 1
+HASH_ALGORITHM_VERSION = 1
+TRANSFORMER_ALGORITHM_VERSION = 1
+FINGERPRINT_META_KEY = "embed_fingerprint"
+TARGET_FINGERPRINT_META_KEY = "embed_target_fingerprint"
+GENERATION_META_KEY = "embed_generation"
+
 _lock = threading.Lock()
+_writer_lock = threading.RLock()
+_writer_local = threading.local()
 _embedder: Embedder | None = None
 
 _WORD_RE = re.compile(r"[A-Za-z0-9_]+")
@@ -80,13 +93,39 @@ class Embedder:
     name: str = "builtin-hash"
     dim: int = config.HASH_EMBED_DIM
     kind: str = "builtin"  # 'transformer' | 'builtin'
+    backend: str = "builtin-hash"
 
     def embed(self, texts: Sequence[str]) -> np.ndarray:  # pragma: no cover
         raise NotImplementedError
 
+    @property
+    def algorithm_version(self) -> int:
+        return (
+            HASH_ALGORITHM_VERSION
+            if self.kind == "builtin"
+            else TRANSFORMER_ALGORITHM_VERSION
+        )
+
+    @property
+    def fingerprint(self) -> str:
+        """Stable identity for vectors produced by this embedder contract."""
+        return json.dumps(
+            {
+                "schema": INDEX_SCHEMA_VERSION,
+                "kind": self.kind,
+                "backend": self.backend,
+                "model": self.name,
+                "dim": self.dim,
+                "algorithm": self.algorithm_version,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
 
 class _FastEmbed(Embedder):
     kind = "transformer"
+    backend = "fastembed"
 
     def __init__(self) -> None:
         from fastembed import TextEmbedding  # type: ignore
@@ -111,6 +150,7 @@ class _FastEmbed(Embedder):
 
 class _Model2Vec(Embedder):
     kind = "transformer"
+    backend = "model2vec"
 
     def __init__(self) -> None:
         from model2vec import StaticModel  # type: ignore
@@ -136,6 +176,7 @@ class _HashEmbed(Embedder):
 
     name = "builtin-hash"
     kind = "builtin"
+    backend = "builtin-hash"
 
     def __init__(self, dim: int | None = None) -> None:
         self.dim = dim or config.HASH_EMBED_DIM
@@ -205,6 +246,188 @@ def to_blob(vec: np.ndarray) -> bytes:
 
 def from_blob(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32)
+
+
+def index_state(cur) -> tuple[str | None, int]:
+    rows = {
+        row["key"]: row["value"]
+        for row in cur.execute(
+            "SELECT key, value FROM meta WHERE key IN (?, ?)",
+            (FINGERPRINT_META_KEY, GENERATION_META_KEY),
+        )
+    }
+    try:
+        generation = int(rows.get(GENERATION_META_KEY, "0"))
+    except (TypeError, ValueError):
+        generation = 0
+    return rows.get(FINGERPRINT_META_KEY), generation
+
+
+def set_index_fingerprint(cur, embedder: Embedder) -> None:
+    cur.execute(
+        "INSERT INTO meta(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (FINGERPRINT_META_KEY, embedder.fingerprint),
+    )
+    # Keep the legacy display/status field until API consumers migrate.
+    cur.execute(
+        "INSERT INTO meta(key, value) VALUES('embed_model', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (embedder.name,),
+    )
+
+
+def _set_meta(cur, key: str, value: str) -> None:
+    cur.execute(
+        "INSERT INTO meta(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+
+
+def target_fingerprint(cur) -> str | None:
+    row = cur.execute(
+        "SELECT value FROM meta WHERE key = ?", (TARGET_FINGERPRINT_META_KEY,)
+    ).fetchone()
+    return row["value"] if row else None
+
+
+def index_is_active(cur, embedder: Embedder) -> bool:
+    current, _generation = index_state(cur)
+    return current == embedder.fingerprint
+
+
+def mark_index_dirty(cur) -> None:
+    """Deactivate a complete index in the same transaction as chunk mutation."""
+    current, _generation = index_state(cur)
+    target = target_fingerprint(cur)
+    if current is not None:
+        if target is None:
+            _set_meta(cur, TARGET_FINGERPRINT_META_KEY, current)
+        cur.execute("DELETE FROM meta WHERE key = ?", (FINGERPRINT_META_KEY,))
+        _set_meta(cur, "embed_model", "")
+        bump_generation(cur)
+    _set_meta(cur, "embed_pending", "1")
+
+
+def prepare_index(cur, embedder: Embedder) -> bool:
+    """Prepare an incompatible rebuild without exposing partial new vectors."""
+    current, _generation = index_state(cur)
+    if current == embedder.fingerprint:
+        cur.execute("DELETE FROM meta WHERE key = ?", (TARGET_FINGERPRINT_META_KEY,))
+        set_index_fingerprint(cur, embedder)
+        return False
+    if target_fingerprint(cur) == embedder.fingerprint:
+        stale = cur.execute(
+            "SELECT COUNT(*) FROM embeddings WHERE fingerprint IS NOT ?",
+            (embedder.fingerprint,),
+        ).fetchone()[0]
+        if stale:
+            cur.execute(
+                "DELETE FROM embeddings WHERE fingerprint IS NOT ?",
+                (embedder.fingerprint,),
+            )
+            bump_generation(cur)
+        return False
+    cur.execute("DELETE FROM embeddings")
+    cur.execute("DELETE FROM meta WHERE key = ?", (FINGERPRINT_META_KEY,))
+    _set_meta(cur, TARGET_FINGERPRINT_META_KEY, embedder.fingerprint)
+    _set_meta(cur, "embed_pending", "1")
+    cur.execute(
+        "INSERT INTO meta(key, value) VALUES('embed_model', '') "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    bump_generation(cur)
+    return True
+
+
+def activate_index(cur, embedder: Embedder) -> int:
+    """Publish a fully rebuilt target fingerprint and invalidate readers."""
+    target = target_fingerprint(cur)
+    if target != embedder.fingerprint:
+        raise RuntimeError("semantic target changed during rebuild")
+    incompatible = cur.execute(
+        "SELECT 1 FROM embeddings WHERE fingerprint IS NOT ? OR model != ? "
+        "OR dim != ? OR length(vector) != ? LIMIT 1",
+        (
+            embedder.fingerprint,
+            embedder.name,
+            embedder.dim,
+            embedder.dim * 4,
+        ),
+    ).fetchone()
+    if incompatible is not None:
+        raise RuntimeError("semantic rebuild contains incompatible vectors")
+    missing = cur.execute(
+        "SELECT 1 FROM ("
+        "  SELECT c.id, ROW_NUMBER() OVER "
+        "         (PARTITION BY c.session_id ORDER BY c.id) AS rn "
+        "  FROM chunks c"
+        ") r LEFT JOIN embeddings e ON e.chunk_id = r.id "
+        "AND e.fingerprint = ? AND e.model = ? AND e.dim = ? "
+        "AND length(e.vector) = ? "
+        "WHERE e.chunk_id IS NULL AND r.rn <= ? LIMIT 1",
+        (
+            embedder.fingerprint,
+            embedder.name,
+            embedder.dim,
+            embedder.dim * 4,
+            config.MAX_EMBED_CHUNKS_PER_SESSION,
+        ),
+    ).fetchone()
+    if missing is not None:
+        raise RuntimeError("semantic rebuild is incomplete")
+    set_index_fingerprint(cur, embedder)
+    cur.execute("DELETE FROM meta WHERE key = ?", (TARGET_FINGERPRINT_META_KEY,))
+    _set_meta(cur, "embed_pending", "0")
+    return bump_generation(cur)
+
+
+def bump_generation(cur) -> int:
+    _fingerprint, generation = index_state(cur)
+    generation += 1
+    cur.execute(
+        "INSERT INTO meta(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (GENERATION_META_KEY, str(generation)),
+    )
+    return generation
+
+
+@contextmanager
+def writer_lock() -> Iterator[None]:
+    """Serialize semantic producers across threads and Mark processes."""
+    with _writer_lock:
+        depth = getattr(_writer_local, "depth", 0)
+        if depth:
+            _writer_local.depth = depth + 1
+            try:
+                yield
+            finally:
+                _writer_local.depth -= 1
+            return
+        lock_path = Path(f"{config.DB_PATH}.semantic.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            try:
+                import fcntl
+
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+            except ImportError as exc:  # pragma: no cover - Windows fallback
+                raise RuntimeError(
+                    "cross-process semantic locking unavailable"
+                ) from exc
+            _writer_local.depth = 1
+            yield
+        finally:
+            _writer_local.depth = 0
+            try:
+                import fcntl
+
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
 
 
 class _CrossEncoderReranker:

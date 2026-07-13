@@ -44,6 +44,10 @@ def test_attachment_provenance_columns_exist():
     assert {"storage_kind", "sha256", "capture_version"} <= cols
 
 
+def test_embedding_generation_meta_exists():
+    assert db.get_meta("embed_generation") == "0"
+
+
 def test_meta_round_trip():
     assert db.get_meta("missing") is None
     assert db.get_meta("missing", "fallback") == "fallback"

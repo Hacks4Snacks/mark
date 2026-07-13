@@ -9,7 +9,7 @@ from typing import Any
 
 from .. import attachments as attachment_store
 from .. import config
-from ..persist import load_file_signatures, record_file_signature, write_session
+from ..persist import _write_session, load_file_signatures, record_file_signature
 from .base import (
     FENCE_RE,
     URL_RE,
@@ -600,7 +600,7 @@ class CopilotCliSource(WatchedSource):
                     "extra_files": extra_files,
                     "attachments": attachments,
                 }
-                write_session(cur, session)
+                _write_session(cur, session)
                 record_file_signature(cur, f"cli:{sid}", sig)
                 counts["added" if prior is None else "updated"] += 1
                 seen += 1

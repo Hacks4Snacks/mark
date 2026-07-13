@@ -1,6 +1,22 @@
 from __future__ import annotations
 
+import multiprocessing
+import threading
+
+import pytest
+
 from mark import search, uploads
+
+
+def _hold_semantic_writer_lock(db_path: str, entered, release) -> None:
+    from pathlib import Path
+
+    from mark import config, embeddings
+
+    config.DB_PATH = Path(db_path)
+    with embeddings.writer_lock():
+        entered.set()
+        release.wait(5)
 
 
 def test_write_session_round_trip(make_session, persist_session):
@@ -52,7 +68,7 @@ def test_reindex_preserves_embeddings_for_unchanged_chunks(make_session):
     session = make_session(sid="grow")
     with db.connect() as conn:
         cur = conn.cursor()
-        persist.write_session(cur, session)
+        persist._write_session(cur, session)
         chunks = cur.execute(
             "SELECT id, content FROM chunks WHERE session_id = 'grow'"
         ).fetchall()
@@ -67,7 +83,7 @@ def test_reindex_preserves_embeddings_for_unchanged_chunks(make_session):
         embedded = {c["content"] for c in chunks}
 
         # Re-index the same session (a churn pass) with identical content.
-        persist.write_session(cur, session)
+        persist._write_session(cur, session)
         conn.commit()
         kept = {
             r["content"]
@@ -78,3 +94,411 @@ def test_reindex_preserves_embeddings_for_unchanged_chunks(make_session):
             )
         }
     assert kept == embedded  # every unchanged chunk kept its vector
+
+
+def test_semantic_cache_refreshes_after_same_count_replacement():
+    from mark.repositories import sessions as sessions_repo
+
+    first = uploads.add_note("First", "alphaonly alphaonly")
+    assert first in {r["id"] for r in search.search("alphaonly", mode="semantic")}
+    assert sessions_repo.purge(first) is True
+
+    second = uploads.add_note("Second", "betaonly betaonly")
+    result_ids = {r["id"] for r in search.search("betaonly", mode="semantic")}
+    assert second in result_ids
+    assert first not in result_ids
+
+
+def test_hash_dimension_change_rebuilds_all_vectors(monkeypatch):
+    from mark import db, embeddings, ingest
+
+    first = uploads.add_note("First", "alpha concept")
+    second = uploads.add_note("Second", "beta concept")
+    old_fingerprint = embeddings.get_embedder().fingerprint
+
+    replacement = embeddings._HashEmbed(dim=64)
+    monkeypatch.setattr(embeddings, "_embedder", replacement)
+    embedded = ingest._embed_pending(batch=1)
+
+    with db.cursor() as cur:
+        fingerprint, generation = embeddings.index_state(cur)
+        dims = {r[0] for r in cur.execute("SELECT DISTINCT dim FROM embeddings")}
+        count = cur.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+        target = embeddings.target_fingerprint(cur)
+    assert replacement.name == "builtin-hash"  # same legacy model name
+    assert replacement.fingerprint != old_fingerprint
+    assert fingerprint == replacement.fingerprint
+    assert target is None
+    assert dims == {64}
+    assert count == embedded == 2
+    assert generation > 0
+    assert first in {r["id"] for r in search.search("alpha", mode="semantic")}
+    assert second in {r["id"] for r in search.search("beta", mode="semantic")}
+
+
+def test_backend_identity_changes_fingerprint():
+    from mark import embeddings
+
+    first = embeddings._HashEmbed(dim=32)
+    second = embeddings._HashEmbed(dim=32)
+    second.backend = "alternate-hash"
+    assert first.name == second.name
+    assert first.dim == second.dim
+    assert first.fingerprint != second.fingerprint
+
+
+def test_partial_target_index_is_not_searchable(monkeypatch):
+    from mark import db, embeddings
+
+    uploads.add_note("Existing", "existing semantic content")
+    replacement = embeddings._HashEmbed(dim=48)
+    monkeypatch.setattr(embeddings, "_embedder", replacement)
+
+    with db.transaction() as conn:
+        cur = conn.cursor()
+        assert embeddings.prepare_index(cur, replacement) is True
+        chunk = cur.execute(
+            "SELECT id, session_id, content FROM chunks ORDER BY id LIMIT 1"
+        ).fetchone()
+        vector = replacement.embed([chunk["content"]])[0]
+        cur.execute(
+            "INSERT INTO embeddings(chunk_id, session_id, model, dim, vector) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                chunk["id"],
+                chunk["session_id"],
+                replacement.name,
+                replacement.dim,
+                embeddings.to_blob(vector),
+            ),
+        )
+        embeddings.bump_generation(cur)
+
+    assert search.search("existing", mode="semantic") == []
+    with db.cursor() as cur:
+        assert embeddings.target_fingerprint(cur) == replacement.fingerprint
+        assert not embeddings.index_is_active(cur, replacement)
+
+
+def test_embedding_retry_activates_pending_target(monkeypatch):
+    from mark import db, embeddings, ingest
+
+    uploads.add_note("One", "first retry concept")
+    uploads.add_note("Two", "second retry concept")
+    replacement = embeddings._HashEmbed(dim=40)
+    monkeypatch.setattr(embeddings, "_embedder", replacement)
+
+    with db.transaction() as conn:
+        embeddings.prepare_index(conn.cursor(), replacement)
+    ingest._embed_pending(batch=1)
+
+    with db.cursor() as cur:
+        fingerprint, _generation = embeddings.index_state(cur)
+        pending = cur.execute(
+            "SELECT value FROM meta WHERE key = 'embed_pending'"
+        ).fetchone()[0]
+    assert fingerprint == replacement.fingerprint
+    assert pending == "0"
+    assert {"One", "Two"} <= {
+        r["title"] for r in search.search("retry concept", mode="semantic")
+    }
+
+
+def test_generation_advances_on_preserved_remap_and_purge(make_session, monkeypatch):
+    from mark import db, embeddings, ingest, persist
+    from mark.repositories import sessions as sessions_repo
+
+    session = make_session(sid="generation", user="generation semantic content")
+    with db.transaction() as conn:
+        persist._write_session(conn.cursor(), session)
+    ingest._embed_pending()
+    with db.cursor() as cur:
+        _fingerprint, initial = embeddings.index_state(cur)
+
+    with db.transaction() as conn:
+        persist._write_session(conn.cursor(), session)
+    with db.cursor() as cur:
+        _fingerprint, remapped = embeddings.index_state(cur)
+    assert remapped > initial
+
+    assert sessions_repo.purge("generation") is True
+    with db.cursor() as cur:
+        _fingerprint, purged = embeddings.index_state(cur)
+    assert purged > remapped
+
+
+def test_embedding_failure_keeps_target_pending_and_resumes(make_session, monkeypatch):
+    from mark import db, embeddings, ingest, persist
+
+    session = make_session(
+        sid="pending",
+        user="pending semantic concept",
+    )
+    with db.transaction() as conn:
+        persist._write_session(conn.cursor(), session)
+
+    replacement = embeddings._HashEmbed(dim=44)
+    real_embed = replacement.embed
+
+    def fail(_texts):
+        raise RuntimeError("model unavailable")
+
+    replacement.embed = fail
+    monkeypatch.setattr(embeddings, "_embedder", replacement)
+    assert ingest._try_embed_pending() is False
+    with db.cursor() as cur:
+        assert embeddings.target_fingerprint(cur) == replacement.fingerprint
+        assert not embeddings.index_is_active(cur, replacement)
+        assert db.get_meta("embed_pending") == "1"
+
+    replacement.embed = real_embed
+    assert ingest.ensure_index_ready(initialize=False) is True
+    with db.cursor() as cur:
+        assert embeddings.index_is_active(cur, replacement)
+        assert embeddings.target_fingerprint(cur) is None
+    assert search.search("pending concept", mode="semantic")
+
+
+def test_startup_recovers_missing_vectors_with_stale_pending(
+    make_session, persist_session
+):
+    from mark import db, embeddings, ingest
+
+    persist_session(
+        make_session(sid="stale-pending", user="startup recovery semantic concept")
+    )
+    embedder = embeddings.get_embedder()
+    with db.transaction() as conn:
+        cur = conn.cursor()
+        embeddings.set_index_fingerprint(cur, embedder)
+        cur.execute(
+            "INSERT INTO meta(key, value) VALUES('embed_pending', '0') "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
+    assert ingest.ensure_index_ready(initialize=False) is True
+    assert search.search("startup recovery", mode="semantic")
+
+
+def test_failed_startup_recovery_deactivates_incomplete_index(
+    make_session, persist_session, monkeypatch
+):
+    from mark import db, embeddings, ingest
+
+    persist_session(
+        make_session(sid="incomplete-active", user="incomplete active concept")
+    )
+    embedder = embeddings.get_embedder()
+    with db.transaction() as conn:
+        embeddings.set_index_fingerprint(conn.cursor(), embedder)
+
+    monkeypatch.setattr(
+        embedder,
+        "embed",
+        lambda _texts: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    assert ingest.ensure_index_ready(initialize=False) is False
+    with db.cursor() as cur:
+        assert not embeddings.index_is_active(cur, embedder)
+        assert embeddings.target_fingerprint(cur) == embedder.fingerprint
+    assert search.search("incomplete active", mode="semantic") == []
+
+
+@pytest.mark.parametrize("shape", [(0, 32), (1, 31)])
+def test_malformed_embedding_output_stays_pending(
+    make_session, persist_session, monkeypatch, shape
+):
+    import numpy as np
+
+    from mark import db, embeddings, ingest
+
+    persist_session(make_session(sid="malformed", user="malformed vector concept"))
+    replacement = embeddings._HashEmbed(dim=32)
+    monkeypatch.setattr(embeddings, "_embedder", replacement)
+    monkeypatch.setattr(
+        replacement,
+        "embed",
+        lambda _texts: np.zeros(shape, dtype=np.float32),
+    )
+
+    assert ingest._try_embed_pending() is False
+    with db.cursor() as cur:
+        assert not embeddings.index_is_active(cur, replacement)
+        assert embeddings.target_fingerprint(cur) == replacement.fingerprint
+        assert db.get_meta("embed_pending") == "1"
+        assert cur.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_embedding_output_stays_pending(
+    make_session, persist_session, monkeypatch, value
+):
+    import numpy as np
+
+    from mark import db, embeddings, ingest
+
+    persist_session(make_session(sid="nonfinite", user="nonfinite vector concept"))
+    replacement = embeddings._HashEmbed(dim=32)
+    monkeypatch.setattr(embeddings, "_embedder", replacement)
+    monkeypatch.setattr(
+        replacement,
+        "embed",
+        lambda texts: np.full((len(texts), 32), value, dtype=np.float32),
+    )
+
+    assert ingest._try_embed_pending() is False
+    with db.cursor() as cur:
+        assert not embeddings.index_is_active(cur, replacement)
+        assert db.get_meta("embed_pending") == "1"
+        assert cur.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("model", "dim", "blob"),
+    [
+        ("wrong-model", 32, b"\x00" * 128),
+        ("builtin-hash", 31, b"\x00" * 124),
+        ("builtin-hash", 32, b"\x00" * 4),
+    ],
+)
+def test_startup_repairs_malformed_current_fingerprint_row(
+    make_session, persist_session, model, dim, blob
+):
+    from mark import db, embeddings, ingest
+
+    persist_session(make_session(sid="malformed-row", user="repair malformed row"))
+    embedder = embeddings.get_embedder()
+    with db.transaction() as conn:
+        cur = conn.cursor()
+        chunk = cur.execute(
+            "SELECT id, session_id FROM chunks WHERE session_id = 'malformed-row' "
+            "ORDER BY id LIMIT 1"
+        ).fetchone()
+        cur.execute(
+            "INSERT INTO embeddings"
+            "(chunk_id, session_id, model, dim, fingerprint, vector) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                chunk["id"],
+                chunk["session_id"],
+                model,
+                dim,
+                embedder.fingerprint,
+                blob,
+            ),
+        )
+        embeddings.set_index_fingerprint(cur, embedder)
+        cur.execute(
+            "INSERT INTO meta(key, value) VALUES('embed_pending', '0') "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
+
+    assert ingest.ensure_index_ready(initialize=False) is True
+    with db.cursor() as cur:
+        repaired = cur.execute(
+            "SELECT model, dim, fingerprint, length(vector) size FROM embeddings "
+            "WHERE chunk_id = ?",
+            (chunk["id"],),
+        ).fetchone()
+    assert repaired["model"] == embedder.name
+    assert repaired["dim"] == embedder.dim
+    assert repaired["fingerprint"] == embedder.fingerprint
+    assert repaired["size"] == embedder.dim * 4
+
+
+def test_activation_rejects_changed_target():
+    from mark import db, embeddings
+
+    first = embeddings._HashEmbed(dim=31)
+    second = embeddings._HashEmbed(dim=32)
+    with db.transaction() as conn:
+        cur = conn.cursor()
+        embeddings.prepare_index(cur, first)
+        cur.execute(
+            "UPDATE meta SET value = ? WHERE key = ?",
+            (second.fingerprint, embeddings.TARGET_FINGERPRINT_META_KEY),
+        )
+        with pytest.raises(RuntimeError, match="target changed"):
+            embeddings.activate_index(cur, first)
+
+
+def test_every_embedding_row_has_active_fingerprint():
+    from mark import db, embeddings
+
+    uploads.add_note("Rows", "row fingerprint concept")
+    embedder = embeddings.get_embedder()
+    with db.cursor() as cur:
+        rows = cur.execute("SELECT fingerprint, dim, model FROM embeddings").fetchall()
+    assert rows
+    assert {r["fingerprint"] for r in rows} == {embedder.fingerprint}
+    assert {r["dim"] for r in rows} == {embedder.dim}
+    assert {r["model"] for r in rows} == {embedder.name}
+
+
+def test_writer_lock_serializes_across_processes():
+    from mark import config, embeddings
+
+    ctx = multiprocessing.get_context("spawn")
+    entered = ctx.Event()
+    release = ctx.Event()
+    process = ctx.Process(
+        target=_hold_semantic_writer_lock,
+        args=(str(config.DB_PATH), entered, release),
+    )
+    process.start()
+    assert entered.wait(5)
+
+    acquired = threading.Event()
+
+    def acquire_local():
+        with embeddings.writer_lock():
+            acquired.set()
+
+    thread = threading.Thread(target=acquire_local)
+    thread.start()
+    assert not acquired.wait(0.1)
+    release.set()
+    thread.join(timeout=5)
+    process.join(timeout=5)
+    assert acquired.is_set()
+    assert process.exitcode == 0
+
+
+def test_logical_reset_preserves_monotonic_cache_identity():
+    from mark import db, embeddings
+    from scripts import seed_demo_data
+
+    first = uploads.add_note("Before reset", "reset cache alpha")
+    assert first in {r["id"] for r in search.search("reset cache", mode="semantic")}
+    old_key = search._vec_cache["key"]
+    with db.cursor() as cur:
+        _fingerprint, old_generation = embeddings.index_state(cur)
+
+    with embeddings.writer_lock():
+        conn = db.connect()
+        try:
+            reset_generation = seed_demo_data._reset_database(conn)
+        finally:
+            conn.close()
+    assert reset_generation > old_generation
+
+    second = uploads.add_note("After reset", "reset cache beta")
+    result_ids = {r["id"] for r in search.search("reset cache", mode="semantic")}
+    with db.cursor() as cur:
+        _fingerprint, new_generation = embeddings.index_state(cur)
+    assert second in result_ids
+    assert first not in result_ids
+    assert new_generation > reset_generation
+    assert search._vec_cache["key"] != old_key
+
+
+def test_demo_guard_rejects_real_database_override(tmp_path, monkeypatch):
+    from scripts import seed_demo_data
+
+    home = tmp_path / "home"
+    real = home / ".mark"
+    real.mkdir(parents=True)
+    real_db = real / "mark.db"
+    real_db.write_bytes(b"production")
+    monkeypatch.setattr(seed_demo_data.Path, "home", lambda: home)
+
+    assert seed_demo_data._targets_real_archive(tmp_path / "demo", real_db)
