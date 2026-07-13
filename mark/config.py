@@ -95,6 +95,12 @@ RESUME_COMMAND = os.environ.get("MARK_RESUME_CMD", "copilot --resume {id}")
 AUTO_SYNC = os.environ.get("MARK_AUTO_SYNC", "1") not in ("0", "", "false", "False")
 # Seconds between source-change checks. Lower = faster pickup, slightly more I/O.
 SYNC_INTERVAL = max(5, int(os.environ.get("MARK_SYNC_INTERVAL", "20")))
+# Failed automatic scans retry with capped exponential backoff. Manual re-scans
+# bypass the current deadline but retain rebuild intent until a pass succeeds.
+SYNC_RETRY_BASE = max(0.1, float(os.environ.get("MARK_SYNC_RETRY_BASE", "5")))
+SYNC_RETRY_MAX = max(
+    SYNC_RETRY_BASE, float(os.environ.get("MARK_SYNC_RETRY_MAX", "300"))
+)
 
 # Public list prices in USD per 1M tokens: (input, output, cached_input).
 # Matched by substring against the model name; override the whole table with a

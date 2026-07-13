@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -100,6 +100,12 @@ class StatusResponse(BaseModel):
     last_error: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
+    retry_required: bool = False
+    retry_attempt: int = 0
+    retry_at: str | None = None
+    sync_error: str | None = None
+    sync_worker_alive: bool = False
+    ingest_worker_alive: bool = False
     embed_model: str = ""
     semantic: bool = False
     semantic_active: bool = False
@@ -113,8 +119,11 @@ class StatusResponse(BaseModel):
     last_ingest: str | None = None
     resume_cmd: str = "copilot --resume {id}"
     ask_enabled: bool = False
-    # Only present on the POST /api/reindex response.
-    started: bool | None = None
+
+
+class ReindexStatusResponse(StatusResponse):
+    started: bool
+    admission: Literal["accepted", "covered", "stopping"]
 
 
 class SourceInfo(BaseModel):

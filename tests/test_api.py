@@ -19,6 +19,8 @@ def ingest_coordinator():
         background._last_successful_fingerprint = None
         background._retry_required = False
         background._retry_rebuild = False
+        background._retry_attempt = 0
+        background._retry_at = None
         background._status.update(
             running=False,
             queued=False,
@@ -27,6 +29,10 @@ def ingest_coordinator():
             last_error=None,
             started_at=None,
             finished_at=None,
+            retry_required=False,
+            retry_attempt=0,
+            retry_at=None,
+            sync_error=None,
         )
     yield background
     background.stop()
@@ -301,6 +307,228 @@ def test_ingest_coordinator_retries_failed_unchanged_rebuild(
     assert ingest_coordinator._last_successful_fingerprint == "same"
 
 
+def test_ingest_coordinator_retry_backoff_increases_and_caps(
+    ingest_coordinator, monkeypatch
+):
+    monkeypatch.setattr(ingest_coordinator.config, "AUTO_SYNC", True)
+    monkeypatch.setattr(ingest_coordinator.config, "SYNC_RETRY_BASE", 2.0)
+    monkeypatch.setattr(ingest_coordinator.config, "SYNC_RETRY_MAX", 5.0)
+    monkeypatch.setattr(ingest_coordinator, "_monotonic", lambda: 100.0)
+    monkeypatch.setattr(ingest_coordinator, "_random", lambda: 0.5)
+
+    with ingest_coordinator._state:
+        job = ingest_coordinator._Job(rebuild=True, fingerprint="same")
+        ingest_coordinator._schedule_retry_locked(job)
+        assert ingest_coordinator._retry_attempt == 1
+        assert ingest_coordinator._retry_at == 102.0
+        assert ingest_coordinator._retry_rebuild is True
+
+        ingest_coordinator._schedule_retry_locked(job)
+        assert ingest_coordinator._retry_attempt == 2
+        assert ingest_coordinator._retry_at == 104.0
+
+        ingest_coordinator._schedule_retry_locked(job)
+        assert ingest_coordinator._retry_attempt == 3
+        assert ingest_coordinator._retry_at == 105.0
+        assert ingest_coordinator._status["retry_attempt"] == 3
+
+        ingest_coordinator._clear_retry_locked()
+        assert ingest_coordinator._retry_required is False
+        assert ingest_coordinator._retry_attempt == 0
+        assert ingest_coordinator._retry_at is None
+
+
+def test_ingest_coordinator_manual_retry_bypasses_backoff(
+    ingest_coordinator, monkeypatch
+):
+    entered = threading.Event()
+    release = threading.Event()
+    rebuilds = []
+
+    def fake_ingest_all(*, rebuild, progress):
+        rebuilds.append(rebuild)
+        entered.set()
+        release.wait(2)
+        return {"added": 0, "updated": 0, "skipped": 0}
+
+    monkeypatch.setattr(ingest_coordinator.config, "AUTO_SYNC", True)
+    monkeypatch.setattr(ingest_coordinator.config, "SYNC_RETRY_BASE", 60.0)
+    monkeypatch.setattr(ingest_coordinator.config, "SYNC_RETRY_MAX", 60.0)
+    monkeypatch.setattr(ingest_coordinator, "_random", lambda: 0.5)
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+    with ingest_coordinator._state:
+        ingest_coordinator._schedule_retry_locked(
+            ingest_coordinator._Job(rebuild=True, fingerprint="same")
+        )
+        assert ingest_coordinator._retry_at is not None
+
+    assert ingest_coordinator.start_reindex(fingerprint="same") is True
+    assert entered.wait(2)
+    with ingest_coordinator._state:
+        assert ingest_coordinator._retry_at is None
+        assert ingest_coordinator._retry_required is True
+    release.set()
+    assert ingest_coordinator.wait_for_idle(2)
+    assert rebuilds == [True]
+    assert ingest_coordinator._retry_required is False
+
+
+def test_ingest_coordinator_manual_and_due_retry_admit_one_job(
+    ingest_coordinator, monkeypatch
+):
+    entered = threading.Event()
+    release = threading.Event()
+    barrier = threading.Barrier(3)
+    rebuilds = []
+    accepted = []
+
+    def fake_ingest_all(*, rebuild, progress):
+        rebuilds.append(rebuild)
+        entered.set()
+        release.wait(2)
+        return {"added": 0, "updated": 0, "skipped": 0}
+
+    monkeypatch.setattr(ingest_coordinator.config, "AUTO_SYNC", True)
+    monkeypatch.setattr(ingest_coordinator, "_monotonic", lambda: 100.0)
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+    with ingest_coordinator._state:
+        ingest_coordinator._retry_required = True
+        ingest_coordinator._retry_rebuild = True
+        ingest_coordinator._retry_attempt = 1
+        ingest_coordinator._set_retry_deadline_locked(0)
+
+    def admit_manual():
+        barrier.wait()
+        accepted.append(ingest_coordinator.start_reindex())
+
+    def admit_automatic():
+        barrier.wait()
+        with ingest_coordinator._state:
+            accepted.append(
+                ingest_coordinator._admit_due_retry_locked(
+                    ingest_coordinator.ingest.FingerprintSnapshot("same", {})
+                )
+            )
+
+    callers = [
+        threading.Thread(target=admit_manual),
+        threading.Thread(target=admit_automatic),
+    ]
+    for caller in callers:
+        caller.start()
+    barrier.wait()
+    assert entered.wait(2)
+    for caller in callers:
+        caller.join()
+    release.set()
+    assert ingest_coordinator.wait_for_idle(2)
+    assert accepted.count(True) == 1
+    assert rebuilds == [True]
+    assert ingest_coordinator._pending is None
+
+
+def test_ingest_coordinator_failed_terminal_state_cannot_strand_manual_retry(
+    ingest_coordinator, monkeypatch
+):
+    finishing = threading.Event()
+    release_finish = threading.Event()
+    second_finished = threading.Event()
+    calls = 0
+    admission = []
+    real_finish = ingest_coordinator._finish_job_locked
+
+    def fake_ingest_all(*, rebuild, progress):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "added": 0,
+                "updated": 0,
+                "skipped": 0,
+                "errors": {"source": "offline"},
+            }
+        second_finished.set()
+        return {"added": 0, "updated": 1, "skipped": 0}
+
+    def paused_finish():
+        if calls == 1:
+            finishing.set()
+            release_finish.wait(2)
+        real_finish()
+
+    monkeypatch.setattr(ingest_coordinator.config, "AUTO_SYNC", True)
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+    monkeypatch.setattr(ingest_coordinator, "_finish_job_locked", paused_finish)
+
+    assert ingest_coordinator.start_reindex(fingerprint="same") is True
+    assert finishing.wait(2)
+    requester = threading.Thread(
+        target=lambda: admission.append(
+            ingest_coordinator.request_reindex(fingerprint="same")
+        )
+    )
+    requester.start()
+    assert requester.is_alive()
+    release_finish.set()
+    requester.join(timeout=2)
+    assert not requester.is_alive()
+    assert admission == ["accepted"]
+    assert second_finished.wait(2)
+    assert ingest_coordinator.wait_for_idle(2)
+    assert calls == 2
+    assert ingest_coordinator._retry_required is False
+    assert ingest_coordinator._pending is None
+
+
+def test_ingest_coordinator_automatically_retries_empty_fingerprint(
+    ingest_coordinator, monkeypatch
+):
+    calls = 0
+    recovered = threading.Event()
+
+    def fake_ingest_all(*, rebuild, progress):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "added": 0,
+                "updated": 0,
+                "skipped": 0,
+                "errors": {"semantic_index": "offline"},
+                "fingerprint": "",
+                "fingerprint_complete": True,
+            }
+        recovered.set()
+        return {
+            "added": 0,
+            "updated": 0,
+            "skipped": 0,
+            "errors": {},
+            "fingerprint": "",
+            "fingerprint_complete": True,
+        }
+
+    monkeypatch.setattr(ingest_coordinator.config, "AUTO_SYNC", True)
+    monkeypatch.setattr(ingest_coordinator.config, "SYNC_INTERVAL", 60)
+    monkeypatch.setattr(ingest_coordinator.config, "SYNC_RETRY_BASE", 0.01)
+    monkeypatch.setattr(ingest_coordinator.config, "SYNC_RETRY_MAX", 0.01)
+    monkeypatch.setattr(ingest_coordinator, "_random", lambda: 0.5)
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+    monkeypatch.setattr(
+        ingest_coordinator.ingest,
+        "sources_fingerprint_snapshot",
+        lambda: ingest_coordinator.ingest.FingerprintSnapshot("", {}),
+    )
+
+    ingest_coordinator.start()
+    assert recovered.wait(2)
+    assert ingest_coordinator.wait_for_idle(2)
+    assert calls == 2
+    assert ingest_coordinator._last_successful_fingerprint == ""
+    assert ingest_coordinator._retry_required is False
+    assert ingest_coordinator.status_snapshot()["retry_attempt"] == 0
+
+
 def test_ingest_coordinator_promotes_queued_work_after_rebuild_failure(
     ingest_coordinator, monkeypatch
 ):
@@ -397,6 +625,40 @@ def test_ingest_coordinator_status_tracks_latest_attempt(
     assert succeeded["last_error"] is None
 
 
+def test_ingest_coordinator_records_post_pass_errors_in_result(
+    ingest_coordinator, monkeypatch
+):
+    monkeypatch.setattr(
+        ingest_coordinator.ingest,
+        "ingest_all",
+        lambda **kwargs: {
+            "added": 0,
+            "updated": 0,
+            "skipped": 0,
+            "sources": {"healthy": {"status": "ok"}},
+            "errors": {},
+            "fingerprint": "healthy=A",
+            "fingerprint_complete": True,
+        },
+    )
+    monkeypatch.setattr(
+        ingest_coordinator.ingest,
+        "sources_fingerprint_snapshot",
+        lambda: ingest_coordinator.ingest.FingerprintSnapshot(
+            "healthy=A|broken=!error", {"broken": "offline"}
+        ),
+    )
+
+    assert ingest_coordinator.start_reindex(fingerprint="healthy=A") is True
+    assert ingest_coordinator.wait_for_idle(2)
+    status = ingest_coordinator.status_snapshot()
+    assert status["last_result"]["errors"] == {
+        "broken": "post-pass fingerprint: offline"
+    }
+    assert status["last_error"] == "broken: post-pass fingerprint: offline"
+    assert status["retry_required"] is True
+
+
 def test_ingest_coordinator_stop_joins_active_worker(ingest_coordinator, monkeypatch):
     started = threading.Event()
     release = threading.Event()
@@ -430,6 +692,225 @@ def test_ingest_coordinator_stop_joins_active_worker(ingest_coordinator, monkeyp
     stopper.join()
     assert not timed_out.is_set()
     assert ingest_coordinator._worker is None
+
+
+def test_ingest_coordinator_stop_drops_changed_follow_up(
+    ingest_coordinator, monkeypatch
+):
+    started = threading.Event()
+    release = threading.Event()
+    restarted = threading.Event()
+    calls = 0
+
+    def fake_ingest_all(*, rebuild, progress):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            release.wait(2)
+            return {
+                "added": 0,
+                "updated": 0,
+                "skipped": 0,
+                "errors": {},
+                "fingerprint": "A",
+                "fingerprint_complete": True,
+            }
+        restarted.set()
+        return {"added": 0, "updated": 0, "skipped": 0}
+
+    monkeypatch.setattr(ingest_coordinator.config, "AUTO_SYNC", False)
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+    monkeypatch.setattr(
+        ingest_coordinator.ingest,
+        "sources_fingerprint_snapshot",
+        lambda: ingest_coordinator.ingest.FingerprintSnapshot("B", {}),
+    )
+    assert ingest_coordinator.start_reindex(fingerprint="A") is True
+    assert started.wait(2)
+
+    stopped = threading.Event()
+    stopper = threading.Thread(
+        target=lambda: (ingest_coordinator.stop(), stopped.set())
+    )
+    stopper.start()
+    with ingest_coordinator._state:
+        assert ingest_coordinator._state.wait_for(
+            lambda: ingest_coordinator._stopping, timeout=2
+        )
+    release.set()
+    assert stopped.wait(2)
+    stopper.join()
+    status = ingest_coordinator.status_snapshot()
+    assert ingest_coordinator._pending is None
+    assert ingest_coordinator._active is None
+    assert status["queued"] is False
+    assert status["running"] is False
+
+    ingest_coordinator.start()
+    assert restarted.wait(2)
+    assert ingest_coordinator.wait_for_idle(2)
+    assert calls == 2
+
+
+def test_ingest_coordinator_stop_during_initial_fingerprint_is_prompt(
+    ingest_coordinator, monkeypatch
+):
+    fingerprint_started = threading.Event()
+    release_fingerprint = threading.Event()
+    stopped = threading.Event()
+    ingest_calls = 0
+
+    def fingerprint():
+        fingerprint_started.set()
+        release_fingerprint.wait(2)
+        return ingest_coordinator.ingest.FingerprintSnapshot("stable", {})
+
+    def fake_ingest_all(**kwargs):
+        nonlocal ingest_calls
+        ingest_calls += 1
+        return {"added": 0, "updated": 0, "skipped": 0}
+
+    monkeypatch.setattr(ingest_coordinator.config, "AUTO_SYNC", True)
+    monkeypatch.setattr(ingest_coordinator.config, "SYNC_INTERVAL", 60)
+    monkeypatch.setattr(
+        ingest_coordinator.ingest, "sources_fingerprint_snapshot", fingerprint
+    )
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+
+    ingest_coordinator.start()
+    assert fingerprint_started.wait(2)
+    stopper = threading.Thread(
+        target=lambda: (ingest_coordinator.stop(), stopped.set())
+    )
+    stopper.start()
+    with ingest_coordinator._state:
+        assert ingest_coordinator._state.wait_for(
+            lambda: ingest_coordinator._stopping, timeout=2
+        )
+    release_fingerprint.set()
+    assert stopped.wait(2)
+    stopper.join()
+    assert ingest_calls == 0
+
+
+def test_ingest_coordinator_sync_monitor_recovers_after_failure(
+    ingest_coordinator, monkeypatch
+):
+    fingerprint_failed = threading.Event()
+    recovered = threading.Event()
+    observed_errors = []
+    calls = 0
+
+    def fingerprint():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            fingerprint_failed.set()
+            raise RuntimeError("monitor unavailable")
+        return ingest_coordinator.ingest.FingerprintSnapshot("stable", {})
+
+    def fake_ingest_all(**kwargs):
+        recovered.set()
+        return {"added": 0, "updated": 0, "skipped": 0}
+
+    monkeypatch.setattr(ingest_coordinator.config, "AUTO_SYNC", True)
+    monkeypatch.setattr(ingest_coordinator.config, "SYNC_INTERVAL", 60)
+    monkeypatch.setattr(ingest_coordinator.config, "SYNC_RETRY_BASE", 0.01)
+    monkeypatch.setattr(ingest_coordinator.config, "SYNC_RETRY_MAX", 0.01)
+    monkeypatch.setattr(ingest_coordinator, "_random", lambda: 0.5)
+    real_wait_for = ingest_coordinator._state.wait_for
+
+    def record_wait_for(predicate, timeout=None):
+        if ingest_coordinator._status["sync_error"]:
+            observed_errors.append(ingest_coordinator._status["sync_error"])
+        return real_wait_for(predicate, timeout)
+
+    monkeypatch.setattr(ingest_coordinator._state, "wait_for", record_wait_for)
+    monkeypatch.setattr(
+        ingest_coordinator.ingest, "sources_fingerprint_snapshot", fingerprint
+    )
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+
+    ingest_coordinator.start()
+    assert fingerprint_failed.wait(2)
+    assert recovered.wait(2)
+    assert ingest_coordinator.wait_for_idle(2)
+    status = ingest_coordinator.status_snapshot()
+    assert "monitor unavailable" in observed_errors
+    assert status["sync_error"] is None
+    assert status["sync_worker_alive"] is True
+
+
+def test_ingest_coordinator_sync_monitor_backoff_resets_after_success(
+    ingest_coordinator, monkeypatch
+):
+    calls = 0
+    attempts = []
+    second_failure = threading.Event()
+    recovered = threading.Event()
+
+    def fingerprint():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("first failure")
+        if calls == 3:
+            second_failure.set()
+            raise RuntimeError("second failure")
+        return ingest_coordinator.ingest.FingerprintSnapshot("stable", {})
+
+    def retry_delay(attempt):
+        attempts.append(attempt)
+        return 0.01
+
+    def fake_ingest_all(**kwargs):
+        if calls >= 4:
+            recovered.set()
+        return {"added": 0, "updated": 0, "skipped": 0}
+
+    monkeypatch.setattr(ingest_coordinator.config, "AUTO_SYNC", True)
+    monkeypatch.setattr(ingest_coordinator.config, "SYNC_INTERVAL", 0.01)
+    monkeypatch.setattr(ingest_coordinator, "_retry_delay", retry_delay)
+    monkeypatch.setattr(
+        ingest_coordinator.ingest, "sources_fingerprint_snapshot", fingerprint
+    )
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+
+    ingest_coordinator.start()
+    assert second_failure.wait(2)
+    assert recovered.wait(2)
+    assert ingest_coordinator.wait_for_idle(2)
+    assert attempts[:2] == [1, 1]
+
+
+def test_ingest_coordinator_auto_sync_off_waits_for_manual_retry(
+    ingest_coordinator, monkeypatch
+):
+    calls = 0
+
+    def fake_ingest_all(*, rebuild, progress):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("offline")
+        return {"added": 0, "updated": 1, "skipped": 0}
+
+    monkeypatch.setattr(ingest_coordinator.config, "AUTO_SYNC", False)
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", fake_ingest_all)
+
+    ingest_coordinator.start()
+    assert ingest_coordinator.wait_for_idle(2)
+    assert calls == 1
+    assert ingest_coordinator._sync_worker is None
+    status = ingest_coordinator.status_snapshot()
+    assert status["retry_required"] is True
+    assert status["retry_at"] is None
+
+    assert ingest_coordinator.start_reindex() is True
+    assert ingest_coordinator.wait_for_idle(2)
+    assert calls == 2
+    assert ingest_coordinator.status_snapshot()["retry_required"] is False
 
 
 def test_ingest_coordinator_auto_sync_stops_and_restarts(
@@ -511,6 +992,33 @@ def test_read_endpoints_ok(client):
         "/api/ask/status",
     ]:
         assert client.get(path).status_code == 200, path
+
+
+def test_status_and_reindex_response_contract(client, monkeypatch):
+    from mark import background
+
+    status = client.get("/api/status")
+    assert status.status_code == 200
+    body = status.json()
+    assert "started" not in body
+    assert isinstance(body["sync_worker_alive"], bool)
+    assert isinstance(body["ingest_worker_alive"], bool)
+
+    monkeypatch.setattr(background, "request_reindex", lambda **kwargs: "accepted")
+    response = client.post("/api/reindex")
+    assert response.status_code == 200
+    assert response.json()["started"] is True
+    assert response.json()["admission"] == "accepted"
+
+    # Admission is authoritative even when covered work finishes before the
+    # separate status snapshot is serialized.
+    monkeypatch.setattr(background, "request_reindex", lambda **kwargs: "covered")
+    response = client.post("/api/reindex")
+    assert response.status_code == 200
+    assert response.json()["started"] is False
+    assert response.json()["admission"] == "covered"
+    assert response.json()["running"] is False
+    assert response.json()["queued"] is False
 
 
 def test_ask_enabled_exposes_routes(client):

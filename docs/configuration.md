@@ -24,10 +24,12 @@ Precedence for source settings is: built-in default < `sources.toml` < env vars.
 
 ## Syncing
 
-| Variable             | Default | Purpose                                          |
-|----------------------|---------|--------------------------------------------------|
-| `MARK_AUTO_SYNC`     | `1`     | `0` disables background syncing (manual ⟳ only)  |
-| `MARK_SYNC_INTERVAL` | `20`    | Seconds between source-change checks (minimum 5) |
+| Variable               | Default | Purpose                                                        |
+|------------------------|---------|----------------------------------------------------------------|
+| `MARK_AUTO_SYNC`       | `1`     | `0` keeps the startup scan but disables polling and auto-retry |
+| `MARK_SYNC_INTERVAL`   | `20`    | Seconds between source-change checks (minimum 5)               |
+| `MARK_SYNC_RETRY_BASE` | `5`     | Initial automatic retry delay in seconds                       |
+| `MARK_SYNC_RETRY_MAX`  | `300`   | Maximum automatic retry delay in seconds                       |
 
 ## Sources
 

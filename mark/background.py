@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import random
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, Literal
 
 from . import config, ingest
 
@@ -17,6 +20,10 @@ _status: dict[str, Any] = {
     "last_error": None,
     "started_at": None,
     "finished_at": None,
+    "retry_required": False,
+    "retry_attempt": 0,
+    "retry_at": None,
+    "sync_error": None,
 }
 
 _sync_stop = threading.Event()
@@ -28,6 +35,14 @@ _stopping = False
 _last_successful_fingerprint: str | None = None
 _retry_required = False
 _retry_rebuild = False
+_retry_attempt = 0
+_retry_at: float | None = None
+
+_monotonic = time.monotonic
+_random = random.random
+_UNSET = object()
+
+AdmissionResult = Literal["accepted", "covered", "stopping"]
 
 
 @dataclass
@@ -41,10 +56,63 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _retry_delay(attempt: int) -> float:
+    exponent = min(max(0, attempt - 1), 30)
+    delay = min(config.SYNC_RETRY_BASE, config.SYNC_RETRY_MAX)
+    delay = min(config.SYNC_RETRY_MAX, delay * (2**exponent))
+    # One process owns one coordinator, but light jitter still avoids many Mark
+    # instances retrying a shared unavailable dependency on the same boundary.
+    return min(config.SYNC_RETRY_MAX, delay * (0.9 + 0.2 * _random()))
+
+
+def _set_retry_deadline_locked(delay: float | None) -> None:
+    global _retry_at
+    if delay is None:
+        _retry_at = None
+        _status["retry_at"] = None
+        return
+    _retry_at = _monotonic() + delay
+    _status["retry_at"] = (
+        datetime.now(timezone.utc) + timedelta(seconds=delay)
+    ).isoformat()
+
+
+def _schedule_retry_locked(job: _Job) -> None:
+    """Retain failed work and schedule its next automatic attempt."""
+    global _retry_attempt, _retry_rebuild, _retry_required
+    if _stopping:
+        return
+    _retry_required = True
+    _retry_rebuild = _retry_rebuild or job.rebuild
+    _retry_attempt += 1
+    _status["retry_required"] = True
+    _status["retry_attempt"] = _retry_attempt
+    _set_retry_deadline_locked(
+        _retry_delay(_retry_attempt) if config.AUTO_SYNC else None
+    )
+
+
+def _clear_retry_locked() -> None:
+    global _retry_attempt, _retry_rebuild, _retry_required
+    _retry_required = False
+    _retry_rebuild = False
+    _retry_attempt = 0
+    _status["retry_required"] = False
+    _status["retry_attempt"] = 0
+    _set_retry_deadline_locked(None)
+
+
 def status_snapshot() -> dict[str, Any]:
     """Thread-safe copy of the current indexing status."""
     with _state:
-        return dict(_status)
+        snapshot = dict(_status)
+        snapshot["sync_worker_alive"] = bool(
+            _sync_worker is not None and _sync_worker.is_alive()
+        )
+        snapshot["ingest_worker_alive"] = bool(
+            _worker is not None and _worker.is_alive()
+        )
+        return snapshot
 
 
 def wait_for_idle(timeout: float | None = None) -> bool:
@@ -64,9 +132,20 @@ def _ensure_worker_locked() -> None:
     _worker.start()
 
 
+def _finish_job_locked() -> None:
+    """Publish one terminal attempt atomically with active-state cleanup."""
+    global _active
+    _active = None
+    _status.update(
+        running=False,
+        queued=_pending is not None,
+        finished_at=_now(),
+    )
+    _state.notify_all()
+
+
 def _worker_loop() -> None:
     global _active, _last_successful_fingerprint, _pending
-    global _retry_rebuild, _retry_required
     while True:
         with _state:
             while _pending is None and not _stopping:
@@ -74,8 +153,11 @@ def _worker_loop() -> None:
             if _stopping:
                 return
             job = _pending
+            assert job is not None
             _pending = None
             job.rebuild = job.rebuild or _retry_rebuild
+            if _retry_required:
+                _set_retry_deadline_locked(None)
             _active = job
             _status.update(
                 running=True,
@@ -105,6 +187,8 @@ def _worker_loop() -> None:
             if post_snapshot is not None:
                 for key, value in post_snapshot.errors.items():
                     errors.setdefault(key, f"post-pass fingerprint: {value}")
+            result = dict(result)
+            result["errors"] = errors
             fingerprint_matches = bool(
                 post_snapshot is not None
                 and observed_complete
@@ -130,20 +214,19 @@ def _worker_loop() -> None:
                     )
                     if acknowledged is not None:
                         _last_successful_fingerprint = acknowledged
-                    _retry_required = False
-                    _retry_rebuild = False
+                    _clear_retry_locked()
                 elif errors:
-                    _retry_required = True
-                    _retry_rebuild = _retry_rebuild or job.rebuild
+                    _schedule_retry_locked(job)
                 elif post_snapshot is not None:
                     # Sources changed during the pass. The latest snapshot
                     # supersedes any older queued fingerprint.
                     follow_up = _Job(
-                        fingerprint=post_snapshot.value or None,
+                        fingerprint=post_snapshot.value,
                         fingerprint_complete=not post_snapshot.errors,
                     )
-                    _merge_pending_locked(follow_up)
-                    msg += "; source changed, follow-up queued"
+                    if not _stopping:
+                        _merge_pending_locked(follow_up)
+                        msg += "; source changed, follow-up queued"
                 error = "; ".join(f"{key}: {value}" for key, value in errors.items())
                 _status.update(
                     last_result=result,
@@ -152,25 +235,17 @@ def _worker_loop() -> None:
                         None if complete_success else (error or _status["last_error"])
                     ),
                 )
+                _finish_job_locked()
         except Exception as exc:  # surface, don't crash the server
             with _state:
-                _retry_required = True
-                _retry_rebuild = _retry_rebuild or job.rebuild
+                _schedule_retry_locked(job)
                 error = str(exc)
                 _status.update(
                     last_result=None,
                     message=f"Error: {error}",
                     last_error=error,
                 )
-        finally:
-            with _state:
-                _active = None
-                _status.update(
-                    running=False,
-                    queued=_pending is not None,
-                    finished_at=_now(),
-                )
-                _state.notify_all()
+                _finish_job_locked()
 
 
 def _merge_pending_locked(requested: _Job) -> bool:
@@ -201,45 +276,102 @@ def _merge_pending_locked(requested: _Job) -> bool:
     return accepted
 
 
+def _admit_locked(requested: _Job, *, manual: bool) -> AdmissionResult:
+    """Atomically admit or merge work; caller holds ``_state``."""
+    if _stopping:
+        return "stopping"
+    requested.rebuild = requested.rebuild or _retry_rebuild
+    if _pending is not None:
+        accepted = _merge_pending_locked(requested)
+        if manual:
+            _set_retry_deadline_locked(None)
+        _ensure_worker_locked()
+        _state.notify_all()
+        return "accepted" if accepted else "covered"
+    if _active is not None:
+        active_covers_rebuild = _active.rebuild or not requested.rebuild
+        active_covers_fingerprint = requested.fingerprint is None or (
+            requested.fingerprint == _active.fingerprint
+            and (_active.fingerprint_complete or not requested.fingerprint_complete)
+        )
+        if active_covers_rebuild and active_covers_fingerprint:
+            if manual:
+                _set_retry_deadline_locked(None)
+            return "covered"
+    _merge_pending_locked(requested)
+    if manual:
+        _set_retry_deadline_locked(None)
+    _ensure_worker_locked()
+    _state.notify_all()
+    return "accepted"
+
+
+def _admit_due_retry_locked(snapshot: ingest.FingerprintSnapshot) -> bool:
+    """Claim and admit a due automatic retry in one critical section."""
+    if (
+        not _retry_required
+        or _retry_at is None
+        or _monotonic() < _retry_at
+        or _stopping
+    ):
+        return False
+    _set_retry_deadline_locked(None)
+    return (
+        _admit_locked(
+            _Job(
+                rebuild=_retry_rebuild,
+                fingerprint=snapshot.value,
+                fingerprint_complete=not snapshot.errors,
+            ),
+            manual=False,
+        )
+        == "accepted"
+    )
+
+
+def request_reindex(
+    rebuild: bool = False,
+    *,
+    fingerprint: str | None = None,
+    fingerprint_complete: bool = True,
+    manual: bool = True,
+) -> AdmissionResult:
+    """Atomically classify a reindex request for API and coordinator callers."""
+    with _state:
+        return _admit_locked(
+            _Job(
+                rebuild=rebuild,
+                fingerprint=fingerprint,
+                fingerprint_complete=fingerprint_complete,
+            ),
+            manual=manual,
+        )
+
+
 def start_reindex(
     rebuild: bool = False,
     *,
     fingerprint: str | None = None,
     fingerprint_complete: bool = True,
+    manual: bool = True,
 ) -> bool:
     """Queue one reindex, coalescing requests while the single worker is busy.
 
     Returns ``True`` when this request added or upgraded pending work and
     ``False`` when an equivalent request was already queued.
     """
-    with _state:
-        if _stopping:
-            return False
-        requested = _Job(
-            rebuild=rebuild or _retry_rebuild,
+    return (
+        request_reindex(
+            rebuild=rebuild,
             fingerprint=fingerprint,
             fingerprint_complete=fingerprint_complete,
+            manual=manual,
         )
-        if _pending is not None:
-            accepted = _merge_pending_locked(requested)
-            _ensure_worker_locked()
-            _state.notify_all()
-            return accepted
-        if _active is not None:
-            active_covers_rebuild = _active.rebuild or not requested.rebuild
-            active_covers_fingerprint = requested.fingerprint is None or (
-                requested.fingerprint == _active.fingerprint
-                and (_active.fingerprint_complete or not requested.fingerprint_complete)
-            )
-            if active_covers_rebuild and active_covers_fingerprint:
-                return False
-        _merge_pending_locked(requested)
-        _ensure_worker_locked()
-        _state.notify_all()
-        return True
+        == "accepted"
+    )
 
 
-def _sync_loop() -> None:
+def _sync_loop(on_success: Callable[[], None] | None = None) -> None:
     """Import on startup, then re-import once a source change settles.
 
     Cheap source fingerprints are compared every ``SYNC_INTERVAL`` seconds, but a
@@ -250,34 +382,99 @@ def _sync_loop() -> None:
     continuously while it is in use — which is what spiked CPU before.
     """
     snapshot = ingest.sources_fingerprint_snapshot()
-    start_reindex(
-        rebuild=False,
-        fingerprint=snapshot.value or None,
-        fingerprint_complete=not snapshot.errors,
-    )
+    if on_success is not None:
+        on_success()
+    with _state:
+        if _stopping or _sync_stop.is_set():
+            return
+        _status["sync_error"] = None
+        _admit_locked(
+            _Job(
+                fingerprint=snapshot.value,
+                fingerprint_complete=not snapshot.errors,
+            ),
+            manual=False,
+        )
 
-    pending_fp: str | None = None
-    while not _sync_stop.wait(config.SYNC_INTERVAL):
+    pending_fp: object | str = _UNSET
+    while True:
+        with _state:
+            if _stopping or _sync_stop.is_set():
+                return
+            delay = float(config.SYNC_INTERVAL)
+            if _retry_required and _retry_at is not None:
+                delay = min(delay, max(0.0, _retry_at - _monotonic()))
+            _state.wait(timeout=delay)
+            if _stopping or _sync_stop.is_set():
+                return
         snapshot = ingest.sources_fingerprint_snapshot()
+        if on_success is not None:
+            on_success()
         fp = snapshot.value
         with _state:
+            if _stopping or _sync_stop.is_set():
+                return
+            _status["sync_error"] = None
             synced_fp = _last_successful_fingerprint
             retry_required = _retry_required
-            retry_rebuild = _retry_rebuild
-        if not fp or (fp == synced_fp and not retry_required):
-            pending_fp = None  # nothing new (or settled back to the synced state)
+            retry_due = _retry_at is not None and _monotonic() >= _retry_at
+            if retry_due:
+                _admit_due_retry_locked(snapshot)
+        if retry_due:
+            pending_fp = _UNSET
             continue
-        if fp == pending_fp:
+        if retry_required:
+            pending_fp = _UNSET
+            continue
+        if fp == synced_fp:
+            pending_fp = _UNSET
+            continue
+        if pending_fp is not _UNSET and fp == pending_fp:
             # Changed, then held steady for a full interval: the source has
             # paused or ended, so an incremental import is now worthwhile.
             pending_fp = None
-            start_reindex(
-                rebuild=retry_rebuild,
-                fingerprint=fp,
-                fingerprint_complete=not snapshot.errors,
-            )
+            with _state:
+                _admit_locked(
+                    _Job(
+                        fingerprint=fp,
+                        fingerprint_complete=not snapshot.errors,
+                    ),
+                    manual=False,
+                )
         else:
             pending_fp = fp  # newly changed (or still changing) — let it settle
+
+
+def _supervised_sync_loop() -> None:
+    """Restart coordinator-level sync failures with bounded delay."""
+    attempt = 0
+
+    def mark_success() -> None:
+        nonlocal attempt
+        attempt = 0
+        with _state:
+            _status["sync_error"] = None
+
+    while True:
+        try:
+            _sync_loop(mark_success)
+            return
+        except Exception as exc:
+            with _state:
+                if _stopping or _sync_stop.is_set():
+                    return
+                attempt += 1
+                delay = _retry_delay(attempt)
+                error = str(exc)
+                _status.update(
+                    sync_error=error,
+                    message=f"Sync monitor error: {error}; retrying",
+                )
+                _state.notify_all()
+                if _state.wait_for(
+                    lambda: _stopping or _sync_stop.is_set(), timeout=delay
+                ):
+                    return
 
 
 def start() -> None:
@@ -289,16 +486,18 @@ def start() -> None:
         _sync_stop.clear()
         if config.AUTO_SYNC:
             if _sync_worker is None or not _sync_worker.is_alive():
-                _sync_worker = threading.Thread(target=_sync_loop, name="mark-sync")
+                _sync_worker = threading.Thread(
+                    target=_supervised_sync_loop, name="mark-sync"
+                )
                 _sync_worker.start()
         else:
             # Auto-sync off: still import once on startup so new sessions appear.
-            start_reindex(rebuild=False)
+            start_reindex(rebuild=False, manual=False)
 
 
 def stop() -> None:
     """Stop accepting work and join both background threads before returning."""
-    global _pending, _stopping, _sync_worker, _worker
+    global _active, _pending, _stopping, _sync_worker, _worker
     with _lifecycle_lock:
         _sync_stop.set()
         with _state:
@@ -311,5 +510,10 @@ def stop() -> None:
         if _worker is not None and _worker is not threading.current_thread():
             _worker.join()
         with _state:
+            _pending = None
+            _active = None
+            _clear_retry_locked()
+            _status.update(running=False, queued=False, sync_error=None)
             _sync_worker = None
             _worker = None
+            _state.notify_all()

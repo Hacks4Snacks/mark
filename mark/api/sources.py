@@ -7,7 +7,7 @@ from fastapi import APIRouter
 
 from .. import background, config, db, ingest
 from ..repositories import stats as stats_repo
-from ..schemas import SourceInfo, StatusResponse
+from ..schemas import ReindexStatusResponse, SourceInfo, StatusResponse
 
 router = APIRouter()
 
@@ -77,9 +77,10 @@ def api_sources() -> list[dict[str, Any]]:
     return out
 
 
-@router.post("/api/reindex", response_model=StatusResponse)
+@router.post("/api/reindex", response_model=ReindexStatusResponse)
 def api_reindex(rebuild: bool = False) -> dict[str, Any]:
-    started = background.start_reindex(rebuild=rebuild)
+    admission = background.request_reindex(rebuild=rebuild)
     st = _status_payload()
-    st["started"] = started
+    st["started"] = admission == "accepted"
+    st["admission"] = admission
     return st
