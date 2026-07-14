@@ -5,6 +5,18 @@ from pathlib import Path
 
 import pytest
 
+from scripts.package_smoke import verify_web_assets
+
+
+def test_all_referenced_web_assets_are_served(client):
+    from mark import config
+
+    checked = verify_web_assets(client, config.WEB_DIR)
+
+    assert "/fonts/inter-400.woff2" in checked
+    assert "/icons/og.png" in checked
+    assert "/js/views/detail.js" in checked
+
 
 def test_app_lifespan_defers_semantic_repair_until_after_readiness(monkeypatch):
     from fastapi.testclient import TestClient
