@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from . import db, embeddings, visibility
+from . import config, db, embeddings, ingest, visibility
 
 _RRF_K = 60
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
@@ -331,7 +331,6 @@ def _semantic_session_ranking(query: str, allowed_sessions: set[str]) -> list[st
 
 
 def _vector_matrix():
-    embedder = embeddings.get_embedder()
     with _vec_lock:
         ids: list[int] = []
         sessions: list[str] = []
@@ -341,6 +340,12 @@ def _vector_matrix():
             conn.execute("BEGIN")
             cur = conn.cursor()
             fingerprint, generation = embeddings.index_state(cur)
+            if not fingerprint or not ingest.semantic_verified():
+                key = f"inactive:{generation}"
+                matrix = np.zeros((0, 0), dtype=np.float32)
+                _vec_cache.update(key=key, ids=ids, sessions=sessions, matrix=matrix)
+                return ids, sessions, matrix
+            embedder = embeddings.get_embedder()
             key = f"{embedder.fingerprint}:{generation}"
             if _vec_cache["key"] == key:
                 return (
@@ -844,7 +849,121 @@ def facets() -> dict[str, Any]:
     }
 
 
-def get_session(session_id: str) -> dict[str, Any] | None:
+def _session_turns(
+    cur,
+    session_id: str,
+    *,
+    offset: int = 0,
+    limit: int | None = None,
+    defer_above: int | None = None,
+) -> list[dict[str, Any]]:
+    if defer_above is None:
+        fields = "user_message, assistant_response, thinking"
+        params: list[Any] = [session_id]
+    else:
+        length_expr = (
+            "length(CAST(COALESCE(user_message, '') AS BLOB)) + "
+            "length(CAST(COALESCE(assistant_response, '') AS BLOB)) + "
+            "length(CAST(COALESCE(thinking, '') AS BLOB))"
+        )
+        fields = (
+            f"CASE WHEN {length_expr} <= ? THEN user_message END AS user_message, "
+            f"CASE WHEN {length_expr} <= ? THEN assistant_response END "
+            "AS assistant_response, "
+            f"CASE WHEN {length_expr} <= ? THEN thinking END AS thinking, "
+            f"{length_expr} AS content_chars"
+        )
+        params = [defer_above, defer_above, defer_above, session_id]
+    sql = (
+        f"SELECT turn_index, {fields}, tools, timestamp FROM turns "
+        "WHERE session_id = ? ORDER BY turn_index"
+    )
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params.extend((limit, offset))
+    return [dict(row) for row in cur.execute(sql, params).fetchall()]
+
+
+def get_session_turns(
+    session_id: str,
+    *,
+    offset: int = 0,
+    limit: int | None = None,
+    defer_above: int | None = None,
+) -> list[dict[str, Any]]:
+    with db.cursor() as cur:
+        return _session_turns(
+            cur,
+            session_id,
+            offset=offset,
+            limit=limit,
+            defer_above=defer_above,
+        )
+
+
+def get_session_turn(session_id: str, turn_index: int) -> dict[str, Any] | None:
+    with db.cursor() as cur:
+        row = cur.execute(
+            "SELECT turn_index, user_message, assistant_response, thinking, tools, "
+            "timestamp FROM turns WHERE session_id = ? AND turn_index = ?",
+            (session_id, turn_index),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_session_files(
+    session_id: str, *, offset: int = 0, limit: int
+) -> list[dict[str, Any]]:
+    with db.cursor() as cur:
+        return [
+            dict(row)
+            for row in cur.execute(
+                "SELECT file_path, tool_name, turn_index FROM session_files "
+                "WHERE session_id = ? ORDER BY turn_index, file_path LIMIT ? OFFSET ?",
+                (session_id, limit, offset),
+            ).fetchall()
+        ]
+
+
+def get_session_refs(
+    session_id: str, *, offset: int = 0, limit: int
+) -> list[dict[str, Any]]:
+    with db.cursor() as cur:
+        return [
+            dict(row)
+            for row in cur.execute(
+                "SELECT ref_type, ref_value, turn_index FROM session_refs "
+                "WHERE session_id = ? AND ref_type = 'url' "
+                "ORDER BY turn_index, ref_value LIMIT ? OFFSET ?",
+                (session_id, limit, offset),
+            ).fetchall()
+        ]
+
+
+def get_session_attachments(
+    session_id: str, *, offset: int = 0, limit: int
+) -> list[dict[str, Any]]:
+    with db.cursor() as cur:
+        return [
+            dict(row)
+            for row in cur.execute(
+                "SELECT id, filename, stored_path, mime, size_bytes, NULL AS content, "
+                "storage_kind, sha256, capture_version FROM documents "
+                "WHERE session_id = ? AND kind = 'attachment' "
+                "ORDER BY filename, id LIMIT ? OFFSET ?",
+                (session_id, limit, offset),
+            ).fetchall()
+        ]
+
+
+def get_session(
+    session_id: str,
+    *,
+    turns_offset: int = 0,
+    turns_limit: int | None = None,
+    defer_turns_above: int | None = None,
+    defer_document_above: int | None = None,
+) -> dict[str, Any] | None:
     with db.cursor() as cur:
         srow = cur.execute(
             "SELECT * FROM sessions WHERE id = ?", (session_id,)
@@ -852,26 +971,28 @@ def get_session(session_id: str) -> dict[str, Any] | None:
         if not srow:
             return None
         session = dict(srow)
-        turns = [
-            dict(r)
-            for r in cur.execute(
-                "SELECT turn_index, user_message, assistant_response, thinking, tools, timestamp "
-                "FROM turns WHERE session_id = ? ORDER BY turn_index",
-                (session_id,),
-            ).fetchall()
-        ]
+        turns = _session_turns(
+            cur,
+            session_id,
+            offset=turns_offset,
+            limit=turns_limit,
+            defer_above=defer_turns_above,
+        )
         files = [
             dict(r)
             for r in cur.execute(
-                "SELECT file_path, tool_name, turn_index FROM session_files WHERE session_id = ? ORDER BY turn_index",
-                (session_id,),
+                "SELECT file_path, tool_name, turn_index FROM session_files "
+                "WHERE session_id = ? ORDER BY turn_index, file_path LIMIT ?",
+                (session_id, config.DETAIL_FILE_LIMIT),
             ).fetchall()
         ]
         refs = [
             dict(r)
             for r in cur.execute(
-                "SELECT ref_type, ref_value, turn_index FROM session_refs WHERE session_id = ?",
-                (session_id,),
+                "SELECT ref_type, ref_value, turn_index FROM session_refs "
+                "WHERE session_id = ? AND ref_type = 'url' "
+                "ORDER BY turn_index, ref_value LIMIT ?",
+                (session_id, config.DETAIL_LINK_LIMIT),
             ).fetchall()
         ]
         tag_rows = cur.execute(
@@ -881,20 +1002,42 @@ def get_session(session_id: str) -> dict[str, Any] | None:
         ).fetchall()
         tags = [r["tag"] for r in tag_rows]
         manual_tags = [r["tag"] for r in tag_rows if r["manual"]]
-        doc = cur.execute(
-            "SELECT kind, filename, mime, size_bytes, content FROM documents "
-            "WHERE session_id = ? AND kind != 'attachment'",
-            (session_id,),
-        ).fetchone()
+        if defer_document_above is None:
+            doc = cur.execute(
+                "SELECT kind, filename, mime, size_bytes, content, "
+                "length(CAST(COALESCE(content, '') AS BLOB)) AS content_chars "
+                "FROM documents "
+                "WHERE session_id = ? AND kind != 'attachment'",
+                (session_id,),
+            ).fetchone()
+        else:
+            doc = cur.execute(
+                "SELECT kind, filename, mime, size_bytes, "
+                "CASE WHEN length(CAST(COALESCE(content, '') AS BLOB)) <= ? "
+                "THEN content END AS content, "
+                "length(CAST(COALESCE(content, '') AS BLOB)) AS content_chars "
+                "FROM documents WHERE session_id = ? AND kind != 'attachment'",
+                (defer_document_above, session_id),
+            ).fetchone()
         attachments = [
             dict(r)
             for r in cur.execute(
-                "SELECT id, filename, stored_path, mime, size_bytes, content, "
+                "SELECT id, filename, stored_path, mime, size_bytes, NULL AS content, "
                 "storage_kind, sha256, capture_version FROM documents "
-                "WHERE session_id = ? AND kind = 'attachment' ORDER BY filename",
-                (session_id,),
+                "WHERE session_id = ? AND kind = 'attachment' "
+                "ORDER BY filename, id LIMIT ?",
+                (session_id, config.DETAIL_ATTACHMENT_LIMIT),
             ).fetchall()
         ]
+        counts = cur.execute(
+            "SELECT "
+            "(SELECT COUNT(*) FROM session_files WHERE session_id = ?) files_total, "
+            "(SELECT COUNT(*) FROM session_refs "
+            " WHERE session_id = ? AND ref_type = 'url') refs_total, "
+            "(SELECT COUNT(*) FROM documents "
+            " WHERE session_id = ? AND kind = 'attachment') attachments_total",
+            (session_id, session_id, session_id),
+        ).fetchone()
     session["turns"] = turns
     session["files"] = files
     session["refs"] = refs
@@ -902,6 +1045,9 @@ def get_session(session_id: str) -> dict[str, Any] | None:
     session["manual_tags"] = manual_tags
     session["document"] = dict(doc) if doc else None
     session["attachments"] = attachments
+    session["files_total"] = int(counts["files_total"])
+    session["refs_total"] = int(counts["refs_total"])
+    session["attachments_total"] = int(counts["attachments_total"])
     return session
 
 
@@ -933,7 +1079,14 @@ def related_sessions(session_id: str, limit: int = 8) -> list[dict[str, Any]]:
             best[sid] = v
     if not best:
         return []
-    ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+    visible_ids = visibility.filter_visible(best)
+    ranked = sorted(
+        ((sid, score) for sid, score in best.items() if sid in visible_ids),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )[:limit]
+    if not ranked:
+        return []
     order = [sid for sid, _ in ranked]
 
     vclause, vparams = visibility.sql_where()

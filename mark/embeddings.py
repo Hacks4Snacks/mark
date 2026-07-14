@@ -138,13 +138,22 @@ class _FastEmbed(Embedder):
             threads=config.EMBED_THREADS or None,
         )
         # Probe dimensionality once.
-        probe = next(iter(self._model.embed(["dimension probe"])))
+        probe = next(
+            iter(
+                self._model.embed(
+                    ["dimension probe"], batch_size=config.EMBED_BATCH_SIZE
+                )
+            )
+        )
         self.dim = int(np.asarray(probe).shape[-1])
 
     def embed(self, texts: Sequence[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
-        vecs = np.asarray(list(self._model.embed(list(texts))), dtype=np.float32)
+        vecs = np.asarray(
+            list(self._model.embed(list(texts), batch_size=config.EMBED_BATCH_SIZE)),
+            dtype=np.float32,
+        )
         return _normalize(vecs)
 
 

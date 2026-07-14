@@ -19,6 +19,37 @@ def exists(session_id: str) -> bool:
         )
 
 
+def turn_count(session_id: str) -> int:
+    with db.cursor() as cur:
+        row = cur.execute(
+            "SELECT COUNT(*) AS turn_count FROM turns WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    return int(row["turn_count"] or 0) if row else 0
+
+
+def _child_count(session_id: str, table: str, predicate: str = "") -> int:
+    with db.cursor() as cur:
+        row = cur.execute(
+            f"SELECT COUNT(*) AS child_count FROM {table} "
+            f"WHERE session_id = ?{predicate}",
+            (session_id,),
+        ).fetchone()
+    return int(row["child_count"] or 0) if row else 0
+
+
+def file_count(session_id: str) -> int:
+    return _child_count(session_id, "session_files")
+
+
+def ref_count(session_id: str) -> int:
+    return _child_count(session_id, "session_refs", " AND ref_type = 'url'")
+
+
+def attachment_count(session_id: str) -> int:
+    return _child_count(session_id, "documents", " AND kind = 'attachment'")
+
+
 def set_hidden(session_id: str, hidden: bool) -> bool:
     """Hide or unhide a session; returns ``False`` if no such session exists.
 
@@ -79,6 +110,16 @@ def get_attachment(session_id: str, doc_id: int) -> dict | None:
             "storage_kind, sha256, capture_version "
             "FROM documents WHERE id = ? AND session_id = ? AND kind = 'attachment'",
             (doc_id, session_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_document(session_id: str) -> dict | None:
+    with db.cursor() as cur:
+        row = cur.execute(
+            "SELECT kind, filename, mime, size_bytes, content FROM documents "
+            "WHERE session_id = ? AND kind != 'attachment'",
+            (session_id,),
         ).fetchone()
     return dict(row) if row else None
 

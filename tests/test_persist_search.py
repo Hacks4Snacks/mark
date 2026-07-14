@@ -409,6 +409,144 @@ def test_embedding_failure_keeps_target_pending_and_resumes(make_session, monkey
     assert search.search("pending concept", mode="semantic")
 
 
+def test_embedding_batches_are_bounded(make_session, persist_session, monkeypatch):
+    from mark import config, embeddings, ingest
+
+    for index in range(7):
+        persist_session(
+            make_session(
+                sid=f"batch-{index}",
+                user=f"bounded batch concept {index}",
+            )
+        )
+    embedder = embeddings.get_embedder()
+    real_embed = embedder.embed
+    batch_sizes = []
+
+    def record_batch(texts):
+        batch_sizes.append(len(texts))
+        return real_embed(texts)
+
+    monkeypatch.setattr(config, "EMBED_BATCH_SIZE", 3)
+    monkeypatch.setattr(embedder, "embed", record_batch)
+
+    assert ingest._embed_pending() == 14
+    assert batch_sizes == [3, 3, 3, 3, 2]
+
+
+def test_embedding_resume_keeps_completed_batches(
+    make_session, persist_session, monkeypatch
+):
+    from mark import config, db, embeddings, ingest
+
+    for index in range(4):
+        persist_session(make_session(sid=f"resume-{index}"))
+    embedder = embeddings.get_embedder()
+    real_embed = embedder.embed
+    calls = 0
+
+    def fail_second_batch(texts):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("second batch failed")
+        return real_embed(texts)
+
+    monkeypatch.setattr(config, "EMBED_BATCH_SIZE", 3)
+    monkeypatch.setattr(embedder, "embed", fail_second_batch)
+
+    assert ingest._try_embed_pending() is False
+    with db.cursor() as cur:
+        assert cur.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0] == 3
+    monkeypatch.setattr(embedder, "embed", real_embed)
+
+    assert ingest._embed_pending() == 5
+    with db.cursor() as cur:
+        assert cur.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0] == 8
+        assert embeddings.index_is_active(cur, embedder)
+
+
+def test_fastembed_passes_configured_batch_to_backend(monkeypatch):
+    import numpy as np
+
+    from mark import config, embeddings
+
+    calls = []
+
+    class FakeModel:
+        def embed(self, texts, *, batch_size):
+            calls.append((list(texts), batch_size))
+            return [np.ones(4, dtype=np.float32) for _ in texts]
+
+    embedder = embeddings._FastEmbed.__new__(embeddings._FastEmbed)
+    embedder.dim = 4
+    embedder._model = FakeModel()
+    monkeypatch.setattr(config, "EMBED_BATCH_SIZE", 11)
+
+    vectors = embedder.embed(["one", "two"])
+
+    assert vectors.shape == (2, 4)
+    assert calls == [(["one", "two"], 11)]
+
+
+def test_hybrid_search_skips_model_while_semantic_index_is_inactive(
+    make_session, persist_session, monkeypatch
+):
+    from mark import embeddings, search
+
+    persist_session(
+        make_session(
+            sid="keyword-during-repair",
+            user="keyword remains available during semantic repair",
+        )
+    )
+    monkeypatch.setattr(
+        embeddings,
+        "get_embedder",
+        lambda: (_ for _ in ()).throw(AssertionError("model loaded by hybrid search")),
+    )
+
+    results = search.search("keyword remains available", mode="hybrid")
+
+    assert [result["id"] for result in results] == ["keyword-during-repair"]
+
+
+def test_stale_persisted_index_is_unverified_until_background_repair(
+    make_session, persist_session, monkeypatch
+):
+    from mark import db, embeddings, ingest, search
+
+    persist_session(
+        make_session(
+            sid="stale-runtime",
+            user="stale runtime keyword remains searchable",
+        )
+    )
+    with db.transaction() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO meta(key, value) VALUES('embed_fingerprint', 'stale') "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
+        cur.execute(
+            "INSERT INTO meta(key, value) VALUES('embed_model', 'stale-model') "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
+    ingest.mark_semantic_unverified()
+    monkeypatch.setattr(
+        embeddings,
+        "get_embedder",
+        lambda: (_ for _ in ()).throw(AssertionError("request loaded stale model")),
+    )
+
+    status = ingest.semantic_status()
+    results = search.search("stale runtime keyword", mode="hybrid")
+
+    assert status["active"] is False
+    assert status["pending"] is True
+    assert [result["id"] for result in results] == ["stale-runtime"]
+
+
 def test_startup_recovers_missing_vectors_with_stale_pending(
     make_session, persist_session
 ):

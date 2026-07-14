@@ -1448,6 +1448,137 @@ def test_upload_failure_removes_staged_file(monkeypatch):
     assert not list(config.UPLOADS_DIR.glob("*"))
 
 
+def test_upload_text_extraction_is_bounded(monkeypatch):
+    from mark import config, uploads
+
+    monkeypatch.setattr(config, "MAX_EXTRACTED_TEXT_CHARS", 32)
+
+    assert uploads._extract_text("large.txt", b"x" * 1_000) == "x" * 32
+
+
+def test_pdf_extraction_including_separators_is_bounded(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from mark import config, uploads
+
+    monkeypatch.setattr(config, "MAX_EXTRACTED_TEXT_CHARS", 5)
+
+    def page(text):
+        def extract_text(*, visitor_text):
+            visitor_text(text, None, None, None, None)
+            return text
+
+        return SimpleNamespace(extract_text=extract_text)
+
+    fake_reader = lambda stream: SimpleNamespace(  # noqa: E731
+        pages=[page("abc"), page("def")]
+    )
+    monkeypatch.setitem(sys.modules, "pypdf", SimpleNamespace(PdfReader=fake_reader))
+
+    assert uploads._extract_text("large.pdf", b"pdf") == "abc\nd"
+
+
+def test_pdf_extraction_stops_at_page_limit(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from mark import config, uploads
+
+    calls = []
+
+    def page(text):
+        def extract_text(*, visitor_text):
+            calls.append(text)
+            visitor_text(text, None, None, None, None)
+            return text
+
+        return SimpleNamespace(extract_text=extract_text)
+
+    monkeypatch.setattr(config, "MAX_PDF_PAGES", 1)
+    monkeypatch.setitem(
+        sys.modules,
+        "pypdf",
+        SimpleNamespace(
+            PdfReader=lambda stream: SimpleNamespace(pages=[page("a"), page("b")])
+        ),
+    )
+
+    assert uploads._extract_text("pages.pdf", b"pdf") == "a"
+    assert calls == ["a"]
+
+
+def test_pdf_extraction_runs_in_spawned_bounded_worker(tmp_path):
+    from pypdf import PdfWriter
+
+    from mark import uploads
+
+    pdf = tmp_path / "blank.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    with pdf.open("wb") as stream:
+        writer.write(stream)
+
+    ok, content = uploads._extract_pdf_file_result(pdf)
+
+    assert ok is True
+    assert content == ""
+
+
+def test_pdf_worker_fails_closed_above_memory_limit(tmp_path, monkeypatch):
+    from pypdf import PdfWriter
+
+    from mark import config, uploads
+
+    pdf = tmp_path / "blank.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    with pdf.open("wb") as stream:
+        writer.write(stream)
+    monkeypatch.setattr(
+        uploads,
+        "_process_rss_bytes",
+        lambda pid: config.PDF_EXTRACT_MEMORY_BYTES + 1,
+    )
+
+    ok, content = uploads._extract_pdf_file_result(pdf)
+
+    assert ok is False
+    assert content == ""
+
+
+def test_pdf_worker_checks_memory_after_result(tmp_path, monkeypatch):
+    import os
+
+    from pypdf import PdfWriter
+
+    from mark import uploads
+
+    pdf = tmp_path / "blank.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    with pdf.open("wb") as stream:
+        writer.write(stream)
+    checked_pids = []
+
+    def reject_completed_result(pid):
+        os.kill(pid, 0)
+        checked_pids.append(pid)
+        return False
+
+    monkeypatch.setattr(
+        uploads,
+        "_pdf_result_within_memory",
+        reject_completed_result,
+    )
+
+    ok, content = uploads._extract_pdf_file_result(pdf)
+
+    assert checked_pids
+    assert ok is False
+    assert content == ""
+
+
 def test_inline_attachment_requires_supported_exact_provenance(monkeypatch):
     import hashlib
 

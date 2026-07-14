@@ -48,9 +48,21 @@ Precedence for source settings is: built-in default < `sources.toml` < env vars.
 |-------------------------------------|--------------------------|-----------------------------------------------------------------------|
 | `MARK_EMBED_MODEL`                  | `BAAI/bge-small-en-v1.5` | fastembed model id (when the `semantic` extra is installed)           |
 | `MARK_EMBED_THREADS`                | a quarter, max 4         | CPU cap for the transformer backend; `0` uses all cores (fastest)     |
+| `MARK_EMBED_BATCH_SIZE`             | `16`                     | Documents per embedding inference batch; lower values use less memory |
 | `MARK_HASH_DIM`                     | `1024`                   | Dimension of the built-in offline hashing vectorizer fallback         |
 | `MARK_MAX_CHUNK_CHARS`              | `2000`                   | Window size for splitting long turns into search chunks               |
 | `MARK_MAX_EMBED_CHUNKS_PER_SESSION` | `40`                     | Cap on *embedded* chunks per session (keyword/FTS indexes all chunks) |
+
+## Conversation detail
+
+| Variable                        | Default   | Purpose                                                              |
+|---------------------------------|-----------|----------------------------------------------------------------------|
+| `MARK_DETAIL_TURN_PAGE_SIZE`    | `20`      | Turns rendered in the initial detail response and each added page    |
+| `MARK_DETAIL_INLINE_TURN_CHARS` | `250000`  | Larger turns are rendered only after **Load turn** is selected       |
+| `MARK_DETAIL_SUMMARY_CHARS`     | `2000`    | Maximum summary characters returned by the conversation detail API   |
+| `MARK_DETAIL_FILE_LIMIT`        | `40`      | File references returned per detail metadata page                    |
+| `MARK_DETAIL_LINK_LIMIT`        | `25`      | URL references returned per detail metadata page                     |
+| `MARK_DETAIL_ATTACHMENT_LIMIT`  | `100`     | Attachment metadata rows returned per page before lazy body loading   |
 
 ## Cost & usage
 
@@ -101,6 +113,10 @@ answer tokens must be smaller than the configured context ceiling.
 | Variable                    | Default   | Purpose                                                           |
 |-----------------------------|-----------|-------------------------------------------------------------------|
 | `MARK_MAX_UPLOAD_BYTES`     | `25 MiB`  | Largest file accepted via **Add**                                 |
+| `MARK_MAX_EXTRACTED_TEXT_CHARS` | `5000000` | Maximum extracted text retained from an uploaded file            |
+| `MARK_MAX_PDF_PAGES`        | `1000`    | Maximum pages inspected while extracting an uploaded PDF          |
+| `MARK_PDF_EXTRACT_TIMEOUT`  | `30`      | Maximum seconds allowed for isolated PDF extraction                |
+| `MARK_PDF_EXTRACT_MEMORY_BYTES` | `512 MiB` | Memory ceiling for the isolated PDF extraction process          |
 | `MARK_MAX_ATTACHMENT_BYTES` | `512 KiB` | Largest agent-created file snapshotted for later viewing/download |
 
 See [Managing your archive](managing-your-archive.md).

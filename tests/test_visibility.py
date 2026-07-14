@@ -213,6 +213,52 @@ def test_disabled_adapter_excluded_from_snippet_library(
     assert "go" not in {row["language"] for row in snippets_repo.languages()}
 
 
+def test_related_sessions_filters_hidden_candidates_before_limit(
+    make_session, persist_session, monkeypatch
+):
+    import numpy as np
+
+    origin = _persist(make_session, persist_session, sid="related-origin")
+    hidden = _persist(make_session, persist_session, sid="related-hidden")
+    visible = _persist(make_session, persist_session, sid="related-visible")
+    sessions_repo.set_hidden(hidden, True)
+    monkeypatch.setattr(
+        search,
+        "_vector_matrix",
+        lambda: (
+            [1, 2, 3],
+            [origin, hidden, visible],
+            np.asarray([[1.0, 0.0], [1.0, 0.0], [0.8, 0.6]], dtype=np.float32),
+        ),
+    )
+
+    assert [row["id"] for row in search.related_sessions(origin, limit=1)] == [visible]
+
+
+def test_related_sessions_filters_disabled_candidates_before_limit(
+    make_session, persist_session, monkeypatch
+):
+    import numpy as np
+
+    origin = _persist(make_session, persist_session, sid="related-origin")
+    disabled_session = make_session(sid="related-disabled", source="myagent")
+    disabled_session["source_adapter"] = "cline"
+    persist_session(disabled_session)
+    visible = _persist(make_session, persist_session, sid="related-visible")
+    monkeypatch.setenv("MARK_SOURCE_CLINE_ENABLED", "0")
+    monkeypatch.setattr(
+        search,
+        "_vector_matrix",
+        lambda: (
+            [1, 2, 3],
+            [origin, "related-disabled", visible],
+            np.asarray([[1.0, 0.0], [1.0, 0.0], [0.8, 0.6]], dtype=np.float32),
+        ),
+    )
+
+    assert [row["id"] for row in search.related_sessions(origin, limit=1)] == [visible]
+
+
 # ---------- API surface ----------
 
 

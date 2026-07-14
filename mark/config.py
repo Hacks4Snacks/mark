@@ -293,6 +293,10 @@ def _default_embed_threads() -> int:
 EMBED_THREADS = _env_int(
     "MARK_EMBED_THREADS", _default_embed_threads(), minimum=0, maximum=1024
 )
+# Bound the documents held by one inference call. Transformer workspace memory
+# scales with both token length and batch size, so CPU thread limits alone do
+# not protect a large first-run index from exhausting container memory.
+EMBED_BATCH_SIZE = _env_int("MARK_EMBED_BATCH_SIZE", 16, minimum=1, maximum=256)
 
 # Max characters per search chunk (the window size used to split long turns).
 CHUNK_OVERLAP_CHARS = 200
@@ -317,6 +321,33 @@ MAX_UPLOAD_BYTES = _env_int(
 MAX_NOTE_TITLE_CHARS = 200
 MAX_NOTE_TEXT_CHARS = 2_000_000
 MAX_RENDER_TEXT_CHARS = 2_000_000
+DETAIL_TURN_PAGE_SIZE = _env_int(
+    "MARK_DETAIL_TURN_PAGE_SIZE", 20, minimum=1, maximum=100
+)
+DETAIL_INLINE_TURN_CHARS = _env_int(
+    "MARK_DETAIL_INLINE_TURN_CHARS", 250_000, minimum=1_000, maximum=10_000_000
+)
+DETAIL_SUMMARY_CHARS = _env_int(
+    "MARK_DETAIL_SUMMARY_CHARS", 2_000, minimum=100, maximum=100_000
+)
+DETAIL_FILE_LIMIT = _env_int("MARK_DETAIL_FILE_LIMIT", 40, minimum=1, maximum=1_000)
+DETAIL_LINK_LIMIT = _env_int("MARK_DETAIL_LINK_LIMIT", 25, minimum=1, maximum=1_000)
+DETAIL_ATTACHMENT_LIMIT = _env_int(
+    "MARK_DETAIL_ATTACHMENT_LIMIT", 100, minimum=1, maximum=1_000
+)
+MAX_EXTRACTED_TEXT_CHARS = _env_int(
+    "MARK_MAX_EXTRACTED_TEXT_CHARS", 5_000_000, minimum=1_000, maximum=100_000_000
+)
+MAX_PDF_PAGES = _env_int("MARK_MAX_PDF_PAGES", 1_000, minimum=1, maximum=100_000)
+PDF_EXTRACT_TIMEOUT = _env_float(
+    "MARK_PDF_EXTRACT_TIMEOUT", 30, minimum=1, maximum=3_600
+)
+PDF_EXTRACT_MEMORY_BYTES = _env_int(
+    "MARK_PDF_EXTRACT_MEMORY_BYTES",
+    512 * 1024 * 1024,
+    minimum=64 * 1024 * 1024,
+    maximum=8 * 1024**3,
+)
 MAX_ASK_QUESTION_CHARS = 2_000
 MAX_ASK_SESSION_LIMIT = 1_000
 MAX_COLLECTION_NAME_CHARS = 80

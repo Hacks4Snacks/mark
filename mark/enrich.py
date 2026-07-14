@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from . import embeddings
+from . import config, embeddings
 
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
@@ -224,7 +224,10 @@ def _candidates(text: str, max_candidates: int = 30) -> list[tuple[str, float]]:
     filt = [
         w
         for w in words
-        if w and w not in _STOP and len(w) > 2 and not w.replace(".", "").isdigit()
+        if w
+        and w not in _STOP
+        and 2 < len(w) <= config.MAX_TAG_CHARS
+        and not w.replace(".", "").isdigit()
     ]
     unigrams = Counter(filt)
     bigrams = Counter(f"{a} {b}" for a, b in pairwise(filt))

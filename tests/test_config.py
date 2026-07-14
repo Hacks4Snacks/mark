@@ -32,6 +32,9 @@ def _import_config(**env: str) -> subprocess.CompletedProcess[str]:
         ("MARK_SYNC_RETRY_BASE", "nan"),
         ("MARK_SYNC_RETRY_MAX", "inf"),
         ("MARK_SYNC_RETRY_BASE", "-inf"),
+        ("MARK_MAX_PDF_PAGES", "0"),
+        ("MARK_PDF_EXTRACT_TIMEOUT", "nan"),
+        ("MARK_PDF_EXTRACT_MEMORY_BYTES", "1"),
     ],
 )
 def test_numeric_env_settings_reject_invalid_values(name, value):
@@ -78,3 +81,11 @@ def test_embed_threads_zero_is_valid():
     result = _import_config(MARK_EMBED_THREADS="0")
 
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("value", ["0", "257"])
+def test_embed_batch_size_is_bounded(value):
+    result = _import_config(MARK_EMBED_BATCH_SIZE=value)
+
+    assert result.returncode != 0
+    assert "MARK_EMBED_BATCH_SIZE" in result.stderr

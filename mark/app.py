@@ -5,8 +5,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 
-from . import background, config, db, ingest
+from . import background, config, db
 from .api import build_api_router
 
 
@@ -14,8 +15,7 @@ from .api import build_api_router
 async def lifespan(_: FastAPI):
     config.validate()
     db.init_db()
-    ingest.ensure_index_ready(initialize=False)
-    background.start()
+    background.start(wait_for_http=True)
     try:
         yield
     finally:
@@ -34,6 +34,14 @@ def create_app() -> FastAPI:
         # for revalidation instead: the ETag makes it a cheap 304 when nothing
         # changed, and reloads pick up new builds automatically.
         response = await call_next(request)
+        prior_background = response.background
+
+        async def after_response() -> None:
+            if prior_background is not None:
+                await prior_background()
+            background.mark_http_ready()
+
+        response.background = BackgroundTask(after_response)
         path = request.url.path
         if request.method in ("GET", "HEAD") and not path.startswith("/api/"):
             response.headers.setdefault("Cache-Control", "no-cache")

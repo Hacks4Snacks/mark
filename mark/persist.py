@@ -287,12 +287,17 @@ def _write_session(cur, session: dict[str, Any]) -> None:
             (sid, mt["tag"], mt["score"]),
         )
     for tag, score in tags:
+        tag = " ".join(tag.strip().lower().split())[: config.MAX_TAG_CHARS]
+        if not tag:
+            continue
         cur.execute(
             "INSERT OR IGNORE INTO tags(session_id, tag, score) VALUES (?,?,?)",
             (sid, tag, score),
         )
 
-    tag_text = " ".join([mt["tag"] for mt in manual_tags] + [t for t, _ in tags])
+    tag_text = " ".join(
+        [mt["tag"] for mt in manual_tags] + [t[: config.MAX_TAG_CHARS] for t, _ in tags]
+    )
     for chunk_id, content in chunk_rows:
         cur.execute(
             "INSERT INTO search_index(content, title, tags, chunk_id, session_id, source_type, turn_index) "

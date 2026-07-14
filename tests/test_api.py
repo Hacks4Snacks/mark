@@ -6,6 +6,73 @@ from pathlib import Path
 import pytest
 
 
+def test_app_lifespan_defers_semantic_repair_until_after_readiness(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from mark import background, db, ingest
+    from mark.app import create_app
+
+    calls = []
+    monkeypatch.setattr(
+        ingest,
+        "ensure_index_ready",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("semantic repair ran during lifespan")
+        ),
+    )
+    monkeypatch.setattr(
+        background,
+        "start",
+        lambda **kwargs: calls.append(("start", kwargs)),
+    )
+    monkeypatch.setattr(background, "stop", lambda: calls.append("stop"))
+    monkeypatch.setattr(background, "mark_http_ready", lambda: calls.append("ready"))
+
+    with TestClient(create_app()) as client:
+        assert client.get("/api/status").status_code == 200
+        assert db.get_meta("embed_pending") is None
+        assert calls == [("start", {"wait_for_http": True}), "ready"]
+    assert calls == [("start", {"wait_for_http": True}), "ready", "stop"]
+
+
+def test_first_http_response_releases_startup_worker(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from mark import background
+    from mark.app import create_app
+
+    started = threading.Event()
+    release = threading.Event()
+    monkeypatch.setattr(background.config, "AUTO_SYNC", False)
+
+    def ingest_all(**kwargs):
+        started.set()
+        assert release.wait(2)
+        return {
+            "added": 0,
+            "updated": 0,
+            "skipped": 0,
+            "errors": {},
+            "fingerprint": "",
+            "fingerprint_complete": True,
+        }
+
+    monkeypatch.setattr(background.ingest, "ingest_all", ingest_all)
+    monkeypatch.setattr(background.ingest, "semantic_repair_needed", lambda: False)
+    monkeypatch.setattr(
+        background.ingest,
+        "sources_fingerprint_snapshot",
+        lambda: background.ingest.FingerprintSnapshot("", {}),
+    )
+
+    with TestClient(create_app()) as app_client:
+        assert not started.is_set()
+        assert app_client.get("/api/status").status_code == 200
+        assert started.wait(2)
+        release.set()
+        assert background.wait_for_idle(2)
+
+
 @pytest.fixture
 def ingest_coordinator():
     """Reset the module-level coordinator around each direct state-machine test."""
@@ -19,6 +86,7 @@ def ingest_coordinator():
         background._last_successful_fingerprint = None
         background._retry_required = False
         background._retry_rebuild = False
+        background._retry_repair_semantic = False
         background._retry_attempt = 0
         background._retry_at = None
         background._status.update(
@@ -913,6 +981,96 @@ def test_ingest_coordinator_auto_sync_off_waits_for_manual_retry(
     assert ingest_coordinator.status_snapshot()["retry_required"] is False
 
 
+def test_ingest_coordinator_runs_startup_semantic_repair_in_worker(
+    ingest_coordinator, monkeypatch
+):
+    repair_started = threading.Event()
+    release_repair = threading.Event()
+
+    monkeypatch.setattr(ingest_coordinator.config, "AUTO_SYNC", False)
+    monkeypatch.setattr(
+        ingest_coordinator.ingest,
+        "ingest_all",
+        lambda **kwargs: {
+            "added": 0,
+            "updated": 0,
+            "skipped": 0,
+            "errors": {},
+            "fingerprint": "stable",
+            "fingerprint_complete": True,
+        },
+    )
+    monkeypatch.setattr(
+        ingest_coordinator.ingest,
+        "sources_fingerprint_snapshot",
+        lambda: ingest_coordinator.ingest.FingerprintSnapshot("stable", {}),
+    )
+    monkeypatch.setattr(
+        ingest_coordinator.ingest, "semantic_repair_needed", lambda: True
+    )
+
+    def repair(progress, *, initialize):
+        assert initialize is False
+        repair_started.set()
+        assert release_repair.wait(2)
+        return True
+
+    monkeypatch.setattr(ingest_coordinator.ingest, "ensure_index_ready", repair)
+
+    ingest_coordinator.start()
+    assert repair_started.wait(2)
+    assert ingest_coordinator.status_snapshot()["running"] is True
+    release_repair.set()
+    assert ingest_coordinator.wait_for_idle(2)
+    assert ingest_coordinator.status_snapshot()["last_error"] is None
+
+
+def test_ingest_coordinator_retry_preserves_semantic_repair(
+    ingest_coordinator, monkeypatch
+):
+    calls = 0
+    repairs = 0
+
+    def ingest_all(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("initial source failure")
+        return {
+            "added": 0,
+            "updated": 0,
+            "skipped": 0,
+            "errors": {},
+            "fingerprint": "stable",
+            "fingerprint_complete": True,
+        }
+
+    def repair(*args, **kwargs):
+        nonlocal repairs
+        repairs += 1
+        return True
+
+    monkeypatch.setattr(ingest_coordinator.config, "AUTO_SYNC", False)
+    monkeypatch.setattr(ingest_coordinator.ingest, "ingest_all", ingest_all)
+    monkeypatch.setattr(
+        ingest_coordinator.ingest, "semantic_repair_needed", lambda: True
+    )
+    monkeypatch.setattr(ingest_coordinator.ingest, "ensure_index_ready", repair)
+    monkeypatch.setattr(
+        ingest_coordinator.ingest,
+        "sources_fingerprint_snapshot",
+        lambda: ingest_coordinator.ingest.FingerprintSnapshot("stable", {}),
+    )
+
+    ingest_coordinator.start()
+    assert ingest_coordinator.wait_for_idle(2)
+    assert ingest_coordinator._retry_repair_semantic is True
+    assert ingest_coordinator.start_reindex() is True
+    assert ingest_coordinator.wait_for_idle(2)
+    assert repairs == 1
+    assert ingest_coordinator._retry_repair_semantic is False
+
+
 def test_ingest_coordinator_auto_sync_stops_and_restarts(
     ingest_coordinator, monkeypatch
 ):
@@ -1028,20 +1186,15 @@ def test_ask_enabled_exposes_routes(client):
     assert client.get("/api/ask/status").status_code == 200
 
 
-def test_status_distinguishes_active_builtin_semantic_index(client):
+def test_api_note_returns_before_semantic_backfill(client):
     response = client.post(
         "/api/notes", json={"title": "Status", "text": "semantic status body"}
     )
     assert response.status_code == 200
     status = client.get("/api/status").json()
-    assert status["semantic_pending"] is False
-    assert status["semantic_fingerprint"]
-    assert status["semantic_target_fingerprint"] is None
-    assert status["semantic_generation"] > 0
-    # Historical ``semantic`` means transformer quality; active builtin search
-    # is represented independently by the active fingerprint + pending fields.
+    assert status["semantic_pending"] is True
+    assert status["semantic_active"] is False
     assert status["semantic"] is False
-    assert status["semantic_active"] is True
 
 
 def test_ask_disabled_by_default_hides_routes(monkeypatch):
@@ -1052,8 +1205,9 @@ def test_ask_disabled_by_default_hides_routes(monkeypatch):
     from mark import background, config
     from mark.app import create_app
 
-    monkeypatch.setattr(background, "start", lambda: None)
+    monkeypatch.setattr(background, "start", lambda **kwargs: None)
     monkeypatch.setattr(background, "stop", lambda: None)
+    monkeypatch.setattr(background, "mark_http_ready", lambda: None)
     monkeypatch.setattr(config, "ENABLE_ASK", False)
 
     with TestClient(create_app()) as c:
@@ -1135,23 +1289,287 @@ def test_search_api_requires_all_selected_topics(client):
 
 
 def test_note_write_succeeds_when_semantic_backfill_fails(client, monkeypatch):
-    from mark import embeddings
+    from mark import background, embeddings
 
     monkeypatch.setattr(
         embeddings,
         "get_embedder",
-        lambda: (_ for _ in ()).throw(RuntimeError("offline")),
+        lambda: (_ for _ in ()).throw(AssertionError("model loaded in request")),
+    )
+    repairs = []
+    monkeypatch.setattr(
+        background, "request_semantic_repair", lambda: repairs.append(True)
     )
     response = client.post(
         "/api/notes",
         json={"title": "Durable", "text": "saved despite embedding failure"},
     )
     assert response.status_code == 200
+    assert repairs == [True]
     sid = response.json()["id"]
     assert client.get(f"/api/sessions/{sid}").status_code == 200
     status = client.get("/api/status").json()
     assert status["semantic_pending"] is True
-    assert status["semantic_error"] == "offline"
+
+
+def test_status_does_not_initialize_embedding_model(client, monkeypatch):
+    from mark import embeddings
+
+    monkeypatch.setattr(
+        embeddings,
+        "get_embedder",
+        lambda: (_ for _ in ()).throw(AssertionError("model loaded by status")),
+    )
+
+    assert client.get("/api/status").status_code == 200
+
+
+def test_session_detail_paginates_rendered_turns(client, make_session, persist_session):
+    session = make_session(sid="paged-detail")
+    session["turns"] = [
+        {
+            "turn_index": index,
+            "user_message": f"question {index}",
+            "assistant_response": f"answer {index}",
+            "thinking": None,
+            "tools": ["search"] if index == 2 else [],
+            "timestamp": f"2026-01-01T00:00:0{index}+00:00",
+            "files": [],
+            "urls": [],
+            "code_blocks": [],
+        }
+        for index in range(5)
+    ]
+    persist_session(session)
+
+    detail = client.get("/api/sessions/paged-detail", params={"turns_limit": 2}).json()
+    assert [turn["turn_index"] for turn in detail["turns"]] == [0, 1]
+    assert detail["turns_offset"] == 0
+    assert detail["turns_limit"] == 2
+    assert detail["has_more_turns"] is True
+    assert "question 0" in detail["turns"][0]["user_html"]
+    assert "user_message" not in detail["turns"][0]
+    assert "assistant_response" not in detail["turns"][0]
+
+    page = client.get(
+        "/api/sessions/paged-detail/turns", params={"offset": 2, "limit": 2}
+    ).json()
+    assert [turn["turn_index"] for turn in page["turns"]] == [2, 3]
+    assert page["turns"][0]["tools"] == ["search"]
+    assert page["total"] == 5
+    assert page["has_more"] is True
+
+    final_page = client.get(
+        "/api/sessions/paged-detail/turns", params={"offset": 4, "limit": 2}
+    ).json()
+    assert [turn["turn_index"] for turn in final_page["turns"]] == [4]
+    assert final_page["has_more"] is False
+    assert (
+        client.get(
+            "/api/sessions/paged-detail", params={"turns_limit": 101}
+        ).status_code
+        == 422
+    )
+
+
+def test_session_detail_defers_oversized_turn(
+    client, make_session, persist_session, monkeypatch
+):
+    from mark import config
+
+    monkeypatch.setattr(config, "DETAIL_INLINE_TURN_CHARS", 1_000)
+    session = make_session(
+        sid="deferred-detail",
+        user="x" * 100_000,
+        asst="large response",
+    )
+    persist_session(session)
+
+    response = client.get("/api/sessions/deferred-detail")
+    turn = response.json()["turns"][0]
+    assert turn["deferred"] is True
+    assert turn["content_chars"] > 100_000
+    assert "user_html" not in turn
+    assert "user_message" not in turn
+    assert len(response.content) < 5_000
+    assert len(response.json()["summary"]) <= config.DETAIL_SUMMARY_CHARS + 3
+
+    loaded = client.get("/api/sessions/deferred-detail/turns/0").json()
+    assert loaded["deferred"] is False
+    assert "x" * 100 in loaded["user_html"]
+    assert "user_message" not in loaded
+    assert client.get("/api/sessions/deferred-detail/turns/99").status_code == 404
+
+
+def test_session_detail_defers_oversized_document(client, monkeypatch):
+    from mark import config, uploads
+
+    monkeypatch.setattr(config, "DETAIL_INLINE_TURN_CHARS", 1_000)
+    sid = uploads.add_note("Large note", "x" * 100_000)
+
+    detail_response = client.get(f"/api/sessions/{sid}")
+    document = detail_response.json()["document"]
+    assert document["deferred"] is True
+    assert document["content"] is None
+    assert document["content_chars"] == 100_000
+    assert len(detail_response.content) < 5_000
+
+    loaded = client.get(f"/api/sessions/{sid}/document")
+    assert loaded.status_code == 200
+    assert "x" * 100 in loaded.json()["html"]
+
+    exported = client.get(f"/api/sessions/{sid}/export.md")
+    assert exported.status_code == 200
+    assert "x" * 1_000 in exported.text
+
+
+def test_document_pagination_uses_actual_turn_rows(client):
+    from mark import uploads
+
+    sid = uploads.add_note("Document", "body", do_embed=False)
+
+    detail = client.get(f"/api/sessions/{sid}").json()
+    page = client.get(f"/api/sessions/{sid}/turns").json()
+
+    assert detail["turn_count"] == 1
+    assert detail["turns_total"] == 0
+    assert detail["turns"] == []
+    assert detail["has_more_turns"] is False
+    assert page["total"] == 0
+    assert page["has_more"] is False
+
+
+def test_session_detail_metadata_is_counted_and_pageable(
+    client, make_session, persist_session, monkeypatch
+):
+    import hashlib
+
+    from mark import config
+
+    monkeypatch.setattr(config, "DETAIL_FILE_LIMIT", 1)
+    monkeypatch.setattr(config, "DETAIL_LINK_LIMIT", 1)
+    monkeypatch.setattr(config, "DETAIL_ATTACHMENT_LIMIT", 1)
+    session = make_session(sid="paged-metadata")
+    session["turns"][0]["files"] = ["/repo/a.py", "/repo/b.py"]
+    session["turns"][0]["urls"] = ["https://a.example", "https://b.example"]
+    session["attachments"] = [
+        {
+            "filename": filename,
+            "stored_path": None,
+            "mime": "text/plain",
+            "size_bytes": len(content),
+            "content": content,
+            "storage_kind": "inline",
+            "sha256": hashlib.sha256(content.encode()).hexdigest(),
+            "capture_version": 2,
+        }
+        for filename, content in (("a.txt", "alpha"), ("b.txt", "beta"))
+    ]
+    persist_session(session)
+
+    detail = client.get("/api/sessions/paged-metadata").json()
+    assert (len(detail["files"]), detail["files_total"]) == (1, 2)
+    assert (len(detail["refs"]), detail["refs_total"]) == (1, 2)
+    assert (len(detail["attachments"]), detail["attachments_total"]) == (1, 2)
+
+    files = client.get(
+        "/api/sessions/paged-metadata/files", params={"offset": 1, "limit": 1}
+    ).json()
+    refs = client.get(
+        "/api/sessions/paged-metadata/refs", params={"offset": 1, "limit": 1}
+    ).json()
+    attachments_page = client.get(
+        "/api/sessions/paged-metadata/attachments",
+        params={"offset": 1, "limit": 1},
+    ).json()
+
+    assert files["items"][0]["file_path"] == "/repo/b.py"
+    assert refs["items"][0]["ref_value"] == "https://b.example"
+    assert attachments_page["items"][0]["filename"] == "b.txt"
+    assert attachments_page["items"][0]["content"] is None
+    assert attachments_page["has_more"] is False
+    overflow_id = attachments_page["items"][0]["id"]
+    assert (
+        client.get(
+            f"/api/sessions/paged-metadata/attachments/{overflow_id}"
+        ).status_code
+        == 200
+    )
+
+
+def test_nul_prefixed_document_is_deferred(client, monkeypatch):
+    from mark import config, uploads
+
+    monkeypatch.setattr(config, "DETAIL_INLINE_TURN_CHARS", 1_000)
+    sid = uploads.add_note("NUL", "\x00" + "x" * 10_000, do_embed=False)
+
+    detail = client.get(f"/api/sessions/{sid}").json()
+
+    assert detail["document"]["deferred"] is True
+    assert detail["document"]["content_chars"] > 10_000
+    assert len(client.get(f"/api/sessions/{sid}").content) < 5_000
+
+
+def test_nul_prefixed_turn_is_deferred(
+    client, make_session, persist_session, monkeypatch
+):
+    from mark import config, db
+
+    monkeypatch.setattr(config, "DETAIL_INLINE_TURN_CHARS", 1_000)
+    persist_session(make_session(sid="nul-turn", user="placeholder"))
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE turns SET user_message = ? WHERE session_id = ?",
+            ("\x00" + "x" * 100_000, "nul-turn"),
+        )
+
+    detail_response = client.get("/api/sessions/nul-turn")
+    turn = detail_response.json()["turns"][0]
+
+    assert turn["deferred"] is True
+    assert turn["content_chars"] > 100_000
+    assert "user_html" not in turn
+    assert len(detail_response.content) < 5_000
+
+
+def test_deferred_turn_text_is_not_rendered_until_exact_load(
+    client, make_session, persist_session, monkeypatch
+):
+    from mark import config, render
+
+    monkeypatch.setattr(config, "DETAIL_INLINE_TURN_CHARS", 1_000)
+    persist_session(make_session(sid="sql-deferred", user="x" * 100_000))
+    rendered = []
+
+    def record_render(text):
+        rendered.append(len(text or ""))
+        return "<p>rendered</p>"
+
+    monkeypatch.setattr(render, "render_markdown", record_render)
+
+    detail = client.get("/api/sessions/sql-deferred")
+    assert detail.status_code == 200
+    assert detail.json()["turns"][0]["deferred"] is True
+    assert rendered == []
+
+    loaded = client.get("/api/sessions/sql-deferred/turns/0")
+    assert loaded.status_code == 200
+    assert max(rendered) == 100_000
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/sessions/paged-detail/turns?offset=9223372036854775808",
+        "/api/sessions/paged-detail/turns/9223372036854775808",
+        "/api/sessions/paged-detail/turns/-1",
+    ],
+)
+def test_session_turn_integer_bounds_are_validated(
+    client, make_session, persist_session, path
+):
+    persist_session(make_session(sid="paged-detail"))
+    assert client.get(path).status_code == 422
 
 
 def test_missing_session_is_404(client):
@@ -1185,6 +1603,10 @@ def test_attachment_download_uses_immutable_snapshot(
     assert "stored_path" not in detail_attachment
     assert detail_attachment["category"] == "agent"
     assert detail_attachment["downloadable"] is True
+    assert detail_attachment["content_available"] is True
+    assert detail_attachment["content"] is None
+    lazy_content = client.get(f"/api/sessions/attachment-session/attachments/{doc_id}")
+    assert lazy_content.status_code == 404
     original.write_bytes(b"changed live file")
     response = client.get(
         f"/api/sessions/attachment-session/attachments/{doc_id}/download"
@@ -1255,11 +1677,46 @@ def test_attachment_download_rejects_legacy_inline_content(
     assert attachment["content"] is None
     assert "stored_path" not in attachment
     assert attachment["downloadable"] is False
+    assert attachment["content_available"] is False
     response = client.get(
         f"/api/sessions/legacy-inline/attachments/{attachment['id']}/download"
     )
     assert response.status_code == 404
     assert b"legacy secret" not in response.content
+
+
+def test_attachment_content_is_rendered_only_when_requested(
+    client, make_session, persist_session
+):
+    import hashlib
+
+    text = "# Lazy attachment\n\nRendered on demand."
+    session = make_session(sid="lazy-attachment")
+    session["attachments"] = [
+        {
+            "filename": "note.md",
+            "stored_path": None,
+            "mime": "text/markdown",
+            "size_bytes": len(text.encode()),
+            "content": text,
+            "storage_kind": "inline",
+            "sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "capture_version": 2,
+        }
+    ]
+    persist_session(session)
+
+    detail_response = client.get("/api/sessions/lazy-attachment")
+    attachment = detail_response.json()["attachments"][0]
+    assert attachment["content"] is None
+    assert "html" not in attachment
+    assert b"Rendered on demand" not in detail_response.content
+
+    content = client.get(
+        f"/api/sessions/lazy-attachment/attachments/{attachment['id']}"
+    )
+    assert content.status_code == 200
+    assert "<h1>Lazy attachment</h1>" in content.json()["html"]
 
 
 def test_attachment_download_rejects_corrupted_snapshot(

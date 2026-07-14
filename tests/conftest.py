@@ -8,7 +8,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def tmp_db(tmp_path, monkeypatch):
     """Point config at a fresh temp DB, force the builtin embedder, init schema."""
-    from mark import config, db, embeddings, search
+    from mark import config, db, embeddings, ingest, search
 
     monkeypatch.setattr(config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "mark.db")
@@ -27,6 +27,7 @@ def tmp_db(tmp_path, monkeypatch):
         {"key": None, "ids": None, "sessions": None, "matrix": None},
     )
     db.init_db()
+    ingest.mark_semantic_unverified()
     yield
 
 
@@ -36,8 +37,9 @@ def client(monkeypatch):
     from mark import background
     from mark.app import create_app
 
-    monkeypatch.setattr(background, "start", lambda: None)
+    monkeypatch.setattr(background, "start", lambda **kwargs: None)
     monkeypatch.setattr(background, "stop", lambda: None)
+    monkeypatch.setattr(background, "mark_http_ready", lambda: None)
     # The Ask feature ships disabled by default; enable it so endpoint tests can
     # exercise its routes. Tests that need it off build their own app.
     from mark import config

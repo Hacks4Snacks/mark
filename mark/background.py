@@ -35,8 +35,10 @@ _stopping = False
 _last_successful_fingerprint: str | None = None
 _retry_required = False
 _retry_rebuild = False
+_retry_repair_semantic = False
 _retry_attempt = 0
 _retry_at: float | None = None
+_work_ready = threading.Event()
 
 _monotonic = time.monotonic
 _random = random.random
@@ -50,6 +52,7 @@ class _Job:
     rebuild: bool = False
     fingerprint: str | None = None
     fingerprint_complete: bool = True
+    repair_semantic: bool = False
 
 
 def _now() -> str:
@@ -79,11 +82,12 @@ def _set_retry_deadline_locked(delay: float | None) -> None:
 
 def _schedule_retry_locked(job: _Job) -> None:
     """Retain failed work and schedule its next automatic attempt."""
-    global _retry_attempt, _retry_rebuild, _retry_required
+    global _retry_attempt, _retry_rebuild, _retry_repair_semantic, _retry_required
     if _stopping:
         return
     _retry_required = True
     _retry_rebuild = _retry_rebuild or job.rebuild
+    _retry_repair_semantic = _retry_repair_semantic or job.repair_semantic
     _retry_attempt += 1
     _status["retry_required"] = True
     _status["retry_attempt"] = _retry_attempt
@@ -93,9 +97,10 @@ def _schedule_retry_locked(job: _Job) -> None:
 
 
 def _clear_retry_locked() -> None:
-    global _retry_attempt, _retry_rebuild, _retry_required
+    global _retry_attempt, _retry_rebuild, _retry_repair_semantic, _retry_required
     _retry_required = False
     _retry_rebuild = False
+    _retry_repair_semantic = False
     _retry_attempt = 0
     _status["retry_required"] = False
     _status["retry_attempt"] = 0
@@ -147,6 +152,7 @@ def _finish_job_locked() -> None:
 def _worker_loop() -> None:
     global _active, _last_successful_fingerprint, _pending
     while True:
+        _work_ready.wait()
         with _state:
             while _pending is None and not _stopping:
                 _state.wait()
@@ -156,6 +162,7 @@ def _worker_loop() -> None:
             assert job is not None
             _pending = None
             job.rebuild = job.rebuild or _retry_rebuild
+            job.repair_semantic = job.repair_semantic or _retry_repair_semantic
             if _retry_required:
                 _set_retry_deadline_locked(None)
             _active = job
@@ -176,9 +183,19 @@ def _worker_loop() -> None:
             added = result.get("added", 0)
             updated = result.get("updated", 0)
             errors = dict(result.get("errors") or {})
+            has_observed_fingerprint = "fingerprint" in result
+            if (
+                job.repair_semantic
+                and has_observed_fingerprint
+                and "semantic_index" not in errors
+                and ingest.semantic_repair_needed()
+                and not ingest.ensure_index_ready(progress, initialize=False)
+            ):
+                errors["semantic_index"] = (
+                    ingest.semantic_status()["error"] or "embedding failed"
+                )
             observed_fingerprint = result.get("fingerprint")
             observed_complete = bool(result.get("fingerprint_complete"))
-            has_observed_fingerprint = "fingerprint" in result
             post_snapshot = (
                 ingest.sources_fingerprint_snapshot()
                 if has_observed_fingerprint
@@ -259,6 +276,9 @@ def _merge_pending_locked(requested: _Job) -> bool:
     if requested.rebuild and not _pending.rebuild:
         _pending.rebuild = True
         accepted = True
+    if requested.repair_semantic and not _pending.repair_semantic:
+        _pending.repair_semantic = True
+        accepted = True
     if (
         requested.fingerprint is not None
         and requested.fingerprint != _pending.fingerprint
@@ -290,11 +310,18 @@ def _admit_locked(requested: _Job, *, manual: bool) -> AdmissionResult:
         return "accepted" if accepted else "covered"
     if _active is not None:
         active_covers_rebuild = _active.rebuild or not requested.rebuild
+        active_covers_semantic = (
+            _active.repair_semantic or not requested.repair_semantic
+        )
         active_covers_fingerprint = requested.fingerprint is None or (
             requested.fingerprint == _active.fingerprint
             and (_active.fingerprint_complete or not requested.fingerprint_complete)
         )
-        if active_covers_rebuild and active_covers_fingerprint:
+        if (
+            active_covers_rebuild
+            and active_covers_semantic
+            and active_covers_fingerprint
+        ):
             if manual:
                 _set_retry_deadline_locked(None)
             return "covered"
@@ -322,6 +349,7 @@ def _admit_due_retry_locked(snapshot: ingest.FingerprintSnapshot) -> bool:
                 rebuild=_retry_rebuild,
                 fingerprint=snapshot.value,
                 fingerprint_complete=not snapshot.errors,
+                repair_semantic=_retry_repair_semantic,
             ),
             manual=False,
         )
@@ -334,6 +362,7 @@ def request_reindex(
     *,
     fingerprint: str | None = None,
     fingerprint_complete: bool = True,
+    repair_semantic: bool = False,
     manual: bool = True,
 ) -> AdmissionResult:
     """Atomically classify a reindex request for API and coordinator callers."""
@@ -343,9 +372,24 @@ def request_reindex(
                 rebuild=rebuild,
                 fingerprint=fingerprint,
                 fingerprint_complete=fingerprint_complete,
+                repair_semantic=repair_semantic,
             ),
             manual=manual,
         )
+
+
+def request_semantic_repair() -> AdmissionResult:
+    """Queue repair after any active job so newly written chunks cannot strand."""
+    with _state:
+        requested = _Job(repair_semantic=True)
+        if _stopping:
+            return "stopping"
+        if _active is not None:
+            accepted = _merge_pending_locked(requested)
+            _ensure_worker_locked()
+            _state.notify_all()
+            return "accepted" if accepted else "covered"
+        return _admit_locked(requested, manual=False)
 
 
 def start_reindex(
@@ -353,6 +397,7 @@ def start_reindex(
     *,
     fingerprint: str | None = None,
     fingerprint_complete: bool = True,
+    repair_semantic: bool = False,
     manual: bool = True,
 ) -> bool:
     """Queue one reindex, coalescing requests while the single worker is busy.
@@ -365,6 +410,7 @@ def start_reindex(
             rebuild=rebuild,
             fingerprint=fingerprint,
             fingerprint_complete=fingerprint_complete,
+            repair_semantic=repair_semantic,
             manual=manual,
         )
         == "accepted"
@@ -381,6 +427,7 @@ def _sync_loop(on_success: Callable[[], None] | None = None) -> None:
     stability means we sync it once it pauses or ends rather than re-indexing
     continuously while it is in use — which is what spiked CPU before.
     """
+    _work_ready.wait()
     snapshot = ingest.sources_fingerprint_snapshot()
     if on_success is not None:
         on_success()
@@ -392,6 +439,7 @@ def _sync_loop(on_success: Callable[[], None] | None = None) -> None:
             _Job(
                 fingerprint=snapshot.value,
                 fingerprint_complete=not snapshot.errors,
+                repair_semantic=True,
             ),
             manual=False,
         )
@@ -477,12 +525,17 @@ def _supervised_sync_loop() -> None:
                     return
 
 
-def start() -> None:
+def start(*, wait_for_http: bool = False) -> None:
     """Start background work according to config (auto-sync loop or one import)."""
     global _stopping, _sync_worker
     with _lifecycle_lock:
         with _state:
             _stopping = False
+        ingest.mark_semantic_unverified()
+        if wait_for_http:
+            _work_ready.clear()
+        else:
+            _work_ready.set()
         _sync_stop.clear()
         if config.AUTO_SYNC:
             if _sync_worker is None or not _sync_worker.is_alive():
@@ -492,7 +545,12 @@ def start() -> None:
                 _sync_worker.start()
         else:
             # Auto-sync off: still import once on startup so new sessions appear.
-            start_reindex(rebuild=False, manual=False)
+            start_reindex(rebuild=False, repair_semantic=True, manual=False)
+
+
+def mark_http_ready() -> None:
+    """Allow startup work after the first HTTP response has been produced."""
+    _work_ready.set()
 
 
 def stop() -> None:
@@ -500,6 +558,7 @@ def stop() -> None:
     global _active, _pending, _stopping, _sync_worker, _worker
     with _lifecycle_lock:
         _sync_stop.set()
+        _work_ready.set()
         with _state:
             _stopping = True
             _pending = None

@@ -396,7 +396,7 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
    without turning .detail into a scroll container — `hidden` would defeat the
    `position: sticky` on the compact header below and make it scroll through the
    viewport (the back-button flash) instead of pinning. */
-.detail { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: clip; }
+.detail { min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: clip; }
 .detail-head { padding: 22px 26px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
 /* compact sticky header that appears as you scroll a long transcript */
 .detail-sticky {
@@ -430,13 +430,13 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .detail-summary { color: var(--muted); margin: 0 0 14px; max-width: 70ch; }
 .detail-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
-.detail-body { display: grid; grid-template-columns: 1fr 248px; }
+.detail-body { display: grid; grid-template-columns: minmax(0, 1fr) 248px; }
 .transcript { padding: 24px 26px; min-width: 0; }
 .transcript .turn { max-width: 78ch; }
 .transcript .md { max-width: 74ch; }
 /* code & tables may exceed the prose measure */
 .transcript .md pre, .transcript .md table, .transcript .attachments { max-width: 100%; }
-.detail-aside { border-left: 1px solid var(--border); padding: 20px; background: var(--surface-2); display: flex; flex-direction: column; gap: 22px; }
+.detail-aside { min-width: 0; border-left: 1px solid var(--border); padding: 20px; background: var(--surface-2); display: flex; flex-direction: column; gap: 22px; }
 .detail-aside h4 { margin: 0 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--faint); }
 .aside-files { display: flex; flex-direction: column; gap: 4px; }
 .aside-file { font-family: var(--mono); font-size: 12px; color: var(--muted); padding: 4px 8px; border-radius: 6px; background: var(--surface); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
@@ -450,6 +450,7 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .aside-file.related { font-family: inherit; direction: ltr; display: flex; align-items: center; gap: 7px; cursor: pointer; }
 .aside-file.related .rel-src { flex: none; font-size: 13px; }
 .aside-file.related .rel-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detail-metadata-more { width: 100%; justify-content: center; margin-top: 7px; font-size: 11px; }
 
 .turn {
   margin-bottom: 26px;
@@ -462,6 +463,15 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
   content-visibility: auto;
   contain-intrinsic-size: auto 480px;
 }
+.detail-load-more { display: flex; margin: 4px auto 24px; }
+.deferred-turn, .deferred-document {
+  min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 14px 16px; border: 1px dashed var(--border); border-radius: var(--radius-sm); background: var(--surface-2);
+}
+.deferred-turn > div, .deferred-document > div { display: flex; flex-direction: column; gap: 3px; }
+.deferred-turn strong, .deferred-document strong { font-size: 13px; }
+.deferred-turn span, .deferred-document span { color: var(--faint); font-size: 12px; }
+.deferred-turn .btn, .deferred-document .btn { flex: none; }
 .bubble { border-radius: 13px; padding: 14px 18px; border: 1px solid var(--border-soft); }
 .bubble.user { background: color-mix(in srgb, var(--accent) 10%, var(--surface-2)); border-color: color-mix(in srgb, var(--accent) 22%, var(--border)); margin-bottom: 12px; }
 .bubble.assistant { background: var(--surface); }
@@ -710,9 +720,21 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 @keyframes blink { 50% { opacity: 0; } }
 
 @media (max-width: 920px) {
+  .topbar {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px;
+    padding: 10px 14px;
+  }
+  .brand { grid-column: 1; grid-row: 1; min-width: 0; }
+  .brand-text small { display: none; }
+  .actions { grid-column: 2; grid-row: 1; justify-self: end; gap: 4px; min-width: 0; }
+  .actions .btn { width: 34px; height: 34px; padding: 0; gap: 0; font-size: 0; }
+  .searchwrap { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
   .layout { grid-template-columns: 1fr; }
   .sidebar { position: static; max-height: none; flex-direction: row; flex-wrap: wrap; }
-  .detail-body { grid-template-columns: 1fr; }
+  .detail-top { flex-direction: column; align-items: stretch; }
+  .detail-actions { flex-wrap: wrap; }
+  .detail-actions .btn { flex: 1 1 auto; }
+  .detail-body { grid-template-columns: minmax(0, 1fr); }
   .detail-aside { border-left: none; border-top: 1px solid var(--border); }
   .searchwrap .segmented { display: none; }
 }
