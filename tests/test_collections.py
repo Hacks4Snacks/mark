@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
-
 from mark import collections as coll
 
 
@@ -47,9 +45,8 @@ def test_rule_with_multiple_topics_requires_all(make_session, persist_session):
     assert coll.resolve_member_ids(coll.get_collection(cid)) == {"both"}
 
 
-def test_large_collection_avoids_sqlite_variable_limit(monkeypatch):
+def test_large_collection_avoids_sqlite_variable_limit(limit_sql_variables):
     from mark import ask, db, search
-    from mark.db import connection
 
     session_ids = [f"large-{index}" for index in range(1001)]
     with db.transaction() as conn:
@@ -73,15 +70,7 @@ def test_large_collection_avoids_sqlite_variable_limit(monkeypatch):
         rule={"q": "largecollectionprobe", "mode": "keyword"},
     )
 
-    real_connect = connection.connect
-
-    def limited_connect():
-        conn = real_connect()
-        conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
-        return conn
-
-    monkeypatch.setattr(connection, "connect", limited_connect)
-    monkeypatch.setattr(db, "connect", limited_connect)
+    limit_sql_variables(999)
     collection = coll.get_collection(cid)
 
     assert len(coll.resolve_member_ids(collection)) == 1001

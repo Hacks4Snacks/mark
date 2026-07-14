@@ -155,23 +155,10 @@ def test_scope_is_applied_before_candidate_truncation(
 
 
 def test_large_only_ids_scope_avoids_sqlite_variable_limit(
-    make_session, persist_session, monkeypatch
+    make_session, persist_session, limit_sql_variables
 ):
-    import sqlite3
-
-    from mark import db
-    from mark.db import connection
-
     persist_session(make_session(sid="eligible", user="largeidprobe"))
-    real_connect = connection.connect
-
-    def limited_connect():
-        conn = real_connect()
-        conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
-        return conn
-
-    monkeypatch.setattr(connection, "connect", limited_connect)
-    monkeypatch.setattr(db, "connect", limited_connect)
+    limit_sql_variables(999)
     only_ids = {"eligible", *(f"missing-{index}" for index in range(1000))}
 
     assert [

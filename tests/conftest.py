@@ -1,8 +1,72 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 
 import pytest
+
+
+class _LimitedCursor:
+    def __init__(self, cursor, connection, maximum: int):
+        self._cursor = cursor
+        self._connection = connection
+        self._maximum = maximum
+
+    @property
+    def connection(self):
+        return self._connection
+
+    def execute(self, sql, parameters=()):
+        if len(parameters) > self._maximum:
+            raise sqlite3.OperationalError("too many SQL variables")
+        self._cursor.execute(sql, parameters)
+        return self
+
+    def executemany(self, sql, parameters):
+        self._cursor.executemany(sql, parameters)
+        return self
+
+    def __iter__(self):
+        return iter(self._cursor)
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
+class _LimitedConnection:
+    def __init__(self, connection, maximum: int):
+        self._connection = connection
+        self._maximum = maximum
+
+    def cursor(self):
+        return _LimitedCursor(self._connection.cursor(), self, self._maximum)
+
+    def execute(self, sql, parameters=()):
+        return self.cursor().execute(sql, parameters)
+
+    def executemany(self, sql, parameters):
+        return self.cursor().executemany(sql, parameters)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
+@pytest.fixture
+def limit_sql_variables(monkeypatch):
+    """Enforce a portable per-statement SQLite bind-variable ceiling."""
+    from mark import db
+    from mark.db import connection
+
+    real_connect = connection.connect
+
+    def apply(maximum: int = 999) -> None:
+        def limited_connect():
+            return _LimitedConnection(real_connect(), maximum)
+
+        monkeypatch.setattr(connection, "connect", limited_connect)
+        monkeypatch.setattr(db, "connect", limited_connect)
+
+    return apply
 
 
 @pytest.fixture(autouse=True)
