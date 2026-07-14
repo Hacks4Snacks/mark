@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+import importlib.util
 import multiprocessing
 import threading
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from mark import search, uploads
+
+
+def _load_seed_demo_data():
+    script = Path(__file__).resolve().parents[1] / "scripts" / "seed_demo_data.py"
+    spec = importlib.util.spec_from_file_location("mark_seed_demo_data", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _hold_semantic_writer_lock(db_path: str, entered, release) -> None:
@@ -753,7 +764,8 @@ def test_writer_lock_serializes_across_processes():
 
 def test_logical_reset_preserves_monotonic_cache_identity():
     from mark import db, embeddings
-    from scripts import seed_demo_data
+
+    seed_demo_data = _load_seed_demo_data()
 
     first = uploads.add_note("Before reset", "reset cache alpha")
     assert first in {r["id"] for r in search.search("reset cache", mode="semantic")}
@@ -780,7 +792,7 @@ def test_logical_reset_preserves_monotonic_cache_identity():
 
 
 def test_demo_guard_rejects_real_database_override(tmp_path, monkeypatch):
-    from scripts import seed_demo_data
+    seed_demo_data = _load_seed_demo_data()
 
     home = tmp_path / "home"
     real = home / ".mark"

@@ -5,13 +5,18 @@ from pathlib import Path
 
 import pytest
 
-from scripts.package_smoke import verify_web_assets
 
-
-def test_all_referenced_web_assets_are_served(client):
+def test_all_packaged_web_assets_are_served(client):
     from mark import config
 
-    checked = verify_web_assets(client, config.WEB_DIR)
+    checked = set()
+    for source in sorted(path for path in config.WEB_DIR.rglob("*") if path.is_file()):
+        relative = source.relative_to(config.WEB_DIR).as_posix()
+        url = "/" if relative == "index.html" else f"/{relative}"
+        response = client.get(url)
+        assert response.status_code == 200, url
+        assert response.content == source.read_bytes(), url
+        checked.add(url)
 
     assert "/fonts/inter-400.woff2" in checked
     assert "/icons/og.png" in checked
