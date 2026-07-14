@@ -9,6 +9,13 @@ From v0.2.0 onward, entries are generated automatically by
 [release-please](https://github.com/googleapis/release-please) from Conventional
 Commits.
 
+## [0.4.0](https://github.com/Hacks4Snacks/mark/compare/v0.3.0...v0.4.0) (2026-07-14)
+
+
+### Features
+
+* Harden Mark across ingestion, storage, search, large-archive performance, and packaging ([#18](https://github.com/Hacks4Snacks/mark/issues/18)) ([c8b1a0e](https://github.com/Hacks4Snacks/mark/commit/c8b1a0ef1958d37a404d5cfb4337aefc39f5445e))
+
 ## [0.3.0](https://github.com/Hacks4Snacks/mark/compare/v0.2.0...v0.3.0) (2026-07-02)
 
 
