@@ -138,8 +138,12 @@ mark { background: var(--mark); color: var(--mark-ink); border-radius: 3px; padd
   position: sticky; top: 0; z-index: 30;
   display: flex; align-items: center; gap: var(--gap);
   padding: 12px 22px;
-  background: color-mix(in srgb, var(--surface) 78%, transparent);
-  backdrop-filter: saturate(140%) blur(14px);
+  /* Opaque (was a translucent + backdrop-filter blur): this bar is sticky and
+     always covers content scrolling underneath, so the blur had to re-sample
+     and re-filter the backdrop every frame — a big, continuous scroll-jank
+     cost (especially on macOS). A solid background paints once and scrolls
+     free. */
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
 .brand { display: flex; align-items: center; gap: 11px; cursor: pointer; user-select: none; }
@@ -231,6 +235,7 @@ mark { background: var(--mark); color: var(--mark-ink); border-radius: 3px; padd
 .stat-card .l { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .6px; }
 
 .filter-group h4 { margin: 0 0 9px; font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--faint); }
+.filter-group h4 .filter-semantics { margin-left: 5px; color: var(--muted); font-weight: 500; text-transform: none; letter-spacing: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 7px; }
 .chip {
   background: var(--chip); border: 1px solid transparent; color: var(--muted);
@@ -391,15 +396,16 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
    without turning .detail into a scroll container — `hidden` would defeat the
    `position: sticky` on the compact header below and make it scroll through the
    viewport (the back-button flash) instead of pinning. */
-.detail { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: clip; }
+.detail { min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: clip; }
 .detail-head { padding: 22px 26px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
 /* compact sticky header that appears as you scroll a long transcript */
 .detail-sticky {
   position: sticky; top: 64px; z-index: 20;
   display: flex; align-items: center; gap: 12px;
   padding: 10px 18px; margin-bottom: 14px;
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
-  backdrop-filter: saturate(140%) blur(12px);
+  /* Opaque, no backdrop-filter — see .topbar: blurring the backdrop of a
+     sticky element on every scroll frame is what made long transcripts jank. */
+  background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   box-shadow: var(--shadow);
   opacity: 0; transform: translateY(-6px); pointer-events: none;
@@ -424,13 +430,13 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .detail-summary { color: var(--muted); margin: 0 0 14px; max-width: 70ch; }
 .detail-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
-.detail-body { display: grid; grid-template-columns: 1fr 248px; }
+.detail-body { display: grid; grid-template-columns: minmax(0, 1fr) 248px; }
 .transcript { padding: 24px 26px; min-width: 0; }
 .transcript .turn { max-width: 78ch; }
 .transcript .md { max-width: 74ch; }
 /* code & tables may exceed the prose measure */
 .transcript .md pre, .transcript .md table, .transcript .attachments { max-width: 100%; }
-.detail-aside { border-left: 1px solid var(--border); padding: 20px; background: var(--surface-2); display: flex; flex-direction: column; gap: 22px; }
+.detail-aside { min-width: 0; border-left: 1px solid var(--border); padding: 20px; background: var(--surface-2); display: flex; flex-direction: column; gap: 22px; }
 .detail-aside h4 { margin: 0 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--faint); }
 .aside-files { display: flex; flex-direction: column; gap: 4px; }
 .aside-file { font-family: var(--mono); font-size: 12px; color: var(--muted); padding: 4px 8px; border-radius: 6px; background: var(--surface); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
@@ -444,8 +450,28 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .aside-file.related { font-family: inherit; direction: ltr; display: flex; align-items: center; gap: 7px; cursor: pointer; }
 .aside-file.related .rel-src { flex: none; font-size: 13px; }
 .aside-file.related .rel-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detail-metadata-more { width: 100%; justify-content: center; margin-top: 7px; font-size: 11px; }
 
-.turn { margin-bottom: 26px; }
+.turn {
+  margin-bottom: 26px;
+  /* A single agent turn can carry a megabyte of rendered markdown, so a long
+     transcript is a very large DOM. content-visibility lets the browser skip
+     layout and paint for turns that are off-screen; `auto` in the intrinsic
+     size makes it remember each turn's real height once rendered, so the
+     scrollbar and reading-progress stay stable. Biggest win for scrolling a
+     long conversation. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 480px;
+}
+.detail-load-more { display: flex; margin: 4px auto 24px; }
+.deferred-turn, .deferred-document {
+  min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 14px 16px; border: 1px dashed var(--border); border-radius: var(--radius-sm); background: var(--surface-2);
+}
+.deferred-turn > div, .deferred-document > div { display: flex; flex-direction: column; gap: 3px; }
+.deferred-turn strong, .deferred-document strong { font-size: 13px; }
+.deferred-turn span, .deferred-document span { color: var(--faint); font-size: 12px; }
+.deferred-turn .btn, .deferred-document .btn { flex: none; }
 .bubble { border-radius: 13px; padding: 14px 18px; border: 1px solid var(--border-soft); }
 .bubble.user { background: color-mix(in srgb, var(--accent) 10%, var(--surface-2)); border-color: color-mix(in srgb, var(--accent) 22%, var(--border)); margin-bottom: 12px; }
 .bubble.assistant { background: var(--surface); }
@@ -675,11 +701,17 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .ask-sources { margin-bottom: 16px; }
 .ask-sources h4 { margin: 0 0 9px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--faint); }
 .ask-src-list { display: flex; flex-direction: column; gap: 6px; }
-.ask-src { display: flex; align-items: center; gap: 8px; padding: 7px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); cursor: pointer; font-size: 13px; color: var(--muted); transition: all var(--speed); }
+.ask-src { display: block; padding: 7px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); font-size: 13px; color: var(--muted); transition: all var(--speed); }
 .ask-src:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.ask-src > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; }
+.ask-src > summary::-webkit-details-marker { display: none; }
 .ask-src b { color: var(--accent); flex: none; font-family: var(--mono); }
 .ask-src-icon { flex: none; }
 .ask-src-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-src-evidence { margin: 9px 0 2px 25px; padding-top: 9px; border-top: 1px solid var(--border); }
+.ask-src-passage + .ask-src-passage { margin-top: 9px; }
+.ask-src-passage p { margin: 3px 0 0; color: var(--text); line-height: 1.45; white-space: pre-wrap; }
+.ask-src-open { margin-top: 10px; }
 .ask-answer { position: relative; border: 1px solid var(--border); background: var(--surface-2); border-radius: 13px; padding: 18px 20px 18px 22px; min-height: 40px; white-space: pre-wrap; line-height: 1.6; overflow: hidden; }
 .ask-answer::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: linear-gradient(var(--accent), var(--accent-2)); }
 .ask-answer.streaming::after { content: "▋"; color: var(--accent); animation: blink 1s steps(2) infinite; }
@@ -688,9 +720,21 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 @keyframes blink { 50% { opacity: 0; } }
 
 @media (max-width: 920px) {
+  .topbar {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px;
+    padding: 10px 14px;
+  }
+  .brand { grid-column: 1; grid-row: 1; min-width: 0; }
+  .brand-text small { display: none; }
+  .actions { grid-column: 2; grid-row: 1; justify-self: end; gap: 4px; min-width: 0; }
+  .actions .btn { width: 34px; height: 34px; padding: 0; gap: 0; font-size: 0; }
+  .searchwrap { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
   .layout { grid-template-columns: 1fr; }
   .sidebar { position: static; max-height: none; flex-direction: row; flex-wrap: wrap; }
-  .detail-body { grid-template-columns: 1fr; }
+  .detail-top { flex-direction: column; align-items: stretch; }
+  .detail-actions { flex-wrap: wrap; }
+  .detail-actions .btn { flex: 1 1 auto; }
+  .detail-body { grid-template-columns: minmax(0, 1fr); }
   .detail-aside { border-left: none; border-top: 1px solid var(--border); }
   .searchwrap .segmented { display: none; }
 }

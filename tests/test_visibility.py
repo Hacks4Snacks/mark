@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from mark import db, ingest, search
 from mark.repositories import sessions as sessions_repo
 from mark.repositories import stats as stats_repo
@@ -86,6 +88,27 @@ def test_hidden_excluded_from_stats_and_usage(make_session, persist_session):
     assert usage_repo.usage()["totals"]["sessions"] == after
 
 
+def test_hidden_session_excluded_from_snippet_library(make_session, persist_session):
+    from mark.repositories import snippets as snippets_repo
+
+    visible = _persist(
+        make_session,
+        persist_session,
+        sid="visible-code",
+        code_blocks=[{"language": "python", "content": "print('visible')"}],
+    )
+    hidden = _persist(
+        make_session,
+        persist_session,
+        sid="hidden-code",
+        code_blocks=[{"language": "rust", "content": 'println!("hidden")'}],
+    )
+    sessions_repo.set_hidden(hidden, True)
+
+    assert {row["session_id"] for row in snippets_repo.snippets()} == {visible}
+    assert {row["language"] for row in snippets_repo.languages()} == {"python"}
+
+
 def test_set_hidden_unknown_session_returns_false():
     assert sessions_repo.set_hidden("nope", True) is False
 
@@ -119,6 +142,121 @@ def test_disabled_source_restored_on_reenable(
     assert sid not in {r["id"] for r in search.browse()}
     monkeypatch.delenv("MARK_SOURCE_VSCODE_ENABLED")
     assert sid in {r["id"] for r in search.browse()}
+
+
+def test_disabled_cline_hides_dynamic_family_sources(
+    make_session, persist_session, monkeypatch
+):
+    from mark import ask, collections
+    from mark.api.sources import api_sources
+
+    ids = []
+    for sid, label in (("configured", "myagent"), ("unknown", "new-fork")):
+        session = make_session(
+            sid=sid,
+            source=label,
+            user="dynamicclineprobe",
+        )
+        session["source_adapter"] = "cline"
+        persist_session(session)
+        ids.append(sid)
+    cid = collections.create("Cline family")
+    for sid in ids:
+        collections.set_member(cid, sid)
+    ingest._embed_pending()
+
+    assert set(ids) <= {r["id"] for r in search.browse()}
+    assert set(ids) <= {
+        r["id"] for r in search.search("dynamicclineprobe", mode="keyword")
+    }
+    assert set(ids) <= {
+        r["id"] for r in search.search("dynamicclineprobe", mode="semantic")
+    }
+    assert set(ids) <= {
+        r["session_id"] for r in search.search_passages("dynamicclineprobe")
+    }
+    monkeypatch.setenv("MARK_SOURCE_CLINE_ENABLED", "0")
+
+    assert not ({r["id"] for r in search.browse()} & set(ids))
+    assert not {r["id"] for r in search.search("dynamicclineprobe", mode="keyword")}
+    assert not {r["id"] for r in search.search("dynamicclineprobe", mode="semantic")}
+    assert search.search_passages("dynamicclineprobe", only_ids=set(ids)) == []
+    assert collections.resolve_member_ids(collections.get_collection(cid)) == set()
+    context, sources = ask.build_context(
+        "dynamicclineprobe", char_budget=2000, session_ids=set(ids)
+    )
+    assert context == ""
+    assert sources == []
+    assert stats_repo.source_adapter_counts()["cline"] == 2
+    cline_info = next(source for source in api_sources() if source["key"] == "cline")
+    assert cline_info["enabled"] is False
+    assert cline_info["indexed"] == 2
+
+
+def test_disabled_adapter_excluded_from_snippet_library(
+    make_session, persist_session, monkeypatch
+):
+    from mark.repositories import snippets as snippets_repo
+
+    session = make_session(
+        sid="dynamic-code",
+        source="myagent",
+        code_blocks=[{"language": "go", "content": 'fmt.Println("hidden")'}],
+    )
+    session["source_adapter"] = "cline"
+    persist_session(session)
+    assert snippets_repo.snippets(language="go")
+
+    monkeypatch.setenv("MARK_SOURCE_CLINE_ENABLED", "0")
+
+    assert snippets_repo.snippets(language="go") == []
+    assert "go" not in {row["language"] for row in snippets_repo.languages()}
+
+
+def test_related_sessions_filters_hidden_candidates_before_limit(
+    make_session, persist_session, monkeypatch
+):
+    import numpy as np
+
+    origin = _persist(make_session, persist_session, sid="related-origin")
+    hidden = _persist(make_session, persist_session, sid="related-hidden")
+    visible = _persist(make_session, persist_session, sid="related-visible")
+    sessions_repo.set_hidden(hidden, True)
+    monkeypatch.setattr(
+        search,
+        "_vector_matrix",
+        lambda: (
+            [1, 2, 3],
+            [origin, hidden, visible],
+            np.asarray([[1.0, 0.0], [1.0, 0.0], [0.8, 0.6]], dtype=np.float32),
+        ),
+    )
+
+    assert [row["id"] for row in search.related_sessions(origin, limit=1)] == [visible]
+
+
+def test_related_sessions_filters_disabled_candidates_before_limit(
+    make_session, persist_session, monkeypatch
+):
+    import numpy as np
+
+    origin = _persist(make_session, persist_session, sid="related-origin")
+    disabled_session = make_session(sid="related-disabled", source="myagent")
+    disabled_session["source_adapter"] = "cline"
+    persist_session(disabled_session)
+    visible = _persist(make_session, persist_session, sid="related-visible")
+    monkeypatch.setenv("MARK_SOURCE_CLINE_ENABLED", "0")
+    monkeypatch.setattr(
+        search,
+        "_vector_matrix",
+        lambda: (
+            [1, 2, 3],
+            [origin, "related-disabled", visible],
+            np.asarray([[1.0, 0.0], [1.0, 0.0], [0.8, 0.6]], dtype=np.float32),
+        ),
+    )
+
+    assert [row["id"] for row in search.related_sessions(origin, limit=1)] == [visible]
 
 
 # ---------- API surface ----------
@@ -239,3 +377,41 @@ def test_delete_api_permanently_removes(client):
 
 def test_delete_missing_session_is_404(client):
     assert client.delete("/api/sessions/nope").status_code == 404
+
+
+def test_purge_removes_owned_upload_bytes():
+    from mark import uploads
+
+    sid = uploads.add_file("owned.txt", b"owned upload bytes", "text/plain")
+    with db.cursor() as cur:
+        row = cur.execute(
+            "SELECT stored_path, storage_kind FROM documents WHERE session_id = ?",
+            (sid,),
+        ).fetchone()
+    stored = Path(row["stored_path"])
+    assert row["storage_kind"] == "upload"
+    assert stored.exists()
+
+    assert sessions_repo.purge(sid) is True
+    assert not stored.exists()
+
+
+def test_purge_never_deletes_external_legacy_path(
+    make_session, persist_session, tmp_path
+):
+    external = tmp_path / "external.txt"
+    external.write_text("must survive")
+    session = make_session(sid="legacy-external")
+    session["attachments"] = [
+        {
+            "filename": external.name,
+            "stored_path": str(external),
+            "mime": "text/plain",
+            "size_bytes": external.stat().st_size,
+            "content": None,
+        }
+    ]
+    persist_session(session)
+
+    assert sessions_repo.purge("legacy-external") is True
+    assert external.read_text() == "must survive"

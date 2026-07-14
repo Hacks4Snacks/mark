@@ -1,6 +1,6 @@
 <p align="center"><img src="mark/web/favicon.svg" width="72" alt="Mark logo" /></p>
 
-# Mark: Multi-session AI Recall Keeper
+# Mark: Multi-session Agent Recall Keeper
 
 > Your searchable, private archive of every AI coding chat.
 >
@@ -174,6 +174,7 @@ All optional, via environment variables:
 | `MARK_HOST`                         | `127.0.0.1`              | Bind address (localhost only)                                                                                   |
 | `MARK_DATA_DIR`                     | `~/.mark`                | Where the SQLite DB and uploads live                                                                            |
 | `MARK_EMBED_MODEL`                  | `BAAI/bge-small-en-v1.5` | fastembed model                                                                                                 |
+| `MARK_EMBED_BATCH_SIZE`             | `16`                     | Documents per embedding inference batch; lower values reduce peak memory                                        |
 | `MARK_MAX_EMBED_CHUNKS_PER_SESSION` | `40`                     | Cap on *embedded* chunks per session (keyword/FTS indexes all chunks; bounds the in-memory semantic vector set) |
 | `MARK_PRICING_FILE`                 | built-in table           | JSON of `{model: [in, out, cached]}` USD per 1M tokens                                                          |
 | `MARK_RESUME_CMD`                   | `copilot --resume {id}`  | Resume command shown in the UI                                                                                  |

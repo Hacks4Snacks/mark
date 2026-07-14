@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import math
 import os
 import sys
 from dataclasses import dataclass, field
@@ -9,6 +10,43 @@ from pathlib import Path
 from typing import Any
 
 _log = logging.getLogger("mark")
+
+
+def _env_int(
+    name: str, default: int, *, minimum: int | None = None, maximum: int | None = None
+) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}, got {value}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{name} must be at most {maximum}, got {value}")
+    return value
+
+
+def _env_float(
+    name: str,
+    default: float,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number, got {raw!r}") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {raw!r}")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}, got {value}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{name} must be at most {maximum}, got {value}")
+    return value
+
 
 APP_DIR = Path(__file__).resolve().parent
 ROOT_DIR = APP_DIR.parent
@@ -24,7 +62,7 @@ UPLOADS_DIR = Path(
 ).expanduser()
 
 HOST = os.environ.get("MARK_HOST", "127.0.0.1")
-PORT = int(os.environ.get("MARK_PORT", "8765"))
+PORT = _env_int("MARK_PORT", 8765, minimum=1, maximum=65535)
 
 # Master switch for the Ask (local RAG) feature. It is still being refined, so it
 # ships OFF by default: when disabled the API routes are not mounted and the UI
@@ -46,31 +84,47 @@ OLLAMA_MODEL = os.environ.get("MARK_OLLAMA_MODEL", "").strip()
 # Hard ceiling on the context window mark requests (num_ctx). The value actually
 # used is min(this, the model's own trained context length, probed via Ollama
 # /api/show). Bigger = more history per answer, but more RAM and latency.
-ASK_NUM_CTX_CAP = int(os.environ.get("MARK_ASK_NUM_CTX_CAP", "16384"))
+ASK_NUM_CTX_CAP = _env_int(
+    "MARK_ASK_NUM_CTX_CAP", 16384, minimum=2048, maximum=1_048_576
+)
 # Fallback window when the model doesn't report a context length.
-ASK_DEFAULT_NUM_CTX = int(os.environ.get("MARK_ASK_DEFAULT_NUM_CTX", "8192"))
+ASK_DEFAULT_NUM_CTX = _env_int(
+    "MARK_ASK_DEFAULT_NUM_CTX", 8192, minimum=2048, maximum=1_048_576
+)
 # Tokens held back from the window for the model's own answer.
-ASK_RESERVE_OUTPUT_TOKENS = int(
-    os.environ.get("MARK_ASK_RESERVE_OUTPUT_TOKENS", "1024")
+ASK_RESERVE_OUTPUT_TOKENS = _env_int(
+    "MARK_ASK_RESERVE_OUTPUT_TOKENS", 1024, minimum=128, maximum=262_144
 )
 # Breadth is NOT capped by a session count: an answer draws on as many distinct
 # sessions as fit the model's context window (the token budget above). Callers
 # may still pass an explicit per-request cap, but there is no default one.
 # Candidate passages retrieved (and reranked) before packing into the budget.
-ASK_MAX_CANDIDATE_PASSAGES = int(
-    os.environ.get("MARK_ASK_MAX_CANDIDATE_PASSAGES", "80")
+ASK_MAX_CANDIDATE_PASSAGES = _env_int(
+    "MARK_ASK_MAX_CANDIDATE_PASSAGES", 80, minimum=1, maximum=10_000
 )
 # Max passages drawn from any one session, so a single long transcript can't
 # crowd out other sources (favouring breadth across sessions).
-ASK_PER_SESSION_PASSAGES = int(os.environ.get("MARK_ASK_PER_SESSION_PASSAGES", "2"))
+ASK_PER_SESSION_PASSAGES = _env_int(
+    "MARK_ASK_PER_SESSION_PASSAGES", 2, minimum=1, maximum=100
+)
 # Turns of surrounding context included on each side of a matched passage.
-ASK_NEIGHBOR_TURNS = int(os.environ.get("MARK_ASK_NEIGHBOR_TURNS", "1"))
+ASK_NEIGHBOR_TURNS = _env_int("MARK_ASK_NEIGHBOR_TURNS", 1, minimum=0, maximum=20)
 # Cap on characters from the matched passage itself (chunks are already small).
-ASK_MAX_TURN_CHARS = int(os.environ.get("MARK_ASK_MAX_TURN_CHARS", "4000"))
+ASK_MAX_TURN_CHARS = _env_int(
+    "MARK_ASK_MAX_TURN_CHARS", 4000, minimum=100, maximum=1_000_000
+)
 # Cap on characters from each *surrounding* neighbour turn. Kept small so that
 # widening a match for context doesn't blow the budget and starve breadth across
 # sessions — the single biggest factor in how many sources an answer can cite.
-ASK_NEIGHBOR_CHARS = int(os.environ.get("MARK_ASK_NEIGHBOR_CHARS", "800"))
+ASK_NEIGHBOR_CHARS = _env_int(
+    "MARK_ASK_NEIGHBOR_CHARS", 800, minimum=50, maximum=100_000
+)
+ASK_SOURCE_EXCERPT_CHARS = _env_int(
+    "MARK_ASK_SOURCE_EXCERPT_CHARS", 320, minimum=80, maximum=2_000
+)
+ASK_RECENT_SESSION_CANDIDATES = _env_int(
+    "MARK_ASK_RECENT_SESSION_CANDIDATES", 20, minimum=1, maximum=500
+)
 # Cross-encoder reranker for sharper passage relevance. Needs fastembed (the
 # `semantic` extra); silently skipped when unavailable. Set 0 to disable.
 ASK_RERANK = os.environ.get("MARK_ASK_RERANK", "1") not in ("0", "", "false", "False")
@@ -94,7 +148,11 @@ RESUME_COMMAND = os.environ.get("MARK_RESUME_CMD", "copilot --resume {id}")
 # running an incremental import only when something actually changed.
 AUTO_SYNC = os.environ.get("MARK_AUTO_SYNC", "1") not in ("0", "", "false", "False")
 # Seconds between source-change checks. Lower = faster pickup, slightly more I/O.
-SYNC_INTERVAL = max(5, int(os.environ.get("MARK_SYNC_INTERVAL", "20")))
+SYNC_INTERVAL = _env_int("MARK_SYNC_INTERVAL", 20, minimum=5, maximum=86_400)
+# Failed automatic scans retry with capped exponential backoff. Manual re-scans
+# bypass the current deadline but retain rebuild intent until a pass succeeds.
+SYNC_RETRY_BASE = _env_float("MARK_SYNC_RETRY_BASE", 5, minimum=0.1, maximum=86_400)
+SYNC_RETRY_MAX = _env_float("MARK_SYNC_RETRY_MAX", 300, minimum=0.1, maximum=604_800)
 
 # Public list prices in USD per 1M tokens: (input, output, cached_input).
 # Matched by substring against the model name; override the whole table with a
@@ -187,7 +245,7 @@ def price_for(model: str | None) -> tuple[float, float, float]:
 # Preferred transformer model when fastembed is installed.
 EMBED_MODEL = os.environ.get("MARK_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 # Dimension used by the always-available built-in hashing vectorizer fallback.
-HASH_EMBED_DIM = int(os.environ.get("MARK_HASH_DIM", "1024"))
+HASH_EMBED_DIM = _env_int("MARK_HASH_DIM", 1024, minimum=8, maximum=65_536)
 
 
 # Cap CPU used by the transformer embedding backend so a first-time index of a
@@ -232,24 +290,101 @@ def _default_embed_threads() -> int:
     return max(1, min(int(effective) // 4, 4))
 
 
-EMBED_THREADS = max(
-    0, int(os.environ.get("MARK_EMBED_THREADS", str(_default_embed_threads())))
+EMBED_THREADS = _env_int(
+    "MARK_EMBED_THREADS", _default_embed_threads(), minimum=0, maximum=1024
 )
+# Bound the documents held by one inference call. Transformer workspace memory
+# scales with both token length and batch size, so CPU thread limits alone do
+# not protect a large first-run index from exhausting container memory.
+EMBED_BATCH_SIZE = _env_int("MARK_EMBED_BATCH_SIZE", 16, minimum=1, maximum=256)
 
 # Max characters per search chunk (the window size used to split long turns).
-MAX_CHUNK_CHARS = int(os.environ.get("MARK_MAX_CHUNK_CHARS", "2000"))
+CHUNK_OVERLAP_CHARS = 200
+MAX_CHUNK_CHARS = _env_int("MARK_MAX_CHUNK_CHARS", 2000, minimum=1, maximum=10_000_000)
 # Keyword (FTS) search indexes every chunk so nothing is lost from search. Only
 # *embeddings* are capped per session, because semantic search loads all vectors
 # into memory and one huge agent transcript would otherwise dominate it. The
 # earliest chunks per session win (user prompts are emitted first).
-MAX_EMBED_CHUNKS_PER_SESSION = int(
-    os.environ.get("MARK_MAX_EMBED_CHUNKS_PER_SESSION", "40")
+MAX_EMBED_CHUNKS_PER_SESSION = _env_int(
+    "MARK_MAX_EMBED_CHUNKS_PER_SESSION", 40, minimum=1, maximum=100_000
 )
 # Cap the size of an agent-created file we snapshot as a viewable attachment.
 # Larger files are recorded (path + size) but their content is not stored.
-MAX_ATTACHMENT_BYTES = int(os.environ.get("MARK_MAX_ATTACHMENT_BYTES", str(512 * 1024)))
+MAX_ATTACHMENT_BYTES = _env_int(
+    "MARK_MAX_ATTACHMENT_BYTES", 512 * 1024, minimum=1, maximum=1024**3
+)
 
-MAX_UPLOAD_BYTES = int(os.environ.get("MARK_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+MAX_UPLOAD_BYTES = _env_int(
+    "MARK_MAX_UPLOAD_BYTES", 25 * 1024 * 1024, minimum=1, maximum=4 * 1024**3
+)
+
+MAX_NOTE_TITLE_CHARS = 200
+MAX_NOTE_TEXT_CHARS = 2_000_000
+MAX_RENDER_TEXT_CHARS = 2_000_000
+DETAIL_TURN_PAGE_SIZE = _env_int(
+    "MARK_DETAIL_TURN_PAGE_SIZE", 20, minimum=1, maximum=100
+)
+DETAIL_INLINE_TURN_CHARS = _env_int(
+    "MARK_DETAIL_INLINE_TURN_CHARS", 250_000, minimum=1_000, maximum=10_000_000
+)
+DETAIL_SUMMARY_CHARS = _env_int(
+    "MARK_DETAIL_SUMMARY_CHARS", 2_000, minimum=100, maximum=100_000
+)
+DETAIL_FILE_LIMIT = _env_int("MARK_DETAIL_FILE_LIMIT", 40, minimum=1, maximum=1_000)
+DETAIL_LINK_LIMIT = _env_int("MARK_DETAIL_LINK_LIMIT", 25, minimum=1, maximum=1_000)
+DETAIL_ATTACHMENT_LIMIT = _env_int(
+    "MARK_DETAIL_ATTACHMENT_LIMIT", 100, minimum=1, maximum=1_000
+)
+MAX_EXTRACTED_TEXT_CHARS = _env_int(
+    "MARK_MAX_EXTRACTED_TEXT_CHARS", 5_000_000, minimum=1_000, maximum=100_000_000
+)
+MAX_PDF_PAGES = _env_int("MARK_MAX_PDF_PAGES", 1_000, minimum=1, maximum=100_000)
+PDF_EXTRACT_TIMEOUT = _env_float(
+    "MARK_PDF_EXTRACT_TIMEOUT", 30, minimum=1, maximum=3_600
+)
+PDF_EXTRACT_MEMORY_BYTES = _env_int(
+    "MARK_PDF_EXTRACT_MEMORY_BYTES",
+    512 * 1024 * 1024,
+    minimum=64 * 1024 * 1024,
+    maximum=8 * 1024**3,
+)
+MAX_ASK_QUESTION_CHARS = 2_000
+MAX_ASK_SESSION_LIMIT = 1_000
+MAX_COLLECTION_NAME_CHARS = 80
+MAX_COLLECTION_DESCRIPTION_CHARS = 2_000
+MAX_COLLECTION_QUERY_CHARS = 2_000
+MAX_COLLECTION_FILTER_CHARS = 200
+MAX_COLLECTION_TAGS = 20
+MAX_TAG_CHARS = 40
+COLLECTION_RANKED_LIMIT = 500
+
+
+def validate() -> None:
+    """Validate cross-setting invariants after environment parsing."""
+    if MAX_CHUNK_CHARS <= CHUNK_OVERLAP_CHARS:
+        raise ValueError(
+            "MARK_MAX_CHUNK_CHARS must be greater than "
+            f"the {CHUNK_OVERLAP_CHARS}-character overlap"
+        )
+    if SYNC_RETRY_MAX < SYNC_RETRY_BASE:
+        raise ValueError("MARK_SYNC_RETRY_MAX must be >= MARK_SYNC_RETRY_BASE")
+    if ASK_PER_SESSION_PASSAGES > ASK_MAX_CANDIDATE_PASSAGES:
+        raise ValueError(
+            "MARK_ASK_PER_SESSION_PASSAGES must be <= "
+            "MARK_ASK_MAX_CANDIDATE_PASSAGES"
+        )
+    if ASK_RESERVE_OUTPUT_TOKENS >= ASK_NUM_CTX_CAP:
+        raise ValueError(
+            "MARK_ASK_RESERVE_OUTPUT_TOKENS must be less than MARK_ASK_NUM_CTX_CAP"
+        )
+    neighbor_pairs = ASK_MAX_CANDIDATE_PASSAGES * (2 * ASK_NEIGHBOR_TURNS + 1)
+    if neighbor_pairs > 10_000:
+        raise ValueError(
+            "MARK_ASK_MAX_CANDIDATE_PASSAGES and MARK_ASK_NEIGHBOR_TURNS "
+            "may select at most 10000 turn rows"
+        )
+
+
 # Extensions we will extract text from directly (plus .pdf if pypdf installed).
 TEXT_EXTENSIONS = {
     ".txt",

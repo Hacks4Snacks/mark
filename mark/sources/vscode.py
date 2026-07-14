@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
-from ..persist import load_file_signatures, record_file_signature, write_session
+from ..persist import _write_session, load_file_signatures, record_file_signature
 from .base import (
     FENCE_RE,
     URL_RE,
@@ -454,23 +454,11 @@ def _decode_session_id(name: str) -> str | None:
     return None
 
 
-def _read_memory_attachment(path: Path) -> dict[str, Any] | None:
+def _read_memory_attachment(path: Path, root: Path) -> dict[str, Any] | None:
     """Snapshot a memory note as a viewable text attachment (content capped)."""
-    try:
-        st = path.stat()
-        raw = path.read_bytes()
-    except OSError:
-        return None
-    att: dict[str, Any] = {
-        "filename": path.name,
-        "stored_path": str(path),
-        "mime": "text/markdown",
-        "size_bytes": st.st_size,
-        "content": None,
-    }
-    if st.st_size <= config.MAX_ATTACHMENT_BYTES:
-        att["content"] = raw.decode("utf-8", "replace")
-    return att
+    from .. import attachments
+
+    return attachments.inline_file(path, root=root)
 
 
 def _session_memory_attachments(ws_dir: Path, session_id: str) -> list[dict[str, Any]]:
@@ -494,7 +482,7 @@ def _session_memory_attachments(ws_dir: Path, session_id: str) -> list[dict[str,
             continue
         for md in sorted(d.rglob("*.md")):
             if md.is_file():
-                att = _read_memory_attachment(md)
+                att = _read_memory_attachment(md, d)
                 if att:
                     out.append(att)
     return out
@@ -611,11 +599,12 @@ class VSCodeSource(WatchedSource):
             record_file_signature(cur, sp, sig)  # remember this version either way
             if not session:
                 continue
+            session["source_adapter"] = self.key
             prior = existing.get(session["id"])
             if prior is not None and prior == session["content_hash"] and not rebuild:
                 skipped += 1
                 continue
-            write_session(cur, session)
+            _write_session(cur, session)
             added += 1 if prior is None else 0
             updated += 0 if prior is None else 1
             if progress:

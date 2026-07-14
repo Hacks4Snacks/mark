@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from . import embeddings
+from . import config, embeddings
 
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
@@ -224,7 +224,10 @@ def _candidates(text: str, max_candidates: int = 30) -> list[tuple[str, float]]:
     filt = [
         w
         for w in words
-        if w and w not in _STOP and len(w) > 2 and not w.replace(".", "").isdigit()
+        if w
+        and w not in _STOP
+        and 2 < len(w) <= config.MAX_TAG_CHARS
+        and not w.replace(".", "").isdigit()
     ]
     unigrams = Counter(filt)
     bigrams = Counter(f"{a} {b}" for a, b in pairwise(filt))
@@ -316,8 +319,8 @@ def _keywords_freq(text: str, top_k: int = 6) -> list[tuple[str, float]]:
 
 
 def enrich_text(title: str, text: str) -> tuple[str, list[tuple[str, float]]]:
-    """Enrichment for uploaded documents/notes."""
+    """Embedding-free enrichment for uploaded documents/notes."""
     turn = [{"user_message": title, "assistant_response": text}]
-    summary = _summarize(turn)
-    tags = _keywords(f"{title}\n{_plaintext(text)}")
+    summary = _summarize_fast(turn)
+    tags = _keywords_freq(f"{title}\n{_plaintext(text)}")
     return summary, tags

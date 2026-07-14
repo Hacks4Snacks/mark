@@ -103,8 +103,18 @@ class MarkLightStyle(Style):
 
 _FORMATTER = HtmlFormatter(nowrap=False, cssclass="hl", style=MarkDarkStyle)
 
+# Pygments emits one <span> per token, so a single very large code block can
+# explode into thousands of DOM nodes. A pathological agent transcript (whole-file
+# dumps, long command output, big diffs) can reach tens of thousands of spans,
+# which is what makes the detail view slow to lay out, paint, and scroll. Past a
+# few KB the syntax colours add little to those blocks but cost a lot, so above
+# the cap we skip tokenising and let markdown-it emit a plain escaped <pre>.
+_MAX_HIGHLIGHT_CHARS = 4000
+
 
 def _highlight(code: str, lang: str | None, _attrs) -> str:
+    if len(code) > _MAX_HIGHLIGHT_CHARS:
+        return ""  # too large to tokenise cheaply; render as a plain <pre>
     try:
         lexer = get_lexer_by_name(lang) if lang else guess_lexer(code)
     except (ClassNotFound, ValueError):

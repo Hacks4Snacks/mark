@@ -38,7 +38,10 @@ When you ask a question, Mark:
 
 1. **Retrieves** the most relevant *passages* from your history using the same
    hybrid (keyword + semantic) search that powers the rest of the app — pinning
-   the exact turns that answer your question rather than whole sessions.
+   the exact turns that answer your question rather than whole sessions. Exact
+   repository names and deterministic date phrases such as *today*, *yesterday*,
+   *past week*, *last 30 days*, and *since 2026-01-01* are converted into
+   pre-ranking scope. *Latest* and *most recent* add recency-first ordering.
 2. **Reranks** those passages with a local cross-encoder (when the `semantic`
    extra is installed) so the most on-point excerpts win; otherwise it keeps the
    hybrid-search order.
@@ -48,6 +51,11 @@ When you ask a question, Mark:
    from one session share its citation number.
 4. Has the **local** model synthesise an answer that cites the sources it used
    (e.g. `[1]`, `[2]`), and **streams it back token by token**.
+
+Expand any citation to inspect the exact bounded passage excerpts Mark supplied
+to the model, including turn and date metadata, then open the full conversation
+when more context is needed. Sources are listed only after their passage is
+accepted into the prompt budget.
 
 The model is instructed to answer **only** from your excerpts and to say plainly
 when the answer isn't in your history — rather than guessing. Your archive never

@@ -47,8 +47,10 @@ speed. Search works on whatever is indexed so far and fills in as it goes.
 
 **New sessions aren't showing up.**
 Mark auto-syncs while running, but you can force it with the **⟳** button. If you
-disabled syncing (`MARK_AUTO_SYNC=0`), ⟳ is the only trigger. Confirm the source
-is enabled and its roots exist — see [Sources & syncing](sources.md).
+disabled syncing (`MARK_AUTO_SYNC=0`), Mark still scans once at startup, but ⟳
+is the only trigger after that and failed scans are not retried automatically.
+Confirm the source is enabled and its roots exist — see
+[Sources & syncing](sources.md).
 
 **A source isn't detected.**
 Check that its path matches what Mark probes (different OSes and editor channels

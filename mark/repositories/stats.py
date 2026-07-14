@@ -20,6 +20,30 @@ def source_counts() -> dict[str, int]:
         }
 
 
+def source_adapter_counts() -> dict[str, int]:
+    """Indexed rows by stable watched-adapter key."""
+    with db.cursor() as cur:
+        return {
+            r["source_adapter"]: r["n"]
+            for r in cur.execute(
+                "SELECT source_adapter, COUNT(*) n FROM sessions "
+                "WHERE source_adapter IS NOT NULL GROUP BY source_adapter"
+            ).fetchall()
+        }
+
+
+def legacy_source_counts() -> dict[str, int]:
+    """Pre-adapter rows grouped by their historical display source."""
+    with db.cursor() as cur:
+        return {
+            r["source"]: r["n"]
+            for r in cur.execute(
+                "SELECT source, COUNT(*) n FROM sessions "
+                "WHERE source_adapter IS NULL GROUP BY source"
+            ).fetchall()
+        }
+
+
 def overview() -> dict[str, Any]:
     """Headline counts and aggregates for the sidebar stat cards."""
     vclause, vparams = visibility.sql_where()

@@ -56,12 +56,17 @@ To tune it, uncomment the `environment:` block in `docker-compose.yml`:
 environment:
   # Embedding CPU cap. "0" = all cores (fastest); a low number = gentler/slower.
   MARK_EMBED_THREADS: "2"
+  # Documents per inference call. Lower this if embedding memory is constrained.
+  MARK_EMBED_BATCH_SIZE: "16"
   # Cap on embedded chunks per session (keyword/FTS still indexes all chunks).
   # MARK_MAX_EMBED_CHUNKS_PER_SESSION: "40"
 ```
 
-Incremental syncs only embed newly added turns, so they stay cheap regardless.
-See the full [configuration reference](configuration.md) for every variable.
+The web app becomes available before a pending semantic index is repaired.
+Keyword search remains usable while the background coordinator streams missing
+vectors in bounded batches. Incremental syncs only embed newly added turns, so
+they stay cheap regardless. See the full
+[configuration reference](configuration.md) for every variable.
 
 ## Advanced source config
 

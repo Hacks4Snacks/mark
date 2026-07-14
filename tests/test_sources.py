@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import threading
+from pathlib import Path
 
+import pytest
+
+from mark.repositories import sessions as sessions_repo
 from mark.sources import IMPORT_SOURCES, WATCHED_SOURCES, claude_code, vscode
 from mark.sources.chatgpt import ChatGptSource
 from mark.sources.grok import GrokSource
@@ -110,10 +116,27 @@ def test_chatgpt_import_into_db(persist_session):
     with db.connect() as conn:
         cur = conn.cursor()
         for session in src.parse_export(_sample_export()):
-            persist.write_session(cur, session)
+            persist._write_session(cur, session)
         conn.commit()
     res = search.search("refresh token", mode="keyword")
     assert any(r["id"] == "chatgpt-abc" for r in res)
+
+
+def test_export_import_succeeds_when_semantic_backfill_fails(monkeypatch):
+    from mark import db, ingest, search
+
+    monkeypatch.setattr(
+        ingest,
+        "_embed_pending",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    result = ingest.import_export("conversations.json", _sample_export())
+
+    assert result["matched"] == "chatgpt"
+    assert result["imported"] == 1
+    assert search.get_session("chatgpt-abc") is not None
+    assert db.get_meta("embed_pending") == "1"
+    assert ingest.semantic_status()["error"] == "offline"
 
 
 def test_grok_detect():
@@ -155,7 +178,7 @@ def test_grok_import_into_db(persist_session):
     with db.connect() as conn:
         cur = conn.cursor()
         for session in src.parse_export(_sample_grok_export()):
-            persist.write_session(cur, session)
+            persist._write_session(cur, session)
         conn.commit()
     res = search.search("refresh token", mode="keyword")
     assert any(r["id"] == "grok-9a8a350b-45b4-4847-9c14-20acba8d2faa" for r in res)
@@ -452,6 +475,42 @@ def test_cline_parses_task_history(tmp_path):
     assert s["created_at"] <= s["updated_at"]
 
 
+def test_cline_ingest_persists_adapter_for_configured_and_unknown_sources(tmp_path):
+    from mark import config, db
+    from mark.sources.cline import ClineSource
+
+    root = tmp_path / "globalStorage"
+    messages = [
+        {"role": "user", "content": "dynamic source", "ts": 1700000000000},
+        {"role": "assistant", "content": "indexed", "ts": 1700000001000},
+    ]
+    for extension, task_id in (
+        ("vendor.configured", "1700000000000"),
+        ("vendor.unknown-fork", "1700000000001"),
+    ):
+        task = root / extension / "tasks" / task_id
+        task.mkdir(parents=True)
+        (task / "api_conversation_history.json").write_text(json.dumps(messages))
+    cfg = config.SourceConfig(
+        key="cline",
+        roots=[root],
+        options={"extensions": {"vendor.configured": "myagent"}},
+    )
+    with db.connect() as conn:
+        cur = conn.cursor()
+        counts = ClineSource().ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        rows = {
+            r["source"]: r["source_adapter"]
+            for r in cur.execute(
+                "SELECT source, source_adapter FROM sessions ORDER BY source"
+            )
+        }
+
+    assert counts["added"] == 2
+    assert rows == {"myagent": "cline", "unknown-fork": "cline"}
+
+
 def test_copilot_cli_indexes_store_sessions(tmp_path):
     """The Copilot CLI store (sessions+turns tables) is snapshotted and indexed."""
     from mark import config, db, search
@@ -666,6 +725,879 @@ def test_copilot_cli_events_inline_agentic_trace(tmp_path):
     tool_names = set(json.loads(s["turns"][0]["tools"]))
     assert {"view", "rg", "apply_patch", "bash"} <= tool_names
     assert any(f["file_path"] == edited for f in s["files"])
+
+
+def test_copilot_cli_records_only_successful_write_paths(tmp_path):
+    """Requested and failed writes stay in the trace but never become files."""
+    from mark.sources.copilot_cli import _events_to_turns
+
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    requested = "/repo/requested-only.txt"
+    failed = "/repo/failed.txt"
+    succeeded = "/repo/succeeded.txt"
+    events = [
+        {"type": "user.message", "data": {"content": "edit files"}},
+        {
+            "type": "assistant.message",
+            "data": {
+                "content": "Working on it.",
+                "toolRequests": [
+                    {
+                        "name": "create_file",
+                        "arguments": {"filePath": requested},
+                    }
+                ],
+            },
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "failed",
+                "toolName": "create_file",
+                "arguments": {"filePath": failed},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "failed", "success": False},
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "succeeded",
+                "toolName": "edit_file",
+                "arguments": {"filePath": succeeded},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "succeeded", "success": True},
+        },
+    ]
+    (sdir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+
+    parsed = _events_to_turns("sess1", state_dir)
+    assert parsed is not None
+    turns, files_modified = parsed
+    assert files_modified == []
+    assert turns[0]["files"] == [succeeded]
+    assert requested not in turns[0]["files"]
+    assert failed not in turns[0]["files"]
+    assert "— failed" in turns[0]["assistant_response"]
+
+
+def test_copilot_cli_duplicate_call_id_never_promotes_path(tmp_path):
+    from mark.sources.copilot_cli import _events_to_turns
+
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    events = [
+        {"type": "user.message", "data": {"content": "edit"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "duplicate",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/first.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "duplicate",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/never-completed.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "duplicate", "success": True},
+        },
+    ]
+    (sdir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+
+    parsed = _events_to_turns("sess1", state_dir)
+    assert parsed is not None
+    turns, _ = parsed
+    assert turns[0]["files"] == []
+
+
+def test_copilot_cli_conflicting_completions_never_promote_path(tmp_path):
+    from mark.sources.copilot_cli import _events_to_turns
+
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    events = [
+        {"type": "user.message", "data": {"content": "edit"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "write",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/file.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "write", "success": True},
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "write", "success": False},
+        },
+    ]
+    (sdir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+
+    parsed = _events_to_turns("sess1", state_dir)
+    assert parsed is not None
+    assert parsed[0][0]["files"] == []
+
+
+def test_copilot_cli_call_id_reuse_across_turns_never_promotes(tmp_path):
+    from mark.sources.copilot_cli import _events_to_turns
+
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    events = [
+        {"type": "user.message", "data": {"content": "first"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "reused",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/first.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "reused", "success": True},
+        },
+        {"type": "user.message", "data": {"content": "second"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "reused",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/second.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "reused", "success": True},
+        },
+    ]
+    (sdir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+
+    parsed = _events_to_turns("sess1", state_dir)
+    assert parsed is not None
+    assert all(turn["files"] == [] for turn in parsed[0])
+
+
+def test_copilot_cli_invalid_terminal_order_and_type_never_promote(tmp_path):
+    from mark.sources.copilot_cli import _events_to_turns
+
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    events = [
+        {"type": "user.message", "data": {"content": "edit"}},
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "before", "success": True},
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "before",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/before.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "numeric",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/numeric.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "numeric", "success": 1},
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "paths",
+                "toolName": "create_file",
+                "arguments": {
+                    "filePath": "/repo/one.txt",
+                    "path": "/repo/two.txt",
+                },
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "paths", "success": True},
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "   ",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/blank-id.txt"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "   ", "success": True},
+        },
+    ]
+    (sdir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+
+    parsed = _events_to_turns("sess1", state_dir)
+    assert parsed is not None
+    assert parsed[0][0]["files"] == []
+
+
+def test_copilot_cli_completion_changes_session_hash(tmp_path):
+    from mark.sources.copilot_cli import _events_to_turns, _hash_cli_session
+
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    path = sdir / "events.jsonl"
+    events = [
+        {"type": "user.message", "data": {"content": "edit"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "write",
+                "toolName": "create_file",
+                "arguments": {"filePath": "/repo/delayed.txt"},
+            },
+        },
+    ]
+    path.write_text("\n".join(json.dumps(e) for e in events), encoding="utf-8")
+    before = _events_to_turns("sess1", state_dir)
+    assert before is not None
+    before_hash = _hash_cli_session("same", before[0], before[1])
+
+    events.append(
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "write", "success": True},
+        }
+    )
+    path.write_text("\n".join(json.dumps(e) for e in events), encoding="utf-8")
+    after = _events_to_turns("sess1", state_dir)
+    assert after is not None
+    after_hash = _hash_cli_session("same", after[0], after[1])
+
+    assert before[0][0]["files"] == []
+    assert after[0][0]["files"] == ["/repo/delayed.txt"]
+    assert before_hash != after_hash
+
+
+def test_copilot_cli_fingerprint_changes_with_event_log(tmp_path):
+    from mark import config
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    store = tmp_path / "session-store.db"
+    store.write_bytes(b"store")
+    state_dir = tmp_path / "session-state"
+    events = state_dir / "sess1" / "events.jsonl"
+    events.parent.mkdir(parents=True)
+    events.write_text('{"type":"user.message"}\n')
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(state_dir)},
+    )
+    source = CopilotCliSource()
+    before = source.fingerprint(cfg)
+    events.write_text(
+        '{"type":"user.message"}\n'
+        '{"type":"tool.execution_complete","data":{"success":true}}\n'
+    )
+    after = source.fingerprint(cfg)
+
+    assert before != after
+
+
+def test_copilot_cli_reingests_delayed_completion(tmp_path):
+    from mark import config, db
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    created = workspace / "created.txt"
+    created.write_text("captured after completion")
+    store = tmp_path / "session-store.db"
+    con = sqlite3.connect(store)
+    con.execute(
+        "CREATE TABLE sessions (id TEXT, cwd TEXT, repository TEXT, summary TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    con.execute(
+        "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+        (
+            "sess1",
+            str(workspace),
+            None,
+            None,
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+        ),
+    )
+    con.commit()
+    con.close()
+
+    state_dir = tmp_path / "session-state"
+    events_path = state_dir / "sess1" / "events.jsonl"
+    events_path.parent.mkdir(parents=True)
+    events = [
+        {"type": "user.message", "data": {"content": "create file"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "write",
+                "toolName": "create_file",
+                "arguments": {"filePath": str(created)},
+            },
+        },
+    ]
+    events_path.write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(state_dir)},
+    )
+    source = CopilotCliSource()
+    with db.connect() as conn:
+        cur = conn.cursor()
+        first = source.ingest(cur, {}, cfg, rebuild=False)
+        conn.commit()
+        existing = {
+            row["id"]: row["content_hash"]
+            for row in cur.execute("SELECT id, content_hash FROM sessions")
+        }
+        assert first["added"] == 1
+        assert (
+            cur.execute(
+                "SELECT COUNT(*) FROM documents WHERE session_id = 'sess1'"
+            ).fetchone()[0]
+            == 0
+        )
+
+        events.append(
+            {
+                "type": "tool.execution_complete",
+                "data": {"toolCallId": "write", "success": True},
+            }
+        )
+        events_path.write_text(
+            "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+        )
+        second = source.ingest(cur, existing, cfg, rebuild=False)
+        conn.commit()
+        attachment = cur.execute(
+            "SELECT storage_kind, sha256 FROM documents "
+            "WHERE session_id = 'sess1' AND kind = 'attachment'"
+        ).fetchone()
+
+    assert second["updated"] == 1
+    assert attachment["storage_kind"] == "managed"
+    assert attachment["sha256"]
+
+
+def test_copilot_cli_ingest_snapshots_only_workspace_files(tmp_path):
+    from mark import attachments, config, db
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    inside = workspace / "inside.bin"
+    inside_bytes = b"\x00inside snapshot\xff"
+    inside.write_bytes(inside_bytes)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside secret")
+
+    store = tmp_path / "session-store.db"
+    con = sqlite3.connect(store)
+    con.execute(
+        "CREATE TABLE sessions (id TEXT, cwd TEXT, repository TEXT, summary TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    con.execute(
+        "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+        (
+            "sess1",
+            str(workspace),
+            None,
+            None,
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+        ),
+    )
+    con.commit()
+    con.close()
+
+    events = [
+        {"type": "user.message", "data": {"content": "write files"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "inside",
+                "toolName": "create_file",
+                "arguments": {"filePath": str(inside)},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "inside", "success": True},
+        },
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "outside",
+                "toolName": "create_file",
+                "arguments": {"filePath": str(outside)},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "outside", "success": True},
+        },
+    ]
+    state_dir = tmp_path / "session-state"
+    sdir = state_dir / "sess1"
+    sdir.mkdir(parents=True)
+    (sdir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(state_dir)},
+    )
+    with db.connect() as conn:
+        result = CopilotCliSource().ingest(conn.cursor(), {}, cfg, rebuild=False)
+        conn.commit()
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT filename, stored_path, content, sha256, size_bytes "
+                "FROM documents "
+                "WHERE session_id = 'sess1' AND kind = 'attachment'"
+            )
+        ]
+
+    assert result["added"] == 1
+    assert [row["filename"] for row in rows] == ["inside.bin"]
+    snapshot = attachments.managed_snapshot(
+        rows[0]["stored_path"],
+        sha256=rows[0]["sha256"],
+        size_bytes=rows[0]["size_bytes"],
+    )
+    assert snapshot is not None
+    assert snapshot.read_bytes() == inside_bytes
+    assert rows[0]["content"] is None
+    assert str(outside) not in {row["stored_path"] for row in rows}
+
+
+def test_attachment_snapshot_is_workspace_contained_and_immutable(tmp_path):
+    from mark import attachments
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    original = workspace / "artifact.bin"
+    original_bytes = b"\x00original binary\xff"
+    original.write_bytes(original_bytes)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private outside data")
+    escape = workspace / "escape.txt"
+    escape.symlink_to(outside)
+
+    captured = attachments.snapshot_file(
+        "artifact.bin", workspace=str(workspace), session_id="session-1"
+    )
+    assert captured is not None
+    assert captured["content"] is None
+    snapshot = attachments.managed_snapshot(
+        captured["stored_path"],
+        sha256=captured["sha256"],
+        size_bytes=captured["size_bytes"],
+    )
+    assert snapshot is not None
+    assert snapshot.read_bytes() == original_bytes
+    assert snapshot.stat().st_mode & 0o777 == 0o600
+
+    original.write_bytes(b"changed after ingest")
+    assert snapshot.read_bytes() == original_bytes
+    assert (
+        attachments.snapshot_file(
+            str(outside), workspace=str(workspace), session_id="session-1"
+        )
+        is None
+    )
+    assert (
+        attachments.snapshot_file(
+            str(escape), workspace=str(workspace), session_id="session-1"
+        )
+        is None
+    )
+    assert attachments.managed_snapshot(str(outside)) is None
+
+
+def test_attachment_snapshot_rejects_broad_workspace(tmp_path, monkeypatch):
+    from mark import attachments
+
+    home = tmp_path / "home"
+    home.mkdir()
+    secret = home / "secret.txt"
+    secret.write_text("secret")
+    monkeypatch.setattr(attachments.Path, "home", lambda: home)
+
+    assert (
+        attachments.snapshot_file(
+            str(secret), workspace=str(home), session_id="session-1"
+        )
+        is None
+    )
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    monkeypatch.setattr(attachments.tempfile, "gettempdir", lambda: str(shared))
+    assert (
+        attachments.snapshot_file(
+            str(secret), workspace=str(shared), session_id="session-1"
+        )
+        is None
+    )
+    for broad in ("/System", "/private", "/Volumes"):
+        if Path(broad).is_dir():
+            assert attachments._trusted_root(broad, reject_broad=True) is None
+
+
+def test_attachment_snapshot_rejects_macos_firmlink_alias(tmp_path):
+    from mark import attachments
+
+    alias_root = Path("/System/Volumes/Data/private/tmp")
+    canonical_root = Path("/private/tmp")
+    if not alias_root.is_dir() or not canonical_root.is_dir():
+        return
+    try:
+        same_root = os.path.samefile(alias_root, canonical_root)
+    except OSError:
+        return
+    if not same_root:
+        return
+
+    fixture = canonical_root / f"mark-f01-{tmp_path.name}.txt"
+    fixture.write_text("fixture only")
+    try:
+        alias_fixture = alias_root / fixture.name
+        assert (
+            attachments.snapshot_file(
+                str(alias_fixture),
+                workspace=str(alias_root),
+                session_id="session-1",
+            )
+            is None
+        )
+    finally:
+        fixture.unlink(missing_ok=True)
+
+
+def test_attachment_snapshot_caps_content(tmp_path, monkeypatch):
+    from mark import attachments, config
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    large = workspace / "large.txt"
+    large.write_text("too large")
+    monkeypatch.setattr(config, "MAX_ATTACHMENT_BYTES", 4)
+
+    captured = attachments.snapshot_file(
+        str(large), workspace=str(workspace), session_id="session-1"
+    )
+    assert captured is not None
+    assert captured["size_bytes"] == len("too large")
+    assert captured["content"] is None
+    assert captured["stored_path"] is None
+
+
+def test_attachment_snapshot_accepts_exact_cap(tmp_path, monkeypatch):
+    from mark import attachments, config
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    exact = workspace / "exact.bin"
+    exact.write_bytes(b"1234")
+    monkeypatch.setattr(config, "MAX_ATTACHMENT_BYTES", 4)
+
+    captured = attachments.snapshot_file(
+        str(exact), workspace=str(workspace), session_id="session-1"
+    )
+    assert captured is not None
+    assert captured["storage_kind"] == "managed"
+    assert attachments.attachment_bytes(captured) == b"1234"
+
+
+def test_attachment_reingest_removes_replaced_managed_blob(
+    tmp_path, make_session, persist_session
+):
+    from mark import attachments
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    original = workspace / "artifact.bin"
+    original.write_bytes(b"first version")
+    first = attachments.snapshot_file(
+        str(original), workspace=str(workspace), session_id="session-1"
+    )
+    assert first is not None
+    session = make_session(sid="session-1", asst="first answer")
+    session["attachments"] = [first]
+    persist_session(session)
+    first_path = Path(first["stored_path"])
+    assert first_path.exists()
+
+    original.write_bytes(b"second version")
+    second = attachments.snapshot_file(
+        str(original), workspace=str(workspace), session_id="session-1"
+    )
+    assert second is not None
+    changed = make_session(sid="session-1", asst="changed answer")
+    changed["attachments"] = [second]
+    persist_session(changed)
+    attachments.cleanup_unreferenced()
+
+    assert not first_path.exists()
+    assert Path(second["stored_path"]).exists()
+
+
+def test_attachment_cleanup_preserves_shared_managed_blob(
+    tmp_path, make_session, persist_session
+):
+    from mark import attachments
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    original = workspace / "shared.bin"
+    original.write_bytes(b"shared bytes")
+    captured = attachments.snapshot_file(
+        str(original), workspace=str(workspace), session_id="shared"
+    )
+    assert captured is not None
+    for sid in ("one", "two"):
+        session = make_session(sid=sid)
+        session["attachments"] = [captured]
+        persist_session(session)
+
+    shared_path = Path(captured["stored_path"])
+    assert sessions_repo.purge("one") is True
+    assert shared_path.exists()
+    assert sessions_repo.purge("two") is True
+    assert not shared_path.exists()
+
+
+def test_attachment_cleanup_removes_unreferenced_owned_files(tmp_path):
+    from mark import attachments, config
+
+    config.ensure_dirs()
+    upload_orphan = config.UPLOADS_DIR / "orphan.txt"
+    upload_orphan.write_text("orphan")
+    attachment_orphan = attachments.snapshot_root() / "orphan" / "blob"
+    attachment_orphan.parent.mkdir(parents=True)
+    attachment_orphan.write_bytes(b"orphan")
+
+    assert attachments.cleanup_unreferenced() == 2
+    assert not upload_orphan.exists()
+    assert not attachment_orphan.exists()
+
+
+def test_upload_failure_removes_staged_file(monkeypatch):
+    from mark import config, uploads
+
+    def fail_index(**kwargs):
+        raise RuntimeError("index failed")
+
+    monkeypatch.setattr(uploads, "_index_document_locked", fail_index)
+    with pytest.raises(RuntimeError, match="index failed"):
+        uploads.add_file("failed.txt", b"partial bytes", "text/plain")
+
+    assert not list(config.UPLOADS_DIR.glob("*"))
+
+
+def test_upload_text_extraction_is_bounded(monkeypatch):
+    from mark import config, uploads
+
+    monkeypatch.setattr(config, "MAX_EXTRACTED_TEXT_CHARS", 32)
+
+    assert uploads._extract_text("large.txt", b"x" * 1_000) == "x" * 32
+
+
+def test_pdf_extraction_including_separators_is_bounded(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from mark import config, uploads
+
+    monkeypatch.setattr(config, "MAX_EXTRACTED_TEXT_CHARS", 5)
+
+    def page(text):
+        def extract_text(*, visitor_text):
+            visitor_text(text, None, None, None, None)
+            return text
+
+        return SimpleNamespace(extract_text=extract_text)
+
+    fake_reader = lambda stream: SimpleNamespace(  # noqa: E731
+        pages=[page("abc"), page("def")]
+    )
+    monkeypatch.setitem(sys.modules, "pypdf", SimpleNamespace(PdfReader=fake_reader))
+
+    assert uploads._extract_text("large.pdf", b"pdf") == "abc\nd"
+
+
+def test_pdf_extraction_stops_at_page_limit(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from mark import config, uploads
+
+    calls = []
+
+    def page(text):
+        def extract_text(*, visitor_text):
+            calls.append(text)
+            visitor_text(text, None, None, None, None)
+            return text
+
+        return SimpleNamespace(extract_text=extract_text)
+
+    monkeypatch.setattr(config, "MAX_PDF_PAGES", 1)
+    monkeypatch.setitem(
+        sys.modules,
+        "pypdf",
+        SimpleNamespace(
+            PdfReader=lambda stream: SimpleNamespace(pages=[page("a"), page("b")])
+        ),
+    )
+
+    assert uploads._extract_text("pages.pdf", b"pdf") == "a"
+    assert calls == ["a"]
+
+
+def test_pdf_extraction_runs_in_spawned_bounded_worker(tmp_path):
+    from pypdf import PdfWriter
+
+    from mark import uploads
+
+    pdf = tmp_path / "blank.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    with pdf.open("wb") as stream:
+        writer.write(stream)
+
+    ok, content = uploads._extract_pdf_file_result(pdf)
+
+    assert ok is True
+    assert content == ""
+
+
+def test_pdf_worker_fails_closed_above_memory_limit(tmp_path, monkeypatch):
+    from pypdf import PdfWriter
+
+    from mark import config, uploads
+
+    pdf = tmp_path / "blank.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    with pdf.open("wb") as stream:
+        writer.write(stream)
+    monkeypatch.setattr(
+        uploads,
+        "_process_rss_bytes",
+        lambda pid: config.PDF_EXTRACT_MEMORY_BYTES + 1,
+    )
+
+    ok, content = uploads._extract_pdf_file_result(pdf)
+
+    assert ok is False
+    assert content == ""
+
+
+def test_pdf_worker_checks_memory_after_result(tmp_path, monkeypatch):
+    import os
+
+    from pypdf import PdfWriter
+
+    from mark import uploads
+
+    pdf = tmp_path / "blank.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    with pdf.open("wb") as stream:
+        writer.write(stream)
+    checked_pids = []
+
+    def reject_completed_result(pid):
+        os.kill(pid, 0)
+        checked_pids.append(pid)
+        return False
+
+    monkeypatch.setattr(
+        uploads,
+        "_pdf_result_within_memory",
+        reject_completed_result,
+    )
+
+    ok, content = uploads._extract_pdf_file_result(pdf)
+
+    assert checked_pids
+    assert ok is False
+    assert content == ""
+
+
+def test_inline_attachment_requires_supported_exact_provenance(monkeypatch):
+    import hashlib
+
+    from mark import attachments, config
+
+    raw = b"trusted"
+    base = {
+        "capture_version": attachments.CAPTURE_VERSION,
+        "storage_kind": "inline",
+        "content": raw.decode(),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "size_bytes": len(raw),
+    }
+    assert attachments.attachment_bytes(base) == raw
+    assert attachments.attachment_bytes({**base, "capture_version": 999}) is None
+    assert attachments.attachment_bytes({**base, "size_bytes": 1}) is None
+    assert attachments.attachment_bytes({**base, "sha256": "0" * 64}) is None
+    monkeypatch.setattr(config, "MAX_ATTACHMENT_BYTES", len(raw) - 1)
+    assert attachments.attachment_bytes(base) is None
 
 
 def test_cursor_indexes_composer_from_vscdb(tmp_path):
@@ -1029,6 +1961,286 @@ def test_ingest_all_skips_unchanged_source(monkeypatch):
     ingest.ingest_all(do_embed=False)
     ingest.ingest_all(do_embed=False)
     assert calls["n"] == 1  # second pass skipped: fingerprint unchanged
+
+
+def test_sources_fingerprint_isolates_broken_adapter(monkeypatch):
+    from mark import ingest
+    from mark.sources.base import WatchedSource
+
+    healthy_called = False
+
+    class BrokenSource(WatchedSource):
+        key = "broken"
+
+        def fingerprint(self, cfg) -> str:
+            raise RuntimeError("boom")
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            return {"added": 0, "updated": 0, "skipped": 0}
+
+    class HealthySource(WatchedSource):
+        key = "healthy"
+
+        def fingerprint(self, cfg) -> str:
+            nonlocal healthy_called
+            healthy_called = True
+            return "changed"
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            return {"added": 0, "updated": 0, "skipped": 0}
+
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [BrokenSource(), HealthySource()])
+    snapshot = ingest.sources_fingerprint_snapshot()
+
+    assert healthy_called is True
+    assert snapshot.value == "broken=!error|healthy=changed"
+    assert snapshot.errors == {"broken": "boom"}
+
+
+def test_ingest_all_isolates_failed_source_and_continues(monkeypatch, make_session):
+    """A broken adapter rolls back its partial writes without blocking later ones."""
+    from mark import db, ingest
+    from mark.sources.base import WatchedSource
+
+    class FailingSource(WatchedSource):
+        key = "failing"
+        row_sources = ("failing",)
+
+        def fingerprint(self, cfg) -> str:
+            return "failing-fp"
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            ingest.persist._write_session(
+                cur,
+                make_session(
+                    sid="rolled-back",
+                    user="partial source content",
+                ),
+            )
+            raise RuntimeError("broken adapter")
+
+    class HealthySource(WatchedSource):
+        key = "healthy"
+        row_sources = ("healthy",)
+
+        def fingerprint(self, cfg) -> str:
+            return "healthy-fp"
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            cur.execute(
+                "INSERT INTO source_file_stat(path, signature) VALUES (?, ?)",
+                ("healthy-write", "committed"),
+            )
+            return {"added": 1, "updated": 0, "skipped": 0}
+
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [FailingSource(), HealthySource()])
+    result = ingest.ingest_all(do_embed=False)
+
+    assert result["added"] == 1
+    assert result["errors"] == {"failing": "broken adapter"}
+    assert result["sources"]["failing"]["status"] == "error"
+    assert result["sources"]["healthy"]["status"] == "ok"
+    with db.cursor() as cur:
+        for table, id_column in (
+            ("sessions", "id"),
+            ("chunks", "session_id"),
+            ("search_index", "session_id"),
+        ):
+            assert (
+                cur.execute(
+                    f"SELECT 1 FROM {table} WHERE {id_column} = 'rolled-back'"
+                ).fetchone()
+                is None
+            ), table
+        assert (
+            cur.execute(
+                "SELECT 1 FROM source_file_stat WHERE path = 'srcfp:failing'"
+            ).fetchone()
+            is None
+        )
+        assert (
+            cur.execute(
+                "SELECT 1 FROM source_file_stat WHERE path = 'healthy-write'"
+            ).fetchone()
+            is not None
+        )
+        assert (
+            cur.execute(
+                "SELECT signature FROM source_file_stat WHERE path = 'srcfp:healthy'"
+            ).fetchone()[0]
+            == "healthy-fp"
+        )
+
+
+def test_ingest_all_does_not_count_rolled_back_source(monkeypatch):
+    from mark import db, ingest
+    from mark.sources.base import WatchedSource
+
+    class Source(WatchedSource):
+        key = "late-failure"
+        row_sources = ("late-failure",)
+
+        def fingerprint(self, cfg) -> str:
+            return "source-fp"
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            cur.execute(
+                "INSERT INTO source_file_stat(path, signature) VALUES (?, ?)",
+                ("source-write", "must-rollback"),
+            )
+            return {"added": 1, "updated": 0, "skipped": 0}
+
+    def fail_fingerprint(cur, path, signature):
+        raise RuntimeError("cannot persist fingerprint")
+
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [Source()])
+    monkeypatch.setattr(ingest.persist, "record_file_signature", fail_fingerprint)
+    result = ingest.ingest_all(do_embed=False)
+
+    assert result["added"] == 0
+    assert result["errors"] == {"late-failure": "cannot persist fingerprint"}
+    with db.cursor() as cur:
+        assert (
+            cur.execute(
+                "SELECT 1 FROM source_file_stat WHERE path = 'source-write'"
+            ).fetchone()
+            is None
+        )
+
+
+def test_ingest_all_retries_source_after_recovery(monkeypatch):
+    from mark import db, ingest
+    from mark.sources.base import WatchedSource
+
+    calls = 0
+
+    class Source(WatchedSource):
+        key = "recovering"
+        row_sources = ("recovering",)
+
+        def fingerprint(self, cfg) -> str:
+            return "recovering-fp"
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("temporary failure")
+            return {"added": 0, "updated": 1, "skipped": 0}
+
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [Source()])
+    first = ingest.ingest_all(do_embed=False)
+    second = ingest.ingest_all(do_embed=False)
+
+    assert first["errors"] == {"recovering": "temporary failure"}
+    assert second["errors"] == {}
+    assert second["updated"] == 1
+    assert calls == 2
+    with db.cursor() as cur:
+        assert (
+            cur.execute(
+                "SELECT signature FROM source_file_stat "
+                "WHERE path = 'srcfp:recovering'"
+            ).fetchone()[0]
+            == "recovering-fp"
+        )
+
+
+def test_ingest_all_invalidates_prior_fingerprint_after_failure(monkeypatch):
+    from mark import db, ingest
+    from mark.sources.base import WatchedSource
+
+    class Source(WatchedSource):
+        key = "rebuild-failure"
+        row_sources = ("rebuild-failure",)
+
+        def fingerprint(self, cfg) -> str:
+            return "same-fp"
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            raise RuntimeError("rebuild failed")
+
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO source_file_stat(path, signature) VALUES (?, ?)",
+            ("srcfp:rebuild-failure", "same-fp"),
+        )
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [Source()])
+
+    result = ingest.ingest_all(rebuild=True, do_embed=False)
+    assert result["errors"] == {"rebuild-failure": "rebuild failed"}
+    with db.cursor() as cur:
+        assert (
+            cur.execute(
+                "SELECT 1 FROM source_file_stat " "WHERE path = 'srcfp:rebuild-failure'"
+            ).fetchone()
+            is None
+        )
+
+
+def test_ingest_entry_points_share_one_process_gate(monkeypatch):
+    from mark import ingest, uploads
+
+    class TrackingGate:
+        def __init__(self):
+            self.lock = threading.Lock()
+            self.condition = threading.Condition()
+            self.attempts = 0
+
+        def __enter__(self):
+            with self.condition:
+                self.attempts += 1
+                self.condition.notify_all()
+            self.lock.acquire()
+
+        def __exit__(self, exc_type, exc, tb):
+            self.lock.release()
+
+    gate = TrackingGate()
+    entered = []
+
+    def fake_ingest_all(**kwargs):
+        entered.append("watched")
+        return {"added": 0, "updated": 0, "skipped": 0}
+
+    def fake_import_export(*args, **kwargs):
+        entered.append("import")
+        return {"matched": None, "imported": 0}
+
+    def fake_index_document(**kwargs):
+        entered.append("document")
+        return "note-id"
+
+    monkeypatch.setattr(ingest, "_ingest_gate", gate)
+    monkeypatch.setattr(ingest, "_ingest_all", fake_ingest_all)
+    monkeypatch.setattr(ingest, "_import_export", fake_import_export)
+    monkeypatch.setattr(uploads, "_index_document_locked", fake_index_document)
+
+    callers = []
+    gate.lock.acquire()
+    try:
+        callers = [
+            threading.Thread(target=lambda: ingest.ingest_all(do_embed=False)),
+            threading.Thread(target=lambda: ingest.import_export("x", b"x")),
+            threading.Thread(
+                target=lambda: uploads._index_document(
+                    title="note",
+                    kind="note",
+                    content="body",
+                )
+            ),
+        ]
+        for caller in callers:
+            caller.start()
+        with gate.condition:
+            assert gate.condition.wait_for(lambda: gate.attempts == 3, timeout=2)
+        assert entered == []
+    finally:
+        gate.lock.release()
+    for caller in callers:
+        caller.join(timeout=2)
+        assert not caller.is_alive()
+    assert sorted(entered) == ["document", "import", "watched"]
 
 
 def test_snapshot_sqlite_falls_back_to_filecopy(tmp_path, monkeypatch):

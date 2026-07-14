@@ -55,7 +55,7 @@
       <button id="usageBtn" class="btn" title="Usage &amp; spend analytics" aria-label="Usage dashboard"><span class="bi" data-icon="pie"></span> Usage</button>
       <button id="askBtn" class="btn" title="Ask your history with a local LLM" aria-label="Ask your history" hidden><span class="bi" data-icon="sparkles"></span> Ask</button>
       <button id="addBtn" class="btn btn-primary" title="Add a note or file" aria-label="Add a note or file"><span class="bi" data-icon="plus"></span> Add</button>
-      <button id="reindexBtn" class="btn icon-only" title="Re-scan now · auto-syncs new sessions automatically" aria-label="Re-scan history now"><span class="bi" data-icon="sync"></span></button>
+      <button id="reindexBtn" class="btn icon-only" title="Re-scan now · auto-syncs new sessions automatically" aria-label="Re-scan history now" disabled><span class="bi" data-icon="sync"></span></button>
       <button id="themeBtn" class="btn icon-only" title="Toggle theme" aria-label="Toggle light or dark theme"><span class="bi" data-icon="theme"></span></button>
     </div>
   </header>
@@ -96,7 +96,7 @@
       </div>
 
       <div class="filter-group">
-        <h4>Topics</h4>
+        <h4>Topics <span class="filter-semantics">match all</span></h4>
         <div id="tagFilters" class="chips tag-cloud"></div>
       </div>
 
@@ -278,13 +278,6 @@
           <div class="coll-row">
             <select id="collRuleSource" aria-label="Source filter">
               <option value="">Any source</option>
-              <option value="vscode">VS Code</option>
-              <option value="cli">Copilot CLI</option>
-              <option value="cline">Cline</option>
-              <option value="cursor">Cursor</option>
-              <option value="chatgpt">ChatGPT</option>
-              <option value="copilot">Copilot</option>
-              <option value="upload">Upload</option>
             </select>
             <input id="collRuleRepo" placeholder="Repository" />
           </div>
@@ -294,6 +287,12 @@
             <span class="date-sep" aria-hidden="true"><span class="bi" data-icon="arrow-right" data-icon-size="14"></span></span>
             <input type="date" id="collRuleTo" aria-label="To date" />
           </div>
+          <select id="collRuleSort" aria-label="Member sort">
+            <option value="recent">Most recent</option>
+            <option value="oldest">Oldest</option>
+            <option value="turns">Longest</option>
+            <option value="title">Title A–Z</option>
+          </select>
           <div class="segmented coll-mode-toggle" id="collRuleMode" role="tablist" aria-label="Search mode" hidden>
             <button type="button" data-mode="hybrid" class="active">Hybrid</button>
             <button type="button" data-mode="semantic">Semantic</button>

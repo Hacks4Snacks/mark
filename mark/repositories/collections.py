@@ -98,21 +98,40 @@ def delete_member(cid: str, session_id: str, now: str) -> None:
         cur.execute("UPDATE collections SET updated_at = ? WHERE id = ?", (now, cid))
 
 
-def session_rows(ids: list[str]) -> list[dict[str, Any]]:
-    """Raw session rows for ``ids``, newest first (undated last)."""
+def session_rows(
+    ids: list[str], *, offset: int = 0, limit: int | None = None, sort: str = "recent"
+) -> list[dict[str, Any]]:
+    """Raw session rows for ``ids`` with stable server-side sorting/pagination."""
     if not ids:
         return []
-    ph = ",".join("?" * len(ids))
-    with db.cursor() as cur:
-        return [
-            dict(r)
-            for r in cur.execute(
-                f"SELECT * FROM sessions WHERE id IN ({ph}) "
-                "ORDER BY COALESCE(updated_at, created_at) IS NULL, "
-                "COALESCE(updated_at, created_at) DESC",
-                ids,
-            ).fetchall()
-        ]
+    order = {
+        "recent": (
+            "COALESCE(s.updated_at, s.created_at) IS NULL, "
+            "julianday(COALESCE(s.updated_at, s.created_at)) DESC, s.id"
+        ),
+        "oldest": (
+            "COALESCE(s.updated_at, s.created_at) IS NULL, "
+            "julianday(COALESCE(s.updated_at, s.created_at)) ASC, s.id"
+        ),
+        "turns": "s.turn_count DESC, s.id",
+        "title": "s.title COLLATE NOCASE ASC, s.id",
+    }.get(
+        sort,
+        "julianday(COALESCE(s.updated_at, s.created_at)) DESC, s.id",
+    )
+    with (
+        db.cursor() as cur,
+        db.temporary_id_table(cur.connection, ids) as id_table,
+    ):
+        sql = (
+            f"SELECT s.* FROM sessions s JOIN {id_table} scope ON scope.id = s.id "
+            f"ORDER BY {order}"
+        )
+        params: list[int] = []
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend((limit, offset))
+        return [dict(r) for r in cur.execute(sql, params).fetchall()]
 
 
 def member_aggregates(ids: list[str]) -> dict[str, Any]:
@@ -120,8 +139,10 @@ def member_aggregates(ids: list[str]) -> dict[str, Any]:
 
     Caller guarantees ``ids`` is non-empty and shapes/rounds the result.
     """
-    ph = ",".join("?" * len(ids))
-    with db.cursor() as cur:
+    with (
+        db.cursor() as cur,
+        db.temporary_id_table(cur.connection, ids) as id_table,
+    ):
         totals = cur.execute(
             "SELECT COUNT(*) sessions, COALESCE(SUM(est_cost_usd),0) cost, "
             "COALESCE(SUM(premium_requests),0) premium, "
@@ -130,29 +151,28 @@ def member_aggregates(ids: list[str]) -> dict[str, Any]:
             "COALESCE(SUM(duration_seconds),0) duration, "
             "MIN(COALESCE(created_at, updated_at)) date_min, "
             "MAX(COALESCE(updated_at, created_at)) date_max "
-            f"FROM sessions WHERE id IN ({ph})",
-            ids,
+            f"FROM sessions s JOIN {id_table} scope ON scope.id = s.id"
         ).fetchone()
         files = cur.execute(
-            f"SELECT COUNT(DISTINCT file_path) n FROM session_files "
-            f"WHERE session_id IN ({ph})",
-            ids,
+            "SELECT COUNT(DISTINCT sf.file_path) n FROM session_files sf "
+            f"JOIN {id_table} scope ON scope.id = sf.session_id"
         ).fetchone()["n"]
         by_source = cur.execute(
-            f"SELECT source, COUNT(*) sessions FROM sessions WHERE id IN ({ph}) "
-            "GROUP BY source ORDER BY sessions DESC",
-            ids,
+            "SELECT s.source, COUNT(*) sessions FROM sessions s "
+            f"JOIN {id_table} scope ON scope.id = s.id "
+            "GROUP BY s.source ORDER BY sessions DESC"
         ).fetchall()
         topics = cur.execute(
-            f"SELECT tag, COUNT(*) n FROM tags WHERE session_id IN ({ph}) "
-            "GROUP BY tag ORDER BY n DESC, tag LIMIT 12",
-            ids,
+            "SELECT t.tag, COUNT(*) n FROM tags t "
+            f"JOIN {id_table} scope ON scope.id = t.session_id "
+            "GROUP BY t.tag ORDER BY n DESC, t.tag LIMIT 12"
         ).fetchall()
         by_day = cur.execute(
-            "SELECT substr(COALESCE(updated_at, created_at),1,10) day, COUNT(*) sessions, "
-            f"COALESCE(SUM(est_cost_usd),0) cost FROM sessions WHERE id IN ({ph}) "
-            "AND COALESCE(updated_at, created_at) IS NOT NULL GROUP BY day ORDER BY day",
-            ids,
+            "SELECT substr(COALESCE(s.updated_at, s.created_at),1,10) day, "
+            "COUNT(*) sessions, COALESCE(SUM(s.est_cost_usd),0) cost "
+            f"FROM sessions s JOIN {id_table} scope ON scope.id = s.id "
+            "WHERE COALESCE(s.updated_at, s.created_at) IS NOT NULL "
+            "GROUP BY day ORDER BY day"
         ).fetchall()
     return {
         "totals": dict(totals),

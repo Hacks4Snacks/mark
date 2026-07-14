@@ -29,6 +29,10 @@ pip install 'markive[pdf]'
 | Variable                | Default  | Purpose               |
 |-------------------------|----------|-----------------------|
 | `MARK_MAX_UPLOAD_BYTES` | `25 MiB` | Largest file accepted |
+| `MARK_MAX_EXTRACTED_TEXT_CHARS` | `5000000` | Maximum extracted text retained |
+| `MARK_MAX_PDF_PAGES` | `1000` | Maximum pages inspected per PDF |
+| `MARK_PDF_EXTRACT_TIMEOUT` | `30` | Maximum PDF extraction seconds |
+| `MARK_PDF_EXTRACT_MEMORY_BYTES` | `512 MiB` | Isolated PDF extraction memory ceiling |
 
 Uploaded files are stored under `~/.mark/uploads/`.
 
@@ -78,8 +82,9 @@ even if the original file has since changed or been removed.
 |-----------------------------|-----------|----------------------------------------------------------------------|
 | `MARK_MAX_ATTACHMENT_BYTES` | `512 KiB` | Largest agent file snapshotted; larger files record path + size only |
 
-On download, Mark serves the file from disk if it still exists, otherwise from the
-snapshot taken at ingest.
+Preview and download use only the immutable snapshot captured by Mark. Content
+is unavailable when it was too large to capture or fails snapshot verification;
+the original live path is never served.
 
 ## Export a conversation to Markdown
 
@@ -87,6 +92,17 @@ Any conversation can be exported as a clean **Markdown** file — every turn, wi
 tool calls noted — via the detail view (or `GET /api/sessions/<id>/export.md`).
 This is the same rendering the [MCP server](mcp.md) returns to an agent, so it's
 ideal for sharing a solution or pasting into a doc.
+
+The browser renders conversations incrementally: it starts with 20 turns and
+offers **Load more** for the next page. An unusually large individual turn or
+uploaded document stays as a compact placeholder until explicitly loaded.
+Attachment bodies likewise load only when expanded. This keeps opening and
+scrolling large records responsive; Markdown export still includes the complete
+conversation or document without pagination.
+
+Long file, link, and attachment lists are also paged. The detail sidebar shows
+the loaded and total counts and keeps the remaining metadata reachable through
+**Load more** without putting it in the initial response.
 
 ## What lives where
 

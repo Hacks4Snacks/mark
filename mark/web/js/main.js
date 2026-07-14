@@ -27,8 +27,14 @@ import { closePalette, isPaletteOpen, openPalette, setupPalette } from "./palett
 // show up on their own. `last_ingest` advancing means the index changed.
 const HEARTBEAT_MS = 10000;
 let statusTimer;
+let statusRequest = 0;
 let lastSeenIngest;        // undefined until first observation
 let lastSessionCount;      // visible-session count at last refresh
+let lastSeenFinishedAt;    // undefined until the first status observation
+let manualSyncPending = false;
+let shownIndexError = null;
+let shownMonitorError = null;
+let statusReady = false;
 
 // Show the topbar Ask button only when the feature is enabled. It starts hidden
 // in the markup so a disabled feature never flashes before the first status poll.
@@ -37,25 +43,70 @@ function applyAskVisibility() {
   if (btn) btn.hidden = !state.askEnabled;
 }
 
-async function pollStatus(initial = false) {
-  let running = false;
-  try {
-    const st = await api("/api/status");
-    running = !!st.running;
-    if (st.resume_cmd) state.resumeCmd = st.resume_cmd;
-    state.askEnabled = !!st.ask_enabled;
-    applyAskVisibility();
-    // The spinning re-scan button is the sole sync indicator (no banner/toast).
-    $("#reindexBtn").classList.toggle("spin", running);
-    // The index changed (manual reindex or background auto-sync completed).
-    if (st.last_ingest !== lastSeenIngest) {
-      const first = lastSeenIngest === undefined;
-      lastSeenIngest = st.last_ingest;
-      if (!first) await refreshAll(true);
+async function observeStatus(st) {
+  const running = !!(st.running || st.queued);
+  if (st.resume_cmd) state.resumeCmd = st.resume_cmd;
+  state.askEnabled = !!st.ask_enabled;
+  applyAskVisibility();
+  statusReady = true;
+  $("#reindexBtn").disabled = false;
+  $("#reindexBtn").classList.toggle("spin", running);
+
+  const first = lastSeenFinishedAt === undefined;
+  const completed = !running && st.finished_at && st.finished_at !== lastSeenFinishedAt;
+  if (first) lastSeenFinishedAt = st.finished_at || null;
+
+  if (st.sync_error) {
+    if (shownMonitorError !== st.sync_error) {
+      toast(`Sync monitor failed: ${st.sync_error}`, true);
     }
-  } catch (_) {}
+    shownMonitorError = st.sync_error;
+  } else if (shownMonitorError) {
+    toast("Sync monitor recovered");
+    shownMonitorError = null;
+  }
+
+  if ((first && !running && st.last_error) || completed) {
+    if (completed) lastSeenFinishedAt = st.finished_at;
+    if (st.last_error) {
+      if (shownIndexError !== st.last_error || manualSyncPending) {
+        toast(`Indexing failed: ${st.last_error}`, true);
+      }
+      shownIndexError = st.last_error;
+    } else if (manualSyncPending) {
+      toast(st.message || "Re-scan complete");
+      shownIndexError = null;
+    } else if (shownIndexError) {
+      toast("Indexing recovered");
+      shownIndexError = null;
+    }
+    manualSyncPending = false;
+  }
+
+  // The index changed (manual reindex or background auto-sync completed).
+  if (st.last_ingest !== lastSeenIngest) {
+    const firstIngest = lastSeenIngest === undefined;
+    lastSeenIngest = st.last_ingest;
+    if (!firstIngest) await refreshAll(true);
+  }
+  return running;
+}
+
+function scheduleStatusPoll(running) {
   clearTimeout(statusTimer);
   statusTimer = setTimeout(() => pollStatus(), running ? 1100 : HEARTBEAT_MS);
+}
+
+async function pollStatus() {
+  const request = ++statusRequest;
+  try {
+    const st = await api("/api/status");
+    if (request !== statusRequest) return;
+    const running = await observeStatus(st);
+    if (request === statusRequest) scheduleStatusPoll(running);
+  } catch (_) {
+    if (request === statusRequest) scheduleStatusPoll(false);
+  }
 }
 
 // gentle: only re-run the result list when the user is idle at the top of the
@@ -208,8 +259,32 @@ function setup() {
   });
 
   $("#reindexBtn").addEventListener("click", async () => {
-    try { await api("/api/reindex", { method: "POST" }); toast("Re-scanning Session History"); pollStatus(); }
-    catch (e) { toast(e.message, true); }
+    if (!statusReady) return;
+    clearTimeout(statusTimer);
+    const request = ++statusRequest; // invalidate any GET already in flight
+    manualSyncPending = true;
+    try {
+      const st = await api("/api/reindex", { method: "POST" });
+      if (request !== statusRequest) return;
+      if (st.admission === "accepted") {
+        toast("Re-scan queued");
+      } else if (st.admission === "covered") {
+        toast(st.running || st.queued
+          ? "Re-scan already in progress"
+          : "Re-scan already completed");
+      } else {
+        manualSyncPending = false;
+        toast("Re-scan unavailable while Mark is stopping", true);
+      }
+      const running = await observeStatus(st);
+      if (request === statusRequest) scheduleStatusPoll(running);
+    }
+    catch (e) {
+      if (request !== statusRequest) return;
+      manualSyncPending = false;
+      toast(e.message, true);
+      scheduleStatusPoll(false);
+    }
   });
 
   $("#collectionsBtn").addEventListener("click", () => showCollections());
@@ -288,10 +363,11 @@ function paintIcons(root = document) {
 async function init() {
   paintIcons();
   setup();
+  $("#reindexBtn").disabled = true;
   await refreshAll();
   // Resolve status (incl. the Ask feature flag) before routing so a deep link to
   // a disabled view is gated correctly rather than briefly rendering.
-  await pollStatus(true);
+  await pollStatus();
   routeFromHash();
 }
 

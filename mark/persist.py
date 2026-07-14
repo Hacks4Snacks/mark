@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from . import config, enrich
+from . import config, db, embeddings, enrich
 
 # NUL/C0 control characters (except tab/newline/carriage-return) and the U+FFFD
 # replacement character — broken-UTF-8 noise that pollutes stored text and search.
@@ -19,13 +19,15 @@ def _clean(text: str | None) -> str | None:
 
 
 def window_chunks(
-    text: str, *, limit: int | None = None, overlap: int = 200
+    text: str, *, limit: int | None = None, overlap: int = config.CHUNK_OVERLAP_CHARS
 ) -> list[str]:
     """Split text into overlapping windows bounded by ``limit`` characters.
 
     Shared by turn indexing here and document uploads so both chunk identically.
     """
     cap = limit or config.MAX_CHUNK_CHARS
+    if cap <= overlap:
+        raise ValueError("chunk limit must be greater than overlap")
     if len(text) <= cap:
         return [text] if text else []
     chunks, start = [], 0
@@ -59,7 +61,13 @@ def record_file_signature(cur, path: str, signature: str) -> None:
     )
 
 
-def write_session(cur, session: dict[str, Any]) -> None:
+def write_session(session: dict[str, Any]) -> None:
+    """Persist one session atomically under the cross-process semantic lock."""
+    with embeddings.writer_lock(), db.transaction() as conn:
+        _write_session(conn.cursor(), session)
+
+
+def _write_session(cur, session: dict[str, Any]) -> None:
     sid = session["id"]
     # A permanently deleted session is tombstoned; honor it here — the single
     # chokepoint every source writes through — so a re-scan can't resurrect it.
@@ -69,40 +77,80 @@ def write_session(cur, session: dict[str, Any]) -> None:
     manual_tags = cur.execute(
         "SELECT tag, score FROM tags WHERE session_id = ? AND manual = 1", (sid,)
     ).fetchall()
-    # A user's hide choice is a preference, not session content, so it must also
-    # survive the row being replaced — otherwise a re-scan would unhide it.
-    prior = cur.execute("SELECT hidden FROM sessions WHERE id = ?", (sid,)).fetchone()
-    was_hidden = bool(prior["hidden"]) if prior else False
+    prior = cur.execute("SELECT 1 FROM sessions WHERE id = ?", (sid,)).fetchone()
     # Re-indexing replaces the row, cascading away its chunks and their vectors.
     # For an actively-growing session that would re-embed identical text on every
     # pass, so snapshot existing vectors keyed by chunk content and carry them
     # onto the rebuilt chunks below; only genuinely new content then re-embeds.
-    preserved_vectors: dict[str, tuple[str, int, bytes]] = {
-        row["content"]: (row["model"], row["dim"], row["vector"])
+    preserved_vectors: dict[str, tuple[str, int, str | None, bytes]] = {
+        row["content"]: (
+            row["model"],
+            row["dim"],
+            row["fingerprint"],
+            row["vector"],
+        )
         for row in cur.execute(
-            "SELECT c.content, e.model, e.dim, e.vector "
+            "SELECT c.content, e.model, e.dim, e.fingerprint, e.vector "
             "FROM chunks c JOIN embeddings e ON e.chunk_id = c.id "
             "WHERE c.session_id = ?",
             (sid,),
         )
     }
-    # Replace any prior copy of this session (cascades to children).
-    cur.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+    # Replace only ingestion-owned children. The parent row stays in place so
+    # user-owned collection include/exclude rows never cascade away.
+    if prior:
+        for table in (
+            "turns",
+            "documents",
+            "session_files",
+            "session_refs",
+            "code_blocks",
+            "tags",
+            "chunks",
+        ):
+            cur.execute(f"DELETE FROM {table} WHERE session_id = ?", (sid,))
     cur.execute("DELETE FROM search_index WHERE session_id = ?", (sid,))
 
     turns = session["turns"]
     m = session.get("metrics") or {}
     cur.execute(
         """INSERT INTO sessions
-           (id, source, title, workspace_id, repository, repo_path, requester,
+           (id, source, source_adapter, title, workspace_id, repository, repo_path, requester,
             responder, created_at, updated_at, turn_count,
             duration_seconds, model, input_tokens, output_tokens,
             premium_requests, aiu, est_cost_usd, tokens_estimated,
             source_path, content_hash)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     ON CONFLICT(id) DO UPDATE SET
+                         source = excluded.source,
+                         source_adapter = COALESCE(
+                             excluded.source_adapter, sessions.source_adapter
+                         ),
+                         title = excluded.title,
+                         summary = NULL,
+                         workspace_id = excluded.workspace_id,
+                         repository = excluded.repository,
+                         repo_path = excluded.repo_path,
+                         requester = excluded.requester,
+                         responder = excluded.responder,
+                         created_at = excluded.created_at,
+                         updated_at = excluded.updated_at,
+                         turn_count = excluded.turn_count,
+                         duration_seconds = excluded.duration_seconds,
+                         model = excluded.model,
+                         input_tokens = excluded.input_tokens,
+                         output_tokens = excluded.output_tokens,
+                         premium_requests = excluded.premium_requests,
+                         aiu = excluded.aiu,
+                         est_cost_usd = excluded.est_cost_usd,
+                         tokens_estimated = excluded.tokens_estimated,
+                         source_path = excluded.source_path,
+                         content_hash = excluded.content_hash,
+                         indexed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
         (
             sid,
             session["source"],
+            session.get("source_adapter"),
             session["title"],
             session["workspace_id"],
             session["repository"],
@@ -124,10 +172,6 @@ def write_session(cur, session: dict[str, Any]) -> None:
             session["content_hash"],
         ),
     )
-    # Re-apply the preserved hide flag (the INSERT defaults it to visible).
-    if was_hidden:
-        cur.execute("UPDATE sessions SET hidden = 1 WHERE id = ?", (sid,))
-
     # User prompts carry the most search signal, so when a session exceeds the
     # per-session chunk cap we keep every turn's user text before spending the
     # remaining budget on assistant/tool output.
@@ -194,10 +238,15 @@ def write_session(cur, session: dict[str, Any]) -> None:
         keep = preserved_vectors.get(piece)
         if keep is not None:
             cur.execute(
-                "INSERT OR REPLACE INTO embeddings(chunk_id, session_id, model, dim, vector) "
-                "VALUES (?,?,?,?,?)",
-                (chunk_id, sid, keep[0], keep[1], keep[2]),
+                "INSERT OR REPLACE INTO embeddings"
+                "(chunk_id, session_id, model, dim, fingerprint, vector) "
+                "VALUES (?,?,?,?,?,?)",
+                (chunk_id, sid, keep[0], keep[1], keep[2], keep[3]),
             )
+    if chunk_rows:
+        embeddings.mark_index_dirty(cur)
+    if preserved_vectors:
+        embeddings.bump_generation(cur)
 
     # Session-level file references (e.g. from the Copilot CLI store).
     for path, tool, turn_index in session.get("extra_files", []):
@@ -211,8 +260,9 @@ def write_session(cur, session: dict[str, Any]) -> None:
     for att in session.get("attachments", []):
         cur.execute(
             """INSERT INTO documents
-               (session_id, kind, filename, stored_path, mime, size_bytes, content)
-               VALUES (?,?,?,?,?,?,?)""",
+               (session_id, kind, filename, stored_path, mime, size_bytes, content,
+                storage_kind, sha256, capture_version)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (
                 sid,
                 "attachment",
@@ -221,6 +271,9 @@ def write_session(cur, session: dict[str, Any]) -> None:
                 att.get("mime"),
                 att.get("size_bytes"),
                 att.get("content"),
+                att.get("storage_kind"),
+                att.get("sha256"),
+                att.get("capture_version"),
             ),
         )
 
@@ -234,12 +287,17 @@ def write_session(cur, session: dict[str, Any]) -> None:
             (sid, mt["tag"], mt["score"]),
         )
     for tag, score in tags:
+        tag = " ".join(tag.strip().lower().split())[: config.MAX_TAG_CHARS]
+        if not tag:
+            continue
         cur.execute(
             "INSERT OR IGNORE INTO tags(session_id, tag, score) VALUES (?,?,?)",
             (sid, tag, score),
         )
 
-    tag_text = " ".join([mt["tag"] for mt in manual_tags] + [t for t, _ in tags])
+    tag_text = " ".join(
+        [mt["tag"] for mt in manual_tags] + [t[: config.MAX_TAG_CHARS] for t, _ in tags]
+    )
     for chunk_id, content in chunk_rows:
         cur.execute(
             "INSERT INTO search_index(content, title, tags, chunk_id, session_id, source_type, turn_index) "

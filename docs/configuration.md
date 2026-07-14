@@ -24,10 +24,12 @@ Precedence for source settings is: built-in default < `sources.toml` < env vars.
 
 ## Syncing
 
-| Variable             | Default | Purpose                                          |
-|----------------------|---------|--------------------------------------------------|
-| `MARK_AUTO_SYNC`     | `1`     | `0` disables background syncing (manual ⟳ only)  |
-| `MARK_SYNC_INTERVAL` | `20`    | Seconds between source-change checks (minimum 5) |
+| Variable               | Default | Purpose                                                        |
+|------------------------|---------|----------------------------------------------------------------|
+| `MARK_AUTO_SYNC`       | `1`     | `0` keeps the startup scan but disables polling and auto-retry |
+| `MARK_SYNC_INTERVAL`   | `20`    | Seconds between source-change checks (minimum 5)               |
+| `MARK_SYNC_RETRY_BASE` | `5`     | Initial automatic retry delay in seconds                       |
+| `MARK_SYNC_RETRY_MAX`  | `300`   | Maximum automatic retry delay in seconds                       |
 
 ## Sources
 
@@ -46,9 +48,21 @@ Precedence for source settings is: built-in default < `sources.toml` < env vars.
 |-------------------------------------|--------------------------|-----------------------------------------------------------------------|
 | `MARK_EMBED_MODEL`                  | `BAAI/bge-small-en-v1.5` | fastembed model id (when the `semantic` extra is installed)           |
 | `MARK_EMBED_THREADS`                | a quarter, max 4         | CPU cap for the transformer backend; `0` uses all cores (fastest)     |
+| `MARK_EMBED_BATCH_SIZE`             | `16`                     | Documents per embedding inference batch; lower values use less memory |
 | `MARK_HASH_DIM`                     | `1024`                   | Dimension of the built-in offline hashing vectorizer fallback         |
 | `MARK_MAX_CHUNK_CHARS`              | `2000`                   | Window size for splitting long turns into search chunks               |
 | `MARK_MAX_EMBED_CHUNKS_PER_SESSION` | `40`                     | Cap on *embedded* chunks per session (keyword/FTS indexes all chunks) |
+
+## Conversation detail
+
+| Variable                        | Default   | Purpose                                                              |
+|---------------------------------|-----------|----------------------------------------------------------------------|
+| `MARK_DETAIL_TURN_PAGE_SIZE`    | `20`      | Turns rendered in the initial detail response and each added page    |
+| `MARK_DETAIL_INLINE_TURN_CHARS` | `250000`  | Larger turns are rendered only after **Load turn** is selected       |
+| `MARK_DETAIL_SUMMARY_CHARS`     | `2000`    | Maximum summary characters returned by the conversation detail API   |
+| `MARK_DETAIL_FILE_LIMIT`        | `40`      | File references returned per detail metadata page                    |
+| `MARK_DETAIL_LINK_LIMIT`        | `25`      | URL references returned per detail metadata page                     |
+| `MARK_DETAIL_ATTACHMENT_LIMIT`  | `100`     | Attachment metadata rows returned per page before lazy body loading   |
 
 ## Cost & usage
 
@@ -78,6 +92,8 @@ not mounted.
 | `MARK_ASK_NEIGHBOR_TURNS`         | `1`                             | Surrounding turns included on each side of a matched passage                  |
 | `MARK_ASK_MAX_TURN_CHARS`         | `4000`                          | Cap on characters from the matched passage itself                             |
 | `MARK_ASK_NEIGHBOR_CHARS`         | `800`                           | Cap on characters from each surrounding neighbour turn (drives breadth)       |
+| `MARK_ASK_SOURCE_EXCERPT_CHARS`   | `320`                           | Supporting excerpt shown beneath each citation                               |
+| `MARK_ASK_RECENT_SESSION_CANDIDATES` | `20`                         | Recent sessions considered as an extra lane for recency intent                |
 | `MARK_ASK_RERANK`                 | `1`                             | Cross-encoder reranking of passages (needs `semantic` extra; `0` disables)    |
 | `MARK_RERANK_MODEL`               | `Xenova/ms-marco-MiniLM-L-6-v2` | fastembed cross-encoder used for reranking                                    |
 
@@ -87,11 +103,20 @@ many distinct sessions as fit the model's context window, so a larger
 
 See [Ask your history](ask.md).
 
+Numeric settings are validated at startup with named errors. In particular,
+`MARK_MAX_CHUNK_CHARS` must exceed the 200-character chunk overlap,
+per-session Ask passages cannot exceed the total candidate count, and reserved
+answer tokens must be smaller than the configured context ceiling.
+
 ## Uploads & attachments
 
 | Variable                    | Default   | Purpose                                                           |
 |-----------------------------|-----------|-------------------------------------------------------------------|
 | `MARK_MAX_UPLOAD_BYTES`     | `25 MiB`  | Largest file accepted via **Add**                                 |
+| `MARK_MAX_EXTRACTED_TEXT_CHARS` | `5000000` | Maximum extracted text retained from an uploaded file            |
+| `MARK_MAX_PDF_PAGES`        | `1000`    | Maximum pages inspected while extracting an uploaded PDF          |
+| `MARK_PDF_EXTRACT_TIMEOUT`  | `30`      | Maximum seconds allowed for isolated PDF extraction                |
+| `MARK_PDF_EXTRACT_MEMORY_BYTES` | `512 MiB` | Memory ceiling for the isolated PDF extraction process          |
 | `MARK_MAX_ATTACHMENT_BYTES` | `512 KiB` | Largest agent-created file snapshotted for later viewing/download |
 
 See [Managing your archive](managing-your-archive.md).

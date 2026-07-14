@@ -7,16 +7,23 @@ from fastapi import APIRouter
 
 from .. import background, config, db, ingest
 from ..repositories import stats as stats_repo
-from ..schemas import SourceInfo, StatusResponse
+from ..schemas import ReindexStatusResponse, SourceInfo, StatusResponse
 
 router = APIRouter()
 
 
 def _status_payload() -> dict[str, Any]:
-    model = db.get_meta("embed_model") or ""
+    semantic = ingest.semantic_status()
+    model = semantic["model"]
     st = background.status_snapshot()
     st["embed_model"] = model
-    st["semantic"] = bool(model) and not model.startswith("builtin")
+    st["semantic_active"] = semantic["active"]
+    st["semantic"] = semantic["active"] and not model.startswith("builtin")
+    st["semantic_pending"] = semantic["pending"]
+    st["semantic_generation"] = semantic["generation"]
+    st["semantic_fingerprint"] = semantic["fingerprint"]
+    st["semantic_target_fingerprint"] = semantic["target_fingerprint"]
+    st["semantic_error"] = semantic["error"]
     st["auto_sync"] = config.AUTO_SYNC
     st["sync_interval"] = config.SYNC_INTERVAL
     st["last_ingest"] = db.get_meta("last_ingest")
@@ -38,6 +45,8 @@ def api_sources() -> list[dict[str, Any]]:
     since disabling keeps already-indexed rows.
     """
     by_source = stats_repo.source_counts()
+    by_adapter = stats_repo.source_adapter_counts()
+    legacy_by_source = stats_repo.legacy_source_counts()
     out: list[dict[str, Any]] = []
     for s in ingest.WATCHED_SOURCES:
         cfg = config.resolve_source_config(s.default_config())
@@ -49,7 +58,8 @@ def api_sources() -> list[dict[str, Any]]:
                 "enabled": cfg.enabled,
                 "roots": [str(r) for r in cfg.roots],
                 "exists": any(Path(r).exists() for r in cfg.roots),
-                "indexed": sum(by_source.get(n, 0) for n in s.row_sources),
+                "indexed": by_adapter.get(s.key, 0)
+                + sum(legacy_by_source.get(n, 0) for n in s.row_sources),
             }
         )
     for imp in ingest.IMPORT_SOURCES:
@@ -67,9 +77,10 @@ def api_sources() -> list[dict[str, Any]]:
     return out
 
 
-@router.post("/api/reindex", response_model=StatusResponse)
+@router.post("/api/reindex", response_model=ReindexStatusResponse)
 def api_reindex(rebuild: bool = False) -> dict[str, Any]:
-    started = background.start_reindex(rebuild=rebuild)
+    admission = background.request_reindex(rebuild=rebuild)
     st = _status_payload()
-    st["started"] = started
+    st["started"] = admission == "accepted"
+    st["admission"] = admission
     return st

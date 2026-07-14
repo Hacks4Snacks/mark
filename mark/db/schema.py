@@ -4,6 +4,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id            TEXT PRIMARY KEY,
     source        TEXT NOT NULL DEFAULT 'copilot',
+    source_adapter TEXT,
     title         TEXT,
     summary       TEXT,
     workspace_id  TEXT,
@@ -50,7 +51,10 @@ CREATE TABLE IF NOT EXISTS documents (
     stored_path  TEXT,
     mime         TEXT,
     size_bytes   INTEGER,
-    content      TEXT
+    content      TEXT,
+    storage_kind TEXT,
+    sha256       TEXT,
+    capture_version INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS session_files (
@@ -102,6 +106,7 @@ CREATE TABLE IF NOT EXISTS embeddings (
     session_id  TEXT NOT NULL,
     model       TEXT NOT NULL,
     dim         INTEGER NOT NULL,
+    fingerprint TEXT,
     vector      BLOB NOT NULL
 );
 
@@ -153,6 +158,7 @@ CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks(session_id);
 CREATE INDEX IF NOT EXISTS idx_files_session ON session_files(session_id);
 CREATE INDEX IF NOT EXISTS idx_tags_session ON tags(session_id);
+CREATE INDEX IF NOT EXISTS idx_tags_tag_session ON tags(tag, session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_repo ON sessions(repository);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
 CREATE INDEX IF NOT EXISTS idx_collection_members_session ON collection_members(session_id);

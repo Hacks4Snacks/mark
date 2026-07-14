@@ -145,10 +145,12 @@ Mark keeps your archive current on its own:
   something actually changed (a session ends, updates, or appears).
 - **Manually**, click the **⟳** button to force a re-scan immediately.
 
-| Variable             | Default | Purpose                                                     |
-|----------------------|---------|-------------------------------------------------------------|
-| `MARK_AUTO_SYNC`     | `1`     | Set `0` to disable background syncing (manual re-scan only) |
-| `MARK_SYNC_INTERVAL` | `20`    | Seconds between change checks (minimum 5)                   |
+| Variable               | Default | Purpose                                                        |
+|------------------------|---------|----------------------------------------------------------------|
+| `MARK_AUTO_SYNC`       | `1`     | `0` keeps the startup scan but disables polling and auto-retry |
+| `MARK_SYNC_INTERVAL`   | `20`    | Seconds between change checks (minimum 5)                     |
+| `MARK_SYNC_RETRY_BASE` | `5`     | Initial automatic retry delay in seconds                      |
+| `MARK_SYNC_RETRY_MAX`  | `300`   | Maximum automatic retry delay in seconds                      |
 
 Source databases are read **read-only**; for live stores (like the Copilot CLI
 DB) Mark reads a consistent snapshot. Your original history is never modified.
