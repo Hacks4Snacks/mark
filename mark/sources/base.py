@@ -278,23 +278,28 @@ def compute_cost(
     cache_read: int = 0,
     cache_write: int = 0,
     input_includes_cache: bool = True,
+    cache_write_1h: int = 0,
+    round_result: bool = True,
 ) -> float:
     pin, pout, pcache = config.price_for(model)
+    pwrite = config.cache_write_price_for(model)
+    pwrite_1h = config.cache_write_price_for(model, one_hour=True)
     # The Copilot CLI reports inputTokens INCLUSIVE of cached tokens; Cline-family
     # reports them exclusive. Price fresh input, cache reads, and cache writes
     # separately either way to avoid over-charging.
     fresh_input = (
-        max(0, input_tokens - cache_read - cache_write)
+        max(0, input_tokens - cache_read - cache_write - cache_write_1h)
         if input_includes_cache
         else input_tokens
     )
     cost = (
         fresh_input * pin
         + cache_read * pcache
-        + cache_write * pin * 1.25
+        + cache_write * pwrite
+        + cache_write_1h * pwrite_1h
         + output_tokens * pout
     ) / 1_000_000
-    return round(cost, 4)
+    return round(cost, 4) if round_result else cost
 
 
 def estimate_metrics(turns: list[dict[str, Any]]) -> dict[str, Any]:

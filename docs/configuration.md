@@ -66,9 +66,9 @@ Precedence for source settings is: built-in default < `sources.toml` < env vars.
 
 ## Cost & usage
 
-| Variable            | Default        | Purpose                                                      |
-|---------------------|----------------|--------------------------------------------------------------|
-| `MARK_PRICING_FILE` | built-in table | JSON of `{model: [input, output, cached]}` USD per 1M tokens |
+| Variable            | Default        | Purpose                                                                             |
+| ------------------- | -------------- | ----------------------------------------------------------------------------------- |
+| `MARK_PRICING_FILE` | built-in table | JSON of `{model: [input, output, cached, write5m?, write1h?]}` in USD per 1M tokens |
 
 See [Usage & cost analytics](usage-and-cost.md#customising-prices) for the file
 format.

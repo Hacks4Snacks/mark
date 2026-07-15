@@ -38,12 +38,17 @@ per token) and duration from the first/last turn timestamps. These sessions are
 ## How cost is computed
 
 Mark prices token counts against a built-in **public list-price table** (USD per
-1M tokens), matched by substring against the model name. The calculation is
-careful not to over-count long agent sessions:
+1M tokens), matched by the most specific model-name substring. The table was
+last verified on **July 14, 2026** against the official
+[OpenAI](https://developers.openai.com/api/docs/pricing),
+[Anthropic](https://platform.claude.com/docs/en/docs/about-claude/pricing),
+[Google](https://ai.google.dev/gemini-api/docs/pricing), and
+[xAI](https://docs.x.ai/docs/models) pricing pages. The calculation is careful
+not to over-count long agent sessions:
 
 - **Fresh input**, **cache reads**, and **cache writes** are each priced
-  separately. Cache reads are far cheaper than fresh input; cache writes carry a
-  small premium.
+  separately. Cache reads are generally far cheaper than fresh input; cache
+  writes use the model's published rate where one exists.
 - Token-reporting conventions differ by source — the Copilot CLI reports input
   tokens *inclusive* of cache, while Cline-family agents report them *exclusive*.
   Mark normalises both so neither is overcharged.
@@ -54,6 +59,13 @@ careful not to over-count long agent sessions:
 > All costs are **estimates**. They depend on public list prices and won't
 > reflect your specific plan, discounts, or included quota.
 
+The built-in values are standard text API rates. For models with request-level
+long-context pricing, Mark uses the base rate because imported session totals do
+not preserve each request's prompt size. Batch, flex, priority, regional/data
+residency, cache-storage, and tool-call charges are also excluded. Claude Sonnet
+5 currently uses its introductory rate, which Anthropic says ends after
+**August 31, 2026**.
+
 ## Customising prices
 
 The built-in table covers common Claude, GPT, Gemini, and Grok tiers. To override
@@ -61,16 +73,19 @@ it entirely, point `MARK_PRICING_FILE` at a JSON file:
 
 ```json
 {
-  "claude-sonnet": [3.0, 15.0, 0.30],
-  "gpt-5":         [1.25, 10.0, 0.125],
+  "claude-sonnet-5": [2.0, 10.0, 0.20, 2.50, 4.0],
+  "gpt-5.5":         [5.0, 30.0, 0.50, 5.0],
   "my-local-model": [0.0, 0.0, 0.0],
   "_default":      [3.0, 15.0, 0.30]
 }
 ```
 
-Each value is `[input, output, cached_input]` in **USD per 1 million tokens**.
-Keys are matched by substring against the model name (so `gpt-5` matches
-`gpt-5.1-high`), and `_default` is the fallback for anything unmatched.
+Each value is `[input, output, cached_input]` or
+`[input, output, cached_input, cache_write_5m, cache_write_1h]` in **USD per 1
+million tokens**. The fourth and fifth values are optional; omitting them uses
+1.25 and 2 times input, respectively. Keys are matched by normalised substring
+against the model name, with the longest match winning, so `gpt-5.5` takes
+precedence over `gpt-5`. `_default` is the fallback for anything unmatched.
 
 ```bash
 export MARK_PRICING_FILE=~/.mark/pricing.json
@@ -80,6 +95,18 @@ mark
 The file is re-read when it changes. If it's missing or malformed, Mark logs a
 warning and falls back to the built-in table — a typo never silently produces
 wrong-but-plausible costs.
+
+Costs are stored with each indexed session. After changing a custom pricing file
+or installing a release with new built-in prices, request one full rebuild to
+reprice unchanged **watched-source** sessions from their original metrics:
+
+```bash
+curl -X POST 'http://127.0.0.1:8765/api/reindex?rebuild=true'
+```
+
+The regular re-scan remains incremental and intentionally skips unchanged
+sessions. One-shot ChatGPT, Grok, and similar imports are not retained as source
+files by Mark, so unchanged imported sessions cannot currently be repriced.
 
 ## Per-session cost
 

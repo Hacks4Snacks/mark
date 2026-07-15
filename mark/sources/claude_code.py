@@ -204,22 +204,40 @@ def _session_metrics(
     carries its own Anthropic ``usage``. ``input_tokens`` is exclusive of cache,
     so cost prices fresh input, cache reads, and cache writes separately.
     """
-    inp = outp = cread = cwrite = 0
+    inp = outp = 0
     models: list[str] = []
+    usage_by_model: dict[str | None, list[int]] = {}
     for ev in events:
         if not isinstance(ev, dict) or ev.get("type") != "assistant":
             continue
         msg = ev.get("message")
         if not isinstance(msg, dict):
             continue
-        model = msg.get("model")
-        if isinstance(model, str) and model and model != "<synthetic>":
-            models.append(model)
+        raw_model = msg.get("model")
+        event_model = (
+            raw_model
+            if isinstance(raw_model, str) and raw_model and raw_model != "<synthetic>"
+            else None
+        )
+        if event_model:
+            models.append(event_model)
         usage = msg.get("usage") or {}
-        inp += int(usage.get("input_tokens") or 0)
-        outp += int(usage.get("output_tokens") or 0)
-        cread += int(usage.get("cache_read_input_tokens") or 0)
-        cwrite += int(usage.get("cache_creation_input_tokens") or 0)
+        usage_in = int(usage.get("input_tokens") or 0)
+        usage_out = int(usage.get("output_tokens") or 0)
+        usage_read = int(usage.get("cache_read_input_tokens") or 0)
+        usage_write = int(usage.get("cache_creation_input_tokens") or 0)
+        usage_write_1h = 0
+        cache_creation = usage.get("cache_creation") or {}
+        if isinstance(cache_creation, dict):
+            usage_write_1h = int(cache_creation.get("ephemeral_1h_input_tokens") or 0)
+        totals = usage_by_model.setdefault(event_model, [0, 0, 0, 0, 0])
+        totals[0] += usage_in
+        totals[1] += usage_out
+        totals[2] += usage_read
+        totals[3] += usage_write
+        totals[4] += usage_write_1h
+        inp += usage_in
+        outp += usage_out
 
     model = Counter(models).most_common(1)[0][0] if models else None
     estimated = inp == 0 and outp == 0
@@ -228,7 +246,22 @@ def _session_metrics(
         outp = sum(estimate_tokens(t["assistant_response"]) for t in turns)
         cost = compute_cost(model, inp, outp)
     else:
-        cost = compute_cost(model, inp, outp, cread, cwrite, input_includes_cache=False)
+        cost = round(
+            sum(
+                compute_cost(
+                    usage_model or model,
+                    totals[0],
+                    totals[1],
+                    totals[2],
+                    max(0, totals[3] - totals[4]),
+                    input_includes_cache=False,
+                    cache_write_1h=totals[4],
+                    round_result=False,
+                )
+                for usage_model, totals in usage_by_model.items()
+            ),
+            4,
+        )
 
     stamps = [t["timestamp"] for t in turns if t["timestamp"]]
     return {
