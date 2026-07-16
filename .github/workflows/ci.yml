@@ -28,7 +28,20 @@ jobs:
       - name: Install ruff
         run: pip install "ruff==${RUFF_VERSION}"
       - name: ruff check
-        run: ruff check --output-format=github mark tests
+        run: >-
+          ruff check --output-format=github mark tests
+          scripts/update_model_pricing.py scripts/package_smoke.py
+
+  pricing-registry:
+    name: Model pricing registry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Validate freshness and review dates
+        run: python scripts/update_model_pricing.py --check
 
   test:
     name: Test (py${{ matrix.python-version }})

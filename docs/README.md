@@ -26,6 +26,7 @@ These pages go deeper than the [project README](../README.md). Start with
 | [Searching & filtering](searching.md)             | Hybrid / semantic / keyword modes, the sidebar facets, sorting, related sessions |
 | [Collections](collections.md)                     | Auto-updating groups, pinning/excluding, overviews, ask-a-collection             |
 | [Usage & cost analytics](usage-and-cost.md)       | How spend, duration and tokens are computed; custom pricing                      |
+| [Maintaining model pricing](model-pricing-maintenance.md) | Registry ownership, audits, freshness gates, and update workflow          |
 | [Ask your history](ask.md)                        | Optional local-LLM Q&A over your archive via Ollama                              |
 | [Snippet & command library](library.md)           | Browse every code block and shell command Mark extracted                         |
 | [Managing your archive](managing-your-archive.md) | Add notes & files, import exports, hide/delete, tags, export to Markdown         |

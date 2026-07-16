@@ -66,6 +66,10 @@ residency, cache-storage, and tool-call charges are also excluded. Claude Sonnet
 5 currently uses its introductory rate, which Anthropic says ends after
 **August 31, 2026**.
 
+Maintainers should follow [Maintaining model pricing](model-pricing-maintenance.md)
+for the checked-in registry, scheduled audit, source authority, and review-date
+workflow.
+
 ## Customising prices
 
 The built-in table covers common Claude, GPT, Gemini, and Grok tiers. To override

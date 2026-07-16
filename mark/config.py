@@ -9,6 +9,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
+from .model_pricing import (
+    PriceEntry,
+    load_registry,
+    next_review_date,
+    normalise_model_name,
+    pricing_entries,
+)
+
 _log = logging.getLogger("mark")
 
 
@@ -154,108 +162,13 @@ SYNC_INTERVAL = _env_int("MARK_SYNC_INTERVAL", 20, minimum=5, maximum=86_400)
 SYNC_RETRY_BASE = _env_float("MARK_SYNC_RETRY_BASE", 5, minimum=0.1, maximum=86_400)
 SYNC_RETRY_MAX = _env_float("MARK_SYNC_RETRY_MAX", 300, minimum=0.1, maximum=604_800)
 
-# Public standard API list prices in USD per 1M tokens as of 2026-07-14:
-# (input, output, cached_input[, cache_write_5m[, cache_write_1h]]). More-specific
-# keys win when several match. Override the whole table with MARK_PRICING_FILE.
-PriceEntry = (
-    tuple[float, float, float]
-    | tuple[float, float, float, float]
-    | tuple[float, float, float, float, float]
-)
-MODEL_PRICING_AS_OF = "2026-07-14"
-MODEL_PRICING_REVIEW_AFTER = "2026-08-31"  # Sonnet 5 introductory price ends.
-_MODEL_PRICING_ENTRIES: dict[str, PriceEntry] = {
-    # Anthropic. Sonnet 5's introductory price ends 2026-08-31.
-    "claude-fable-5": (10.0, 50.0, 1.0, 12.50, 20.0),
-    "claude-mythos-5": (10.0, 50.0, 1.0, 12.50, 20.0),
-    "claude-opus-4-8": (5.0, 25.0, 0.50, 6.25, 10.0),
-    "claude-opus-4-7": (5.0, 25.0, 0.50, 6.25, 10.0),
-    "claude-opus-4-6": (5.0, 25.0, 0.50, 6.25, 10.0),
-    "claude-opus-4-5": (5.0, 25.0, 0.50, 6.25, 10.0),
-    "claude-opus-4-1": (15.0, 75.0, 1.50, 18.75, 30.0),
-    "claude-opus-4-20250514": (15.0, 75.0, 1.50, 18.75, 30.0),
-    "claude-opus-4": (15.0, 75.0, 1.50, 18.75, 30.0),
-    "claude-4-opus": (15.0, 75.0, 1.50, 18.75, 30.0),
-    "claude-4-1-opus": (15.0, 75.0, 1.50, 18.75, 30.0),
-    "claude-sonnet-5": (2.0, 10.0, 0.20, 2.50, 4.0),
-    "claude-sonnet-4-6": (3.0, 15.0, 0.30, 3.75, 6.0),
-    "claude-sonnet-4-5": (3.0, 15.0, 0.30, 3.75, 6.0),
-    "claude-haiku-4-5": (1.0, 5.0, 0.10, 1.25, 2.0),
-    "claude-3-5-haiku": (0.80, 4.0, 0.08, 1.0, 1.60),
-    "claude-haiku-3-5": (0.80, 4.0, 0.08, 1.0, 1.60),
-    "claude-3-opus": (15.0, 75.0, 1.50, 18.75, 30.0),
-    "claude-3-haiku": (0.25, 1.25, 0.025, 0.3125, 0.50),
-    "claude-opus": (5.0, 25.0, 0.50, 6.25, 10.0),
-    "claude-sonnet": (3.0, 15.0, 0.30, 3.75, 6.0),
-    "claude-haiku": (1.0, 5.0, 0.10, 1.25, 2.0),
-    # Bare aliases cover provider labels such as "claude-4.8-opus".
-    "opus": (5.0, 25.0, 0.50, 6.25, 10.0),
-    "sonnet": (3.0, 15.0, 0.30, 3.75, 6.0),
-    "haiku": (1.0, 5.0, 0.10, 1.25, 2.0),
-    # OpenAI.
-    "gpt-5-6-sol": (5.0, 30.0, 0.50, 6.25),
-    "gpt-5-6-terra": (2.50, 15.0, 0.25, 3.125),
-    "gpt-5-6-luna": (1.0, 6.0, 0.10, 1.25),
-    "gpt-5-6": (5.0, 30.0, 0.50, 6.25),
-    "gpt-5-5-pro": (30.0, 180.0, 30.0, 30.0),
-    "gpt-5-5": (5.0, 30.0, 0.50, 5.0),
-    "gpt-5-4-pro": (30.0, 180.0, 30.0, 30.0),
-    "gpt-5-4-mini": (0.75, 4.50, 0.075, 0.75),
-    "gpt-5-4-nano": (0.20, 1.25, 0.020, 0.20),
-    "gpt-5-4": (2.50, 15.0, 0.25, 2.50),
-    "gpt-5-3-codex": (1.75, 14.0, 0.175, 1.75),
-    "gpt-5-2-pro": (21.0, 168.0, 21.0, 21.0),
-    "gpt-5-2-codex": (1.75, 14.0, 0.175, 1.75),
-    "gpt-5-2": (1.75, 14.0, 0.175, 1.75),
-    "gpt-5-1-codex-mini": (0.25, 2.0, 0.025, 0.25),
-    "gpt-5-1-codex": (1.25, 10.0, 0.125, 1.25),
-    "gpt-5-1": (1.25, 10.0, 0.125, 1.25),
-    "gpt-5-pro": (15.0, 120.0, 15.0, 15.0),
-    "gpt-5-mini": (0.25, 2.0, 0.025, 0.25),
-    "gpt-5-nano": (0.05, 0.40, 0.005, 0.05),
-    "gpt-5": (1.25, 10.0, 0.125, 1.25),
-    "gpt-4-1-mini": (0.40, 1.60, 0.10, 0.40),
-    "gpt-4-1-nano": (0.10, 0.40, 0.025, 0.10),
-    "gpt-4o-mini": (0.15, 0.60, 0.075, 0.15),
-    "gpt-4o": (2.50, 10.0, 1.25, 2.50),
-    "gpt-4.1": (2.0, 8.0, 0.50, 2.0),
-    "o4-mini": (1.10, 4.40, 0.275, 1.10),
-    "codex-mini-latest": (1.50, 6.0, 0.375, 1.50),
-    "o3-mini": (1.10, 4.40, 0.55, 1.10),
-    "o3": (2.0, 8.0, 0.50, 2.0),
-    "o1-mini": (1.10, 4.40, 0.55, 1.10),
-    "o1": (15.0, 60.0, 7.50, 15.0),
-    # Google Gemini (standard text rates below long-context thresholds).
-    "gemini-3-5-flash": (1.50, 9.0, 0.15, 1.50),
-    "gemini-3-1-pro": (2.0, 12.0, 0.20, 2.0),
-    "gemini-3-1-flash-lite": (0.25, 1.50, 0.025, 0.25),
-    "gemini-3-pro": (2.0, 12.0, 0.20, 2.0),
-    "gemini-3-flash": (0.50, 3.0, 0.05, 0.50),
-    "gemini-2-5-pro": (1.25, 10.0, 0.125, 1.25),
-    "gemini-2-5-flash-lite": (0.10, 0.40, 0.01, 0.10),
-    "gemini-2-5-flash": (0.30, 2.50, 0.03, 0.30),
-    "gemini-2-0-flash-lite": (0.075, 0.30, 0.075, 0.075),
-    "gemini-2-0-flash": (0.10, 0.40, 0.025, 0.10),
-    "gemini-1-5-pro": (1.25, 5.0, 0.3125, 1.25),
-    "gemini-1-5-flash-8b": (0.0375, 0.15, 0.01, 0.0375),
-    "gemini-1-5-flash": (0.075, 0.30, 0.01875, 0.075),
-    "gemini": (1.25, 10.0, 0.125, 1.25),
-    # xAI (standard rates below the 200k prompt threshold).
-    "grok-code-fast": (1.0, 2.0, 0.20, 1.0),
-    "grok-build-0-1": (1.0, 2.0, 0.20, 1.0),
-    "grok-4-20": (1.25, 2.50, 0.20, 1.25),
-    "grok-4-5": (2.0, 6.0, 0.50, 2.0),
-    "grok-4-3": (1.25, 2.50, 0.20, 1.25),
-    "grok-4": (3.0, 15.0, 0.75, 3.0),
-    "grok-3": (3.0, 15.0, 0.75, 3.0),
-    "grok": (2.0, 6.0, 0.50, 2.0),
-    # Cursor Composer and local/self-hosted models are not billed per token, so
-    # they price to zero rather than silently inheriting the sonnet _default.
-    "composer": (0.0, 0.0, 0.0),
-    "gpt-oss": (0.0, 0.0, 0.0),
-    "llama": (0.0, 0.0, 0.0),
-    "_default": (3.0, 15.0, 0.30),
-}
+# Public standard API list prices in USD per 1M tokens. More-specific keys win
+# when several match. Override the whole table with MARK_PRICING_FILE.
+_PRICING_REGISTRY = load_registry()
+MODEL_PRICING_AS_OF = _PRICING_REGISTRY["verified_at"]
+MODEL_PRICING_REVISION = _PRICING_REGISTRY["revision"]
+MODEL_PRICING_REVIEW_AFTER = next_review_date(_PRICING_REGISTRY)
+_MODEL_PRICING_ENTRIES = pricing_entries(_PRICING_REGISTRY)
 
 # Preserve the original public API: callers may unpack every value as
 # ``(input, output, cached_input)``. Extended write rates stay private.
@@ -266,7 +179,7 @@ MODEL_PRICING: dict[str, tuple[float, float, float]] = {
 
 
 def _normalise_price_key(name: str) -> str:
-    return name.lower().replace(".", "-").replace("_", "-")
+    return normalise_model_name(name)
 
 
 def _built_in_pricing() -> dict[str, PriceEntry]:

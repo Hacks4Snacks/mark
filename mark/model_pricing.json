@@ -1,0 +1,901 @@
+{
+  "schema_version": 1,
+  "revision": "2026-07-14.1",
+  "verified_at": "2026-07-14",
+  "warn_after_days": 30,
+  "fail_after_days": 60,
+  "providers": {
+    "anthropic": {
+      "discovery_prefixes": [
+        "claude-"
+      ],
+      "official_pricing_url": "https://platform.claude.com/docs/en/docs/about-claude/pricing",
+      "audit_url": "https://platform.claude.com/docs/en/about-claude/pricing.md",
+      "audit_format": "text",
+      "audit_start": "## Model pricing",
+      "audit_end": "## Cloud platform pricing",
+      "required_markers": [
+        "Claude Opus 4.8",
+        "$5 / MTok",
+        "Claude Sonnet 5"
+      ],
+      "litellm_provider": "anthropic",
+      "pricing_page_sha256": "f4091fad100b39d999caf36ee93b8323dafd40e887e264fd1237f17f48f58562"
+    },
+    "google": {
+      "discovery_prefixes": [
+        "gemini-"
+      ],
+      "official_pricing_url": "https://ai.google.dev/gemini-api/docs/pricing",
+      "audit_url": "https://ai.google.dev/gemini-api/docs/pricing",
+      "audit_format": "visible",
+      "audit_start": "Gemini 3.5 Flash",
+      "audit_end": "Notes",
+      "required_markers": [
+        "gemini-3.5-flash",
+        "$1.50",
+        "gemini-2.5-pro"
+      ],
+      "litellm_provider": "gemini",
+      "pricing_page_sha256": "8fc2a0066baf881eac7280a25d9720f1e8d143a1e985dc0f158c9b241747ccb7"
+    },
+    "local": {
+      "official_pricing_url": null,
+      "litellm_provider": null
+    },
+    "openai": {
+      "discovery_prefixes": [
+        "gpt-5",
+        "gpt-4.1",
+        "o1",
+        "o3",
+        "o4",
+        "codex-"
+      ],
+      "official_pricing_url": "https://developers.openai.com/api/docs/pricing",
+      "audit_url": "https://developers.openai.com/api/docs/pricing.md",
+      "audit_format": "text",
+      "audit_start": "Flagship models",
+      "required_markers": [
+        "gpt-5.6-sol",
+        "gpt-5.5-pro",
+        "gpt-5.4-mini"
+      ],
+      "litellm_provider": "openai",
+      "pricing_page_sha256": "9549c24f5036e4cf981917b46761f2a7227df1de42a8c0e363eed0683a559610"
+    },
+    "xai": {
+      "discovery_prefixes": [
+        "grok-"
+      ],
+      "official_pricing_url": "https://docs.x.ai/developers/models",
+      "audit_url": "https://docs.x.ai/developers/models",
+      "audit_format": "embedded",
+      "audit_start": "languageModels",
+      "audit_end": "embeddingModels",
+      "required_markers": [
+        "grok-4.3",
+        "promptTextTokenPrice",
+        "completionTextTokenPrice"
+      ],
+      "litellm_provider": "xai",
+      "pricing_page_sha256": "ad2e1647c8d7329110f5b339c9212749ad26b546b3d5b3fb91c31843e5e8f2b6"
+    }
+  },
+  "models": {
+    "claude-fable-5": {
+      "provider": "anthropic",
+      "status": "active",
+      "pricing": {
+        "input": 10.0,
+        "output": 50.0,
+        "cached_input": 1.0,
+        "cache_write_5m": 12.5,
+        "cache_write_1h": 20.0
+      }
+    },
+    "claude-mythos-5": {
+      "audit": false,
+      "provider": "anthropic",
+      "status": "active",
+      "pricing": {
+        "input": 10.0,
+        "output": 50.0,
+        "cached_input": 1.0,
+        "cache_write_5m": 12.5,
+        "cache_write_1h": 20.0
+      }
+    },
+    "claude-opus-4-8": {
+      "provider": "anthropic",
+      "status": "active",
+      "pricing": {
+        "input": 5.0,
+        "output": 25.0,
+        "cached_input": 0.5,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.0
+      }
+    },
+    "claude-opus-4-7": {
+      "provider": "anthropic",
+      "status": "active",
+      "pricing": {
+        "input": 5.0,
+        "output": 25.0,
+        "cached_input": 0.5,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.0
+      }
+    },
+    "claude-opus-4-6": {
+      "provider": "anthropic",
+      "status": "active",
+      "pricing": {
+        "input": 5.0,
+        "output": 25.0,
+        "cached_input": 0.5,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.0
+      }
+    },
+    "claude-opus-4-5": {
+      "provider": "anthropic",
+      "status": "active",
+      "pricing": {
+        "input": 5.0,
+        "output": 25.0,
+        "cached_input": 0.5,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.0
+      }
+    },
+    "claude-opus-4-1": {
+      "provider": "anthropic",
+      "status": "deprecated",
+      "aliases": [
+        "claude-opus-4-20250514",
+        "claude-opus-4",
+        "claude-4-opus",
+        "claude-4-1-opus"
+      ],
+      "pricing": {
+        "input": 15.0,
+        "output": 75.0,
+        "cached_input": 1.5,
+        "cache_write_5m": 18.75,
+        "cache_write_1h": 30.0
+      }
+    },
+    "claude-sonnet-5": {
+      "provider": "anthropic",
+      "status": "active",
+      "effective_until": "2026-08-31",
+      "review_after": "2026-08-31",
+      "pricing": {
+        "input": 2.0,
+        "output": 10.0,
+        "cached_input": 0.2,
+        "cache_write_5m": 2.5,
+        "cache_write_1h": 4.0
+      }
+    },
+    "claude-sonnet-4-6": {
+      "provider": "anthropic",
+      "status": "active",
+      "pricing": {
+        "input": 3.0,
+        "output": 15.0,
+        "cached_input": 0.3,
+        "cache_write_5m": 3.75,
+        "cache_write_1h": 6.0
+      }
+    },
+    "claude-sonnet-4-5": {
+      "provider": "anthropic",
+      "status": "active",
+      "pricing": {
+        "input": 3.0,
+        "output": 15.0,
+        "cached_input": 0.3,
+        "cache_write_5m": 3.75,
+        "cache_write_1h": 6.0
+      }
+    },
+    "claude-haiku-4-5": {
+      "provider": "anthropic",
+      "status": "active",
+      "pricing": {
+        "input": 1.0,
+        "output": 5.0,
+        "cached_input": 0.1,
+        "cache_write_5m": 1.25,
+        "cache_write_1h": 2.0
+      }
+    },
+    "claude-haiku-3-5": {
+      "provider": "anthropic",
+      "status": "retired",
+      "aliases": [
+        "claude-3-5-haiku"
+      ],
+      "pricing": {
+        "input": 0.8,
+        "output": 4.0,
+        "cached_input": 0.08,
+        "cache_write_5m": 1.0,
+        "cache_write_1h": 1.6
+      }
+    },
+    "claude-3-opus": {
+      "provider": "anthropic",
+      "status": "retired",
+      "pricing": {
+        "input": 15.0,
+        "output": 75.0,
+        "cached_input": 1.5,
+        "cache_write_5m": 18.75,
+        "cache_write_1h": 30.0
+      }
+    },
+    "claude-3-haiku": {
+      "provider": "anthropic",
+      "status": "retired",
+      "pricing": {
+        "input": 0.25,
+        "output": 1.25,
+        "cached_input": 0.025,
+        "cache_write_5m": 0.3125,
+        "cache_write_1h": 0.5
+      }
+    },
+    "claude-opus": {
+      "provider": "anthropic",
+      "status": "fallback",
+      "audit": false,
+      "aliases": [
+        "opus"
+      ],
+      "pricing": {
+        "input": 5.0,
+        "output": 25.0,
+        "cached_input": 0.5,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.0
+      }
+    },
+    "claude-sonnet": {
+      "provider": "anthropic",
+      "status": "fallback",
+      "audit": false,
+      "aliases": [
+        "sonnet"
+      ],
+      "pricing": {
+        "input": 3.0,
+        "output": 15.0,
+        "cached_input": 0.3,
+        "cache_write_5m": 3.75,
+        "cache_write_1h": 6.0
+      }
+    },
+    "claude-haiku": {
+      "provider": "anthropic",
+      "status": "fallback",
+      "audit": false,
+      "aliases": [
+        "haiku"
+      ],
+      "pricing": {
+        "input": 1.0,
+        "output": 5.0,
+        "cached_input": 0.1,
+        "cache_write_5m": 1.25,
+        "cache_write_1h": 2.0
+      }
+    },
+    "gpt-5-6-sol": {
+      "provider": "openai",
+      "status": "active",
+      "aliases": [
+        "gpt-5-6"
+      ],
+      "pricing": {
+        "input": 5.0,
+        "output": 30.0,
+        "cached_input": 0.5,
+        "cache_write_5m": 6.25
+      }
+    },
+    "gpt-5-6-terra": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 2.5,
+        "output": 15.0,
+        "cached_input": 0.25,
+        "cache_write_5m": 3.125
+      }
+    },
+    "gpt-5-6-luna": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 1.0,
+        "output": 6.0,
+        "cached_input": 0.1,
+        "cache_write_5m": 1.25
+      }
+    },
+    "gpt-5-5-pro": {
+      "provider": "openai",
+      "status": "active",
+      "litellm_ignore_fields": [
+        "cached_input",
+        "cache_write_5m"
+      ],
+      "pricing": {
+        "input": 30.0,
+        "output": 180.0,
+        "cached_input": 30.0,
+        "cache_write_5m": 30.0
+      }
+    },
+    "gpt-5-5": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 5.0,
+        "output": 30.0,
+        "cached_input": 0.5,
+        "cache_write_5m": 5.0
+      }
+    },
+    "gpt-5-4-pro": {
+      "provider": "openai",
+      "status": "active",
+      "litellm_ignore_fields": [
+        "cached_input",
+        "cache_write_5m"
+      ],
+      "pricing": {
+        "input": 30.0,
+        "output": 180.0,
+        "cached_input": 30.0,
+        "cache_write_5m": 30.0
+      }
+    },
+    "gpt-5-4-mini": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 0.75,
+        "output": 4.5,
+        "cached_input": 0.075,
+        "cache_write_5m": 0.75
+      }
+    },
+    "gpt-5-4-nano": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 0.2,
+        "output": 1.25,
+        "cached_input": 0.02,
+        "cache_write_5m": 0.2
+      }
+    },
+    "gpt-5-4": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 2.5,
+        "output": 15.0,
+        "cached_input": 0.25,
+        "cache_write_5m": 2.5
+      }
+    },
+    "gpt-5-3-codex": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 1.75,
+        "output": 14.0,
+        "cached_input": 0.175,
+        "cache_write_5m": 1.75
+      }
+    },
+    "gpt-5-2-pro": {
+      "provider": "openai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 21.0,
+        "output": 168.0,
+        "cached_input": 21.0,
+        "cache_write_5m": 21.0
+      }
+    },
+    "gpt-5-2-codex": {
+      "provider": "openai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 1.75,
+        "output": 14.0,
+        "cached_input": 0.175,
+        "cache_write_5m": 1.75
+      }
+    },
+    "gpt-5-2": {
+      "provider": "openai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 1.75,
+        "output": 14.0,
+        "cached_input": 0.175,
+        "cache_write_5m": 1.75
+      }
+    },
+    "gpt-5-1-codex-mini": {
+      "provider": "openai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 0.25,
+        "output": 2.0,
+        "cached_input": 0.025,
+        "cache_write_5m": 0.25
+      }
+    },
+    "gpt-5-1-codex": {
+      "provider": "openai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 1.25,
+        "output": 10.0,
+        "cached_input": 0.125,
+        "cache_write_5m": 1.25
+      }
+    },
+    "gpt-5-1": {
+      "provider": "openai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 1.25,
+        "output": 10.0,
+        "cached_input": 0.125,
+        "cache_write_5m": 1.25
+      }
+    },
+    "gpt-5-pro": {
+      "provider": "openai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 15.0,
+        "output": 120.0,
+        "cached_input": 15.0,
+        "cache_write_5m": 15.0
+      }
+    },
+    "gpt-5-mini": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 0.25,
+        "output": 2.0,
+        "cached_input": 0.025,
+        "cache_write_5m": 0.25
+      }
+    },
+    "gpt-5-nano": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 0.05,
+        "output": 0.4,
+        "cached_input": 0.005,
+        "cache_write_5m": 0.05
+      }
+    },
+    "gpt-5": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 1.25,
+        "output": 10.0,
+        "cached_input": 0.125,
+        "cache_write_5m": 1.25
+      }
+    },
+    "gpt-4-1-mini": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 0.4,
+        "output": 1.6,
+        "cached_input": 0.1,
+        "cache_write_5m": 0.4
+      }
+    },
+    "gpt-4-1-nano": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 0.1,
+        "output": 0.4,
+        "cached_input": 0.025,
+        "cache_write_5m": 0.1
+      }
+    },
+    "gpt-4o-mini": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 0.15,
+        "output": 0.6,
+        "cached_input": 0.075,
+        "cache_write_5m": 0.15
+      }
+    },
+    "gpt-4o": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 2.5,
+        "output": 10.0,
+        "cached_input": 1.25,
+        "cache_write_5m": 2.5
+      }
+    },
+    "gpt-4.1": {
+      "provider": "openai",
+      "status": "active",
+      "pricing": {
+        "input": 2.0,
+        "output": 8.0,
+        "cached_input": 0.5,
+        "cache_write_5m": 2.0
+      }
+    },
+    "o4-mini": {
+      "provider": "openai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 1.1,
+        "output": 4.4,
+        "cached_input": 0.275,
+        "cache_write_5m": 1.1
+      }
+    },
+    "codex-mini-latest": {
+      "provider": "openai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 1.5,
+        "output": 6.0,
+        "cached_input": 0.375,
+        "cache_write_5m": 1.5
+      }
+    },
+    "o3-mini": {
+      "provider": "openai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 1.1,
+        "output": 4.4,
+        "cached_input": 0.55,
+        "cache_write_5m": 1.1
+      }
+    },
+    "o3": {
+      "provider": "openai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 2.0,
+        "output": 8.0,
+        "cached_input": 0.5,
+        "cache_write_5m": 2.0
+      }
+    },
+    "o1-mini": {
+      "provider": "openai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 1.1,
+        "output": 4.4,
+        "cached_input": 0.55,
+        "cache_write_5m": 1.1
+      }
+    },
+    "o1": {
+      "provider": "openai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 15.0,
+        "output": 60.0,
+        "cached_input": 7.5,
+        "cache_write_5m": 15.0
+      }
+    },
+    "gemini-3-5-flash": {
+      "provider": "google",
+      "status": "active",
+      "pricing": {
+        "input": 1.5,
+        "output": 9.0,
+        "cached_input": 0.15,
+        "cache_write_5m": 1.5
+      }
+    },
+    "gemini-3-1-pro": {
+      "provider": "google",
+      "status": "active",
+      "aliases": [
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools"
+      ],
+      "pricing": {
+        "input": 2.0,
+        "output": 12.0,
+        "cached_input": 0.2,
+        "cache_write_5m": 2.0
+      }
+    },
+    "gemini-3-1-flash-lite": {
+      "provider": "google",
+      "status": "active",
+      "aliases": [
+        "gemini-3.1-flash-lite-preview"
+      ],
+      "pricing": {
+        "input": 0.25,
+        "output": 1.5,
+        "cached_input": 0.025,
+        "cache_write_5m": 0.25
+      }
+    },
+    "gemini-3-pro": {
+      "provider": "google",
+      "status": "active",
+      "aliases": [
+        "gemini-3-pro-preview"
+      ],
+      "pricing": {
+        "input": 2.0,
+        "output": 12.0,
+        "cached_input": 0.2,
+        "cache_write_5m": 2.0
+      }
+    },
+    "gemini-3-flash": {
+      "provider": "google",
+      "status": "active",
+      "aliases": [
+        "gemini-3-flash-preview"
+      ],
+      "pricing": {
+        "input": 0.5,
+        "output": 3.0,
+        "cached_input": 0.05,
+        "cache_write_5m": 0.5
+      }
+    },
+    "gemini-2-5-pro": {
+      "provider": "google",
+      "status": "active",
+      "pricing": {
+        "input": 1.25,
+        "output": 10.0,
+        "cached_input": 0.125,
+        "cache_write_5m": 1.25
+      }
+    },
+    "gemini-2-5-flash-lite": {
+      "provider": "google",
+      "status": "active",
+      "pricing": {
+        "input": 0.1,
+        "output": 0.4,
+        "cached_input": 0.01,
+        "cache_write_5m": 0.1
+      }
+    },
+    "gemini-2-5-flash": {
+      "provider": "google",
+      "status": "active",
+      "pricing": {
+        "input": 0.3,
+        "output": 2.5,
+        "cached_input": 0.03,
+        "cache_write_5m": 0.3
+      }
+    },
+    "gemini-2-0-flash-lite": {
+      "provider": "google",
+      "status": "retired",
+      "pricing": {
+        "input": 0.075,
+        "output": 0.3,
+        "cached_input": 0.075,
+        "cache_write_5m": 0.075
+      }
+    },
+    "gemini-2-0-flash": {
+      "provider": "google",
+      "status": "retired",
+      "pricing": {
+        "input": 0.1,
+        "output": 0.4,
+        "cached_input": 0.025,
+        "cache_write_5m": 0.1
+      }
+    },
+    "gemini-1-5-pro": {
+      "provider": "google",
+      "status": "retired",
+      "pricing": {
+        "input": 1.25,
+        "output": 5.0,
+        "cached_input": 0.3125,
+        "cache_write_5m": 1.25
+      }
+    },
+    "gemini-1-5-flash-8b": {
+      "provider": "google",
+      "status": "retired",
+      "pricing": {
+        "input": 0.0375,
+        "output": 0.15,
+        "cached_input": 0.01,
+        "cache_write_5m": 0.0375
+      }
+    },
+    "gemini-1-5-flash": {
+      "provider": "google",
+      "status": "retired",
+      "pricing": {
+        "input": 0.075,
+        "output": 0.3,
+        "cached_input": 0.01875,
+        "cache_write_5m": 0.075
+      }
+    },
+    "gemini": {
+      "provider": "google",
+      "status": "fallback",
+      "audit": false,
+      "pricing": {
+        "input": 1.25,
+        "output": 10.0,
+        "cached_input": 0.125,
+        "cache_write_5m": 1.25
+      }
+    },
+    "grok-code-fast": {
+      "provider": "xai",
+      "status": "active",
+      "litellm_ignore_fields": [
+        "input",
+        "output",
+        "cached_input"
+      ],
+      "aliases": [
+        "grok-build-0-1"
+      ],
+      "pricing": {
+        "input": 1.0,
+        "output": 2.0,
+        "cached_input": 0.2,
+        "cache_write_5m": 1.0
+      }
+    },
+    "grok-4-20": {
+      "provider": "xai",
+      "status": "active",
+      "litellm_ignore_fields": [
+        "input",
+        "output",
+        "cached_input"
+      ],
+      "aliases": [
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning"
+      ],
+      "pricing": {
+        "input": 1.25,
+        "output": 2.5,
+        "cached_input": 0.2,
+        "cache_write_5m": 1.25
+      }
+    },
+    "grok-4-5": {
+      "provider": "xai",
+      "status": "active",
+      "pricing": {
+        "input": 2.0,
+        "output": 6.0,
+        "cached_input": 0.5,
+        "cache_write_5m": 2.0
+      }
+    },
+    "grok-4-3": {
+      "provider": "xai",
+      "status": "active",
+      "pricing": {
+        "input": 1.25,
+        "output": 2.5,
+        "cached_input": 0.2,
+        "cache_write_5m": 1.25
+      }
+    },
+    "grok-4": {
+      "provider": "xai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 3.0,
+        "output": 15.0,
+        "cached_input": 0.75,
+        "cache_write_5m": 3.0
+      }
+    },
+    "grok-3": {
+      "provider": "xai",
+      "status": "deprecated",
+      "pricing": {
+        "input": 3.0,
+        "output": 15.0,
+        "cached_input": 0.75,
+        "cache_write_5m": 3.0
+      }
+    },
+    "grok": {
+      "provider": "xai",
+      "status": "fallback",
+      "audit": false,
+      "pricing": {
+        "input": 2.0,
+        "output": 6.0,
+        "cached_input": 0.5,
+        "cache_write_5m": 2.0
+      }
+    },
+    "composer": {
+      "provider": "local",
+      "status": "fallback",
+      "audit": false,
+      "pricing": {
+        "input": 0.0,
+        "output": 0.0,
+        "cached_input": 0.0
+      }
+    },
+    "gpt-oss": {
+      "provider": "local",
+      "status": "fallback",
+      "audit": false,
+      "pricing": {
+        "input": 0.0,
+        "output": 0.0,
+        "cached_input": 0.0
+      }
+    },
+    "llama": {
+      "provider": "local",
+      "status": "fallback",
+      "audit": false,
+      "pricing": {
+        "input": 0.0,
+        "output": 0.0,
+        "cached_input": 0.0
+      }
+    },
+    "_default": {
+      "provider": "local",
+      "status": "fallback",
+      "audit": false,
+      "pricing": {
+        "input": 3.0,
+        "output": 15.0,
+        "cached_input": 0.3
+      }
+    }
+  }
+}
