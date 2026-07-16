@@ -7,7 +7,15 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+from .model_pricing import (
+    PriceEntry,
+    load_registry,
+    next_review_date,
+    normalise_model_name,
+    pricing_entries,
+)
 
 _log = logging.getLogger("mark")
 
@@ -154,40 +162,44 @@ SYNC_INTERVAL = _env_int("MARK_SYNC_INTERVAL", 20, minimum=5, maximum=86_400)
 SYNC_RETRY_BASE = _env_float("MARK_SYNC_RETRY_BASE", 5, minimum=0.1, maximum=86_400)
 SYNC_RETRY_MAX = _env_float("MARK_SYNC_RETRY_MAX", 300, minimum=0.1, maximum=604_800)
 
-# Public list prices in USD per 1M tokens: (input, output, cached_input).
-# Matched by substring against the model name; override the whole table with a
-# JSON file via MARK_PRICING_FILE. These are estimates.
+# Public standard API list prices in USD per 1M tokens. More-specific keys win
+# when several match. Override the whole table with MARK_PRICING_FILE.
+_PRICING_REGISTRY = load_registry()
+MODEL_PRICING_AS_OF = _PRICING_REGISTRY["verified_at"]
+MODEL_PRICING_REVISION = _PRICING_REGISTRY["revision"]
+MODEL_PRICING_REVIEW_AFTER = next_review_date(_PRICING_REGISTRY)
+_MODEL_PRICING_ENTRIES = pricing_entries(_PRICING_REGISTRY)
+
+# Preserve the original public API: callers may unpack every value as
+# ``(input, output, cached_input)``. Extended write rates stay private.
 MODEL_PRICING: dict[str, tuple[float, float, float]] = {
-    "claude-opus": (15.0, 75.0, 1.50),
-    "claude-sonnet": (3.0, 15.0, 0.30),
-    "claude-haiku": (0.80, 4.0, 0.08),
-    # Bare aliases so versioned names (e.g. Cursor's "claude-4.5-opus-high-
-    # thinking", "claude-4-sonnet") still price to the right tier.
-    "opus": (15.0, 75.0, 1.50),
-    "sonnet": (3.0, 15.0, 0.30),
-    "haiku": (0.80, 4.0, 0.08),
-    "gpt-5-mini": (0.25, 2.0, 0.025),
-    "gpt-5": (1.25, 10.0, 0.125),
-    "gpt-4o-mini": (0.15, 0.60, 0.075),
-    "gpt-4o": (2.50, 10.0, 1.25),
-    "gpt-4.1": (2.0, 8.0, 0.50),
-    "o3": (2.0, 8.0, 0.50),
-    "o1": (15.0, 60.0, 7.50),
-    "gemini": (1.25, 5.0, 0.31),
-    "grok": (3.0, 15.0, 0.75),
-    # Cursor Composer and local/self-hosted models are not billed per token, so
-    # they price to zero rather than silently inheriting the sonnet _default.
-    "composer": (0.0, 0.0, 0.0),
-    "gpt-oss": (0.0, 0.0, 0.0),
-    "llama": (0.0, 0.0, 0.0),
-    "_default": (3.0, 15.0, 0.30),
+    name: (entry[0], entry[1], entry[2])
+    for name, entry in _MODEL_PRICING_ENTRIES.items()
 }
 
 
+def _normalise_price_key(name: str) -> str:
+    return normalise_model_name(name)
+
+
+def _built_in_pricing() -> dict[str, PriceEntry]:
+    """Layer private write rates over the mutable public three-price table."""
+    table: dict[str, PriceEntry] = {}
+    for name, public in MODEL_PRICING.items():
+        detailed = _MODEL_PRICING_ENTRIES.get(name)
+        if detailed is None or detailed[:3] != public:
+            table[name] = public
+        elif len(detailed) == 5:
+            table[name] = (public[0], public[1], public[2], detailed[3], detailed[4])
+        elif len(detailed) == 4:
+            table[name] = (public[0], public[1], public[2], detailed[3])
+        else:
+            table[name] = public
+    return table
+
+
 @functools.lru_cache(maxsize=8)
-def _load_pricing_file(
-    path: str, _mtime: float
-) -> dict[str, tuple[float, float, float]]:
+def _load_pricing_file(path: str, _mtime: float) -> dict[str, PriceEntry]:
     """Parse a custom pricing JSON, cached by (path, mtime).
 
     Falls back to the built-in table (with a warning) if the file is unreadable
@@ -196,50 +208,105 @@ def _load_pricing_file(
     import json
 
     try:
-        raw = json.loads(Path(path).read_text())
-        return {k: tuple(v) for k, v in raw.items()}  # type: ignore[misc]
-    except (OSError, ValueError) as exc:
+        parsed: object = json.loads(Path(path).read_text())
+        if not isinstance(parsed, dict):
+            raise ValueError("top level must be an object")
+        raw = cast(dict[object, object], parsed)
+        table: dict[str, PriceEntry] = {}
+        normalised_names: set[str] = set()
+        for name, values in raw.items():
+            if not isinstance(name, str) or not isinstance(values, list):
+                raise ValueError("each model must map to a price array")
+            value_list = cast(list[object], values)
+            if not name.strip() or not name.replace("_", "-").strip("-. "):
+                raise ValueError("model names must not be empty")
+            normalised = _normalise_price_key(name)
+            if normalised in normalised_names:
+                raise ValueError(f"duplicate normalised model key {normalised!r}")
+            normalised_names.add(normalised)
+            if len(value_list) not in (3, 4, 5):
+                raise ValueError(f"{name!r} must contain 3, 4, or 5 prices")
+            numbers: list[float] = []
+            for value in value_list:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError(
+                        f"{name!r} prices must be finite non-negative numbers"
+                    )
+                number = float(value)
+                if not math.isfinite(number) or number < 0:
+                    raise ValueError(
+                        f"{name!r} prices must be finite non-negative numbers"
+                    )
+                numbers.append(number)
+            if len(numbers) == 3:
+                table[name] = (numbers[0], numbers[1], numbers[2])
+            elif len(numbers) == 4:
+                table[name] = (numbers[0], numbers[1], numbers[2], numbers[3])
+            else:
+                table[name] = (
+                    numbers[0],
+                    numbers[1],
+                    numbers[2],
+                    numbers[3],
+                    numbers[4],
+                )
+        return table
+    except (OSError, OverflowError, ValueError) as exc:
         _log.warning(
             "MARK_PRICING_FILE %s ignored (%s); using built-in prices", path, exc
         )
-        return MODEL_PRICING
+        return _built_in_pricing()
 
 
-def _load_pricing() -> dict[str, tuple[float, float, float]]:
+def _load_pricing() -> dict[str, PriceEntry]:
     raw_path = os.environ.get("MARK_PRICING_FILE")
     if not raw_path:
-        return MODEL_PRICING
+        return _built_in_pricing()
     path = Path(raw_path).expanduser()
     try:
         mtime = path.stat().st_mtime
     except OSError:
         _log.warning("MARK_PRICING_FILE %s not found; using built-in prices", path)
-        return MODEL_PRICING
+        return _built_in_pricing()
     return _load_pricing_file(str(path), mtime)
+
+
+def _price_entry_for(model: str | None) -> PriceEntry:
+    table = _load_pricing()
+    if model:
+        key = _normalise_price_key(model)
+        normalised_table: dict[str, PriceEntry] = {}
+        for name, price in table.items():
+            normalised = _normalise_price_key(name)
+            if name != "_default":
+                normalised_table[normalised] = price
+        matches = [
+            (len(name), name, price)
+            for name, price in normalised_table.items()
+            if name in key
+        ]
+        if matches:
+            _, matched_name, matched_price = max(matches, key=lambda match: match[0])
+            if "mini" in key and "mini" not in matched_name:
+                mini_price = normalised_table.get(f"{matched_name}-mini")
+                if mini_price is not None:
+                    return mini_price
+            return matched_price
+    return table.get("_default", (3.0, 15.0, 0.30))
 
 
 def price_for(model: str | None) -> tuple[float, float, float]:
     """(input, output, cached_input) USD per 1M tokens for a model name."""
-    table = _load_pricing()
-    if model:
-        key = model.lower()
-        matched_name: str | None = None
-        matched_price: tuple[float, float, float] | None = None
-        for name, price in table.items():
-            if name != "_default" and name in key:
-                matched_name, matched_price = name, price
-                break
-        # Version-agnostic "mini" handling: a name like ``gpt-5.4-mini`` does not
-        # contain the literal ``gpt-5-mini`` key (the ``.4-`` breaks it), so it
-        # would otherwise match the full ``gpt-5`` tier. When the model is a mini,
-        # prefer its family's ``-mini`` price if one is defined.
-        if matched_name and "mini" in key and "mini" not in matched_name:
-            mini = table.get(f"{matched_name}-mini")
-            if mini is not None:
-                return mini
-        if matched_price is not None:
-            return matched_price
-    return table.get("_default", (3.0, 15.0, 0.30))
+    price = _price_entry_for(model)
+    return price[0], price[1], price[2]
+
+
+def cache_write_price_for(model: str | None, *, one_hour: bool = False) -> float:
+    """Cache-write USD per 1M tokens for five-minute or one-hour storage."""
+    price = _price_entry_for(model)
+    if one_hour:
+        return price[4] if len(price) == 5 else price[0] * 2.0
+    return price[3] if len(price) >= 4 else price[0] * 1.25
 
 
 # Preferred transformer model when fastembed is installed.

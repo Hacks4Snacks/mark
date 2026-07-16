@@ -2324,6 +2324,10 @@ def _claude_transcript() -> list[dict]:
                     "output_tokens": 50,
                     "cache_read_input_tokens": 200,
                     "cache_creation_input_tokens": 100,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": 40,
+                        "ephemeral_1h_input_tokens": 60,
+                    },
                 },
                 "content": [
                     {"type": "thinking", "thinking": "The user wants a token refresh."},
@@ -2423,8 +2427,53 @@ def test_claude_code_parses_transcript(tmp_path):
     assert m["input_tokens"] == 3700
     assert m["output_tokens"] == 100
     assert m["tokens_estimated"] == 0
-    assert m["est_cost_usd"] > 0
+    assert m["est_cost_usd"] == 0.0221
     assert s["created_at"] <= s["updated_at"]
+
+
+def test_claude_code_prices_each_model_separately():
+    events = [
+        {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4.8",
+                "usage": {"input_tokens": 1_000_000},
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "model": "claude-haiku-4.5",
+                "usage": {"output_tokens": 1_000_000},
+            },
+        },
+    ]
+
+    metrics = claude_code._session_metrics(events, [])
+
+    assert metrics["model"] == "claude-opus-4.8"
+    assert metrics["est_cost_usd"] == 10.0
+
+
+def test_claude_code_rounds_after_summing_models():
+    events = [
+        {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4.8",
+                "usage": {"input_tokens": 6},
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "model": "claude-haiku-4.5",
+                "usage": {"output_tokens": 6},
+            },
+        },
+    ]
+
+    assert claude_code._session_metrics(events, [])["est_cost_usd"] == 0.0001
 
 
 def test_claude_code_indexes_transcripts(tmp_path):

@@ -42,6 +42,7 @@ def main() -> None:
 
         import mark
         from mark.app import create_app
+        from mark.model_pricing import load_registry
 
         repo_root = Path(__file__).resolve().parents[1]
         source_web = repo_root / "mark" / "web"
@@ -50,6 +51,9 @@ def main() -> None:
             raise SystemExit(
                 f"source checkout imported instead of wheel: {package_path}"
             )
+        registry = load_registry()
+        if not registry.get("models"):
+            raise AssertionError("packaged model pricing registry is empty")
 
         with (
             patch("mark.background.start"),
