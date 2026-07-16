@@ -1,13 +1,29 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
+import sys
 from datetime import date
+from pathlib import Path
 
 import pytest
 
 from mark import config
 from mark.model_pricing import load_registry, pricing_entries, validate_registry
-from scripts import update_model_pricing
+
+
+def _load_update_model_pricing():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "update_model_pricing.py"
+    spec = importlib.util.spec_from_file_location("update_model_pricing", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load pricing audit script from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+update_model_pricing = _load_update_model_pricing()
 
 
 def test_packaged_registry_drives_runtime_prices():
