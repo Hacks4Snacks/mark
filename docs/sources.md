@@ -29,18 +29,19 @@ When the VS Code Copilot agent uses its **memory tool**, it writes durable
 markdown notes that the chat log never contains (it records only that the tool
 ran). Mark captures them by scope:
 
-| On disk (under a workspace's `memory-tool/memories/`)       | Captured as                                                     |
-|-------------------------------------------------------------|----------------------------------------------------------------|
-| `repo/<name>.md` — cross-session repository knowledge       | its own `copilot_memory` session, `Repo memory · <name>`       |
-| `<name>.md` — user-scoped notes (rare)                      | its own `copilot_memory` session, `Memory · <name>`            |
+| On disk (under a workspace's `memory-tool/memories/`)       | Captured as                                                      |
+|-------------------------------------------------------------|------------------------------------------------------------------|
+| `repo/<name>.md` — cross-session repository knowledge       | its own `copilot_memory` session with the Markdown attached      |
+| `<name>.md` — user-scoped notes (rare)                      | its own `copilot_memory` session with the Markdown attached      |
 | `<session-id>/<name>.md` — one conversation's working notes | an **attachment on the chat session** that produced it (VS Code) |
 
 Repo/user notes are attributed to their workspace's repository (so they join
-that repo's facet) and carry **no** token or dollar cost — memory is knowledge,
-not spend, so they never skew the usage dashboards. Session notes ride along
-with their conversation: they appear as attachments in its detail view and
-re-sync whenever that chat is re-indexed. Disable the standalone repo/user
-indexing like any source with `MARK_SOURCE_COPILOT_MEMORY_ENABLED=0`.
+that repo's facet), preserve the observed Markdown as an attachment, and carry
+**no** token or dollar cost — memory is knowledge, not spend, so they never skew
+the usage dashboards. Session notes ride along with their conversation: they
+appear as attachments in its detail view and re-sync whenever that chat is
+re-indexed. Disable the standalone repo/user indexing like any source with
+`MARK_SOURCE_COPILOT_MEMORY_ENABLED=0`.
 
 ### The Cline family
 
