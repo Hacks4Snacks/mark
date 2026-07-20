@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .. import config
+from .. import attachments, config
 from ..persist import _write_session, load_file_signatures, record_file_signature
 from .base import FENCE_RE, URL_RE, ProgressCb, WatchedSource
 from .vscode import load_workspace_map
@@ -107,6 +107,7 @@ def parse_memory_file(
     except OSError:
         return None
     text = raw.decode("utf-8", "replace").strip()
+    attachment = attachments.inline_file(path, root=memories)
 
     scope = _scope(memories, path)
     # memories -> memory-tool -> GitHub.copilot-chat -> <ws-id>
@@ -172,6 +173,7 @@ def parse_memory_file(
         "content_hash": hashlib.sha256(raw).hexdigest(),
         "turns": [turn],
         "metrics": metrics,
+        "attachments": [attachment] if attachment else [],
     }
 
 
@@ -199,7 +201,7 @@ class CopilotMemorySource(WatchedSource):
             count += 1
             if st.st_mtime_ns > newest:
                 newest = st.st_mtime_ns
-        return f"mem:{count}:{newest}"
+        return f"mem:v{attachments.CAPTURE_VERSION}:{count}:{newest}"
 
     def ingest(
         self,
@@ -221,10 +223,15 @@ class CopilotMemorySource(WatchedSource):
                 st = path.stat()
             except OSError:
                 continue
-            sig = f"{st.st_mtime_ns}:{st.st_size}"
+            previous_sig = sigs.get(sp)
+            attachment_current = bool(
+                previous_sig
+                and previous_sig.startswith(f"v{attachments.CAPTURE_VERSION}:")
+            )
+            sig = f"v{attachments.CAPTURE_VERSION}:{st.st_mtime_ns}:{st.st_size}"
             # An unchanged file was parsed and indexed on a prior run — skip the
             # re-read/re-hash from its cheap stat signature alone.
-            if not rebuild and sigs.get(sp) == sig:
+            if not rebuild and previous_sig == sig:
                 skipped += 1
                 continue
             session = parse_memory_file(memories, path, wsmap)
@@ -233,7 +240,12 @@ class CopilotMemorySource(WatchedSource):
                 continue
             session["source_adapter"] = self.key
             prior = existing.get(session["id"])
-            if prior is not None and prior == session["content_hash"] and not rebuild:
+            if (
+                prior is not None
+                and prior == session["content_hash"]
+                and not rebuild
+                and attachment_current
+            ):
                 skipped += 1
                 continue
             _write_session(cur, session)
