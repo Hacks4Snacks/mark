@@ -133,10 +133,20 @@ ASK_SOURCE_EXCERPT_CHARS = _env_int(
 ASK_RECENT_SESSION_CANDIDATES = _env_int(
     "MARK_ASK_RECENT_SESSION_CANDIDATES", 20, minimum=1, maximum=500
 )
+# Structured summary/duration modes rank a broad candidate pool, then send only
+# the strongest sessions so small local models can compare them reliably.
+ASK_AGGREGATE_SESSION_LIMIT = _env_int(
+    "MARK_ASK_AGGREGATE_SESSION_LIMIT", 12, minimum=1, maximum=1_000
+)
 # Cross-encoder reranker for sharper passage relevance. Needs fastembed (the
 # `semantic` extra); silently skipped when unavailable. Set 0 to disable.
 ASK_RERANK = os.environ.get("MARK_ASK_RERANK", "1") not in ("0", "", "false", "False")
 RERANK_MODEL = os.environ.get("MARK_RERANK_MODEL", "Xenova/ms-marco-MiniLM-L-6-v2")
+# Conservative relevance floor for the default MS MARCO cross-encoder. Scores
+# are model-specific; override this alongside MARK_RERANK_MODEL when needed.
+ASK_MIN_RERANK_SCORE = _env_float(
+    "MARK_ASK_MIN_RERANK_SCORE", -8.0, minimum=-100.0, maximum=100.0
+)
 
 # The Copilot CLI / agent session store (a live SQLite DB). mark reads a
 # consistent snapshot of it read-only. Override the path via
@@ -371,7 +381,8 @@ MAX_CHUNK_CHARS = _env_int("MARK_MAX_CHUNK_CHARS", 2000, minimum=1, maximum=10_0
 # Keyword (FTS) search indexes every chunk so nothing is lost from search. Only
 # *embeddings* are capped per session, because semantic search loads all vectors
 # into memory and one huge agent transcript would otherwise dominate it. The
-# earliest chunks per session win (user prompts are emitted first).
+# cap is sampled evenly across the full chunk sequence so, when the cap permits,
+# both speakers and the beginning/end of long sessions remain represented.
 MAX_EMBED_CHUNKS_PER_SESSION = _env_int(
     "MARK_MAX_EMBED_CHUNKS_PER_SESSION", 40, minimum=1, maximum=100_000
 )

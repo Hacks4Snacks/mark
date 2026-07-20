@@ -432,6 +432,107 @@ def test_embedding_batches_are_bounded(make_session, persist_session, monkeypatc
     assert batch_sizes == [3, 3, 3, 3, 2]
 
 
+def test_embedding_cap_samples_both_roles_and_full_timeline(
+    persist_session, monkeypatch
+):
+    from mark import config, db, ingest
+
+    session = {
+        "id": "sampled",
+        "source": "vscode",
+        "title": "Sampled session",
+        "workspace_id": None,
+        "repository": "repo",
+        "repo_path": None,
+        "requester": None,
+        "responder": None,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-02T00:00:00+00:00",
+        "source_path": None,
+        "content_hash": "sampled-content",
+        "turns": [
+            {
+                "turn_index": index,
+                "user_message": f"user-evidence-{index}",
+                "assistant_response": f"assistant-evidence-{index}",
+                "tools": [],
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "files": [],
+                "urls": [],
+                "code_blocks": [],
+            }
+            for index in range(12)
+        ],
+        "metrics": {},
+    }
+    persist_session(session)
+    monkeypatch.setattr(config, "MAX_EMBED_CHUNKS_PER_SESSION", 6)
+
+    assert ingest._embed_pending() == 6
+    with db.cursor() as cur:
+        embedded = [
+            row["content"]
+            for row in cur.execute(
+                "SELECT c.content FROM chunks c "
+                "JOIN embeddings e ON e.chunk_id = c.id "
+                "WHERE c.session_id = 'sampled' ORDER BY c.id"
+            )
+        ]
+
+    assert len(embedded) == 6
+    assert embedded[0] == "User: user-evidence-0"
+    assert embedded[-1] == "Assistant: assistant-evidence-11"
+    assert any(content.startswith("User: ") for content in embedded)
+    assert any(content.startswith("Assistant: ") for content in embedded)
+
+
+def test_lowered_embedding_cap_prunes_stale_vectors(persist_session, monkeypatch):
+    from mark import config, db, ingest
+
+    session = {
+        "id": "cap-change",
+        "source": "vscode",
+        "title": "Cap change",
+        "workspace_id": None,
+        "repository": "repo",
+        "repo_path": None,
+        "requester": None,
+        "responder": None,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-02T00:00:00+00:00",
+        "source_path": None,
+        "content_hash": "cap-change-content",
+        "turns": [
+            {
+                "turn_index": index,
+                "user_message": f"user-{index}",
+                "assistant_response": f"assistant-{index}",
+                "tools": [],
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "files": [],
+                "urls": [],
+                "code_blocks": [],
+            }
+            for index in range(4)
+        ],
+        "metrics": {},
+    }
+    persist_session(session)
+    monkeypatch.setattr(config, "MAX_EMBED_CHUNKS_PER_SESSION", 8)
+    assert ingest._embed_pending() == 8
+
+    monkeypatch.setattr(config, "MAX_EMBED_CHUNKS_PER_SESSION", 1)
+    ingest.mark_semantic_unverified()
+    assert ingest.ensure_index_ready(initialize=False) is True
+
+    with db.cursor() as cur:
+        rows = cur.execute(
+            "SELECT c.content FROM chunks c JOIN embeddings e ON e.chunk_id = c.id "
+            "WHERE c.session_id = 'cap-change'"
+        ).fetchall()
+    assert [row["content"] for row in rows] == ["User: user-0"]
+
+
 def test_embedding_resume_keeps_completed_batches(
     make_session, persist_session, monkeypatch
 ):

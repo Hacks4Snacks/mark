@@ -51,7 +51,7 @@ Precedence for source settings is: built-in default < `sources.toml` < env vars.
 | `MARK_EMBED_BATCH_SIZE`             | `16`                     | Documents per embedding inference batch; lower values use less memory |
 | `MARK_HASH_DIM`                     | `1024`                   | Dimension of the built-in offline hashing vectorizer fallback         |
 | `MARK_MAX_CHUNK_CHARS`              | `2000`                   | Window size for splitting long turns into search chunks               |
-| `MARK_MAX_EMBED_CHUNKS_PER_SESSION` | `40`                     | Cap on *embedded* chunks per session (keyword/FTS indexes all chunks) |
+| `MARK_MAX_EMBED_CHUNKS_PER_SESSION` | `40`                     | Evenly sampled embedded chunks per session (keyword/FTS indexes all chunks) |
 
 ## Conversation detail
 
@@ -86,16 +86,18 @@ not mounted.
 | `MARK_OLLAMA_MODEL`               | *(auto-pick)*                   | Force a specific installed Ollama model                                       |
 | `MARK_ASK_NUM_CTX_CAP`            | `16384`                         | Ceiling on the context window requested (clamped to the model's own length)   |
 | `MARK_ASK_DEFAULT_NUM_CTX`        | `8192`                          | Fallback window when the model doesn't report a context length                |
-| `MARK_ASK_RESERVE_OUTPUT_TOKENS`  | `1024`                          | Tokens held back within the window for the answer                             |
+| `MARK_ASK_RESERVE_OUTPUT_TOKENS`  | `1024`                          | Preferred answer-token reserve (clamped when the model window is smaller)     |
 | `MARK_ASK_MAX_CANDIDATE_PASSAGES` | `80`                            | Passages retrieved (and reranked) before packing into the budget              |
 | `MARK_ASK_PER_SESSION_PASSAGES`   | `2`                             | Max passages drawn from any one session (favours breadth across sessions)     |
 | `MARK_ASK_NEIGHBOR_TURNS`         | `1`                             | Surrounding turns included on each side of a matched passage                  |
 | `MARK_ASK_MAX_TURN_CHARS`         | `4000`                          | Cap on characters from the matched passage itself                             |
 | `MARK_ASK_NEIGHBOR_CHARS`         | `800`                           | Cap on characters from each surrounding neighbour turn (drives breadth)       |
-| `MARK_ASK_SOURCE_EXCERPT_CHARS`   | `320`                           | Supporting excerpt shown beneath each citation                               |
+| `MARK_ASK_SOURCE_EXCERPT_CHARS`   | `320`                           | Bounded matched-passage excerpt retained in the API (UI shows exact prompt evidence) |
 | `MARK_ASK_RECENT_SESSION_CANDIDATES` | `20`                         | Recent sessions considered as an extra lane for recency intent                |
+| `MARK_ASK_AGGREGATE_SESSION_LIMIT` | `12`                            | Ranked sessions supplied to structured summary/duration analysis              |
 | `MARK_ASK_RERANK`                 | `1`                             | Cross-encoder reranking of passages (needs `semantic` extra; `0` disables)    |
 | `MARK_RERANK_MODEL`               | `Xenova/ms-marco-MiniLM-L-6-v2` | fastembed cross-encoder used for reranking                                    |
+| `MARK_ASK_MIN_RERANK_SCORE`       | `-8.0`                          | Minimum cross-encoder score accepted as context; tune for custom rerank models |
 
 The number of **sources** an answer cites is not a fixed setting: Ask packs as
 many distinct sessions as fit the model's context window, so a larger

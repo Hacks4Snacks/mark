@@ -272,6 +272,34 @@ def index_state(cur) -> tuple[str | None, int]:
     return rows.get(FINGERPRINT_META_KEY), generation
 
 
+def embedding_candidates_cte() -> str:
+    """Return the shared CTE that evenly samples capped session chunks.
+
+    The single bind parameter is the maximum chunks per session. Sessions below
+    the cap keep every chunk; larger sessions retain the first and last chunks
+    plus evenly spaced evidence between them.
+    """
+    return (
+        "WITH embed_policy(max_chunks) AS (VALUES (?)), "
+        "ranked_chunks AS ("
+        "  SELECT c.id, "
+        "         ROW_NUMBER() OVER (PARTITION BY c.session_id ORDER BY c.id) "
+        "           AS chunk_rank, "
+        "         COUNT(*) OVER (PARTITION BY c.session_id) AS chunk_count "
+        "  FROM chunks c"
+        "), embedding_candidates AS ("
+        "  SELECT ranked_chunks.id FROM ranked_chunks CROSS JOIN embed_policy "
+        "  WHERE chunk_count <= max_chunks OR chunk_rank = 1 OR ("
+        "    chunk_count > 1 AND max_chunks > 1 AND "
+        "    CAST((chunk_rank - 1) * (max_chunks - 1) / (chunk_count - 1) "
+        "      AS INTEGER) > "
+        "    CAST((chunk_rank - 2) * (max_chunks - 1) / (chunk_count - 1) "
+        "      AS INTEGER)"
+        "  )"
+        ") "
+    )
+
+
 def set_index_fingerprint(cur, embedder: Embedder) -> None:
     cur.execute(
         "INSERT INTO meta(key, value) VALUES(?, ?) "
@@ -368,20 +396,17 @@ def activate_index(cur, embedder: Embedder) -> int:
     if incompatible is not None:
         raise RuntimeError("semantic rebuild contains incompatible vectors")
     missing = cur.execute(
-        "SELECT 1 FROM ("
-        "  SELECT c.id, ROW_NUMBER() OVER "
-        "         (PARTITION BY c.session_id ORDER BY c.id) AS rn "
-        "  FROM chunks c"
-        ") r LEFT JOIN embeddings e ON e.chunk_id = r.id "
+        embedding_candidates_cte() + "SELECT 1 FROM embedding_candidates candidate "
+        "LEFT JOIN embeddings e ON e.chunk_id = candidate.id "
         "AND e.fingerprint = ? AND e.model = ? AND e.dim = ? "
         "AND length(e.vector) = ? "
-        "WHERE e.chunk_id IS NULL AND r.rn <= ? LIMIT 1",
+        "WHERE e.chunk_id IS NULL LIMIT 1",
         (
+            config.MAX_EMBED_CHUNKS_PER_SESSION,
             embedder.fingerprint,
             embedder.name,
             embedder.dim,
             embedder.dim * 4,
-            config.MAX_EMBED_CHUNKS_PER_SESSION,
         ),
     ).fetchone()
     if missing is not None:

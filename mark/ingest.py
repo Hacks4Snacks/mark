@@ -51,12 +51,12 @@ class FingerprintSnapshot:
 
 
 def _embed_pending(progress: ProgressCb | None = None, batch: int | None = None) -> int:
-    """Embed chunks that lack a vector, capped to the first N chunks per session.
+    """Embed chunks that lack a vector, evenly capped across each session.
 
     Keyword search indexes every chunk, but semantic search loads all vectors into
-    memory, so embeddings are bounded per session (earliest chunks — user prompts
-    first — win). The cap is applied by chunk rank within each session, so it is
-    stable across incremental runs.
+    memory, so embeddings are bounded per session. Larger sessions retain samples
+    spanning both speakers and the full chunk timeline instead of only their first
+    user prompts. The selection is deterministic across incremental runs.
     """
     global _semantic_verified
     emb = embeddings.get_embedder()
@@ -80,14 +80,18 @@ def _embed_pending(progress: ProgressCb | None = None, batch: int | None = None)
             "id INTEGER PRIMARY KEY) WITHOUT ROWID"
         )
         cur.execute(
-            "INSERT INTO _mark_embed_candidates(id) "
-            "SELECT r.id FROM ("
-            "  SELECT c.id, c.session_id, "
-            "         ROW_NUMBER() OVER (PARTITION BY c.session_id ORDER BY c.id) AS rn "
-            "  FROM chunks c"
-            ") r WHERE r.rn <= ?",
+            embeddings.embedding_candidates_cte()
+            + "INSERT INTO _mark_embed_candidates(id) "
+            "SELECT id FROM embedding_candidates",
             (config.MAX_EMBED_CHUNKS_PER_SESSION,),
         )
+        removed = cur.execute(
+            "DELETE FROM embeddings WHERE chunk_id NOT IN "
+            "(SELECT id FROM _mark_embed_candidates)"
+        ).rowcount
+        if removed:
+            embeddings.bump_generation(cur)
+            conn.commit()
         compatible_join = (
             "LEFT JOIN embeddings e ON e.chunk_id = c.id AND e.fingerprint = ? "
             "AND e.model = ? AND e.dim = ? AND length(e.vector) = ? "
@@ -206,25 +210,35 @@ def ensure_index_ready(
                 "SELECT value FROM meta WHERE key = 'embed_pending'"
             ).fetchone()
             missing = cur.execute(
-                "SELECT 1 FROM ("
-                "  SELECT c.id, ROW_NUMBER() OVER "
-                "         (PARTITION BY c.session_id ORDER BY c.id) AS rn "
-                "  FROM chunks c"
-                ") r LEFT JOIN embeddings e ON e.chunk_id = r.id "
+                embeddings.embedding_candidates_cte()
+                + "SELECT 1 FROM embedding_candidates candidate "
+                "LEFT JOIN embeddings e ON e.chunk_id = candidate.id "
                 "AND e.fingerprint = ? AND e.model = ? AND e.dim = ? "
                 "AND length(e.vector) = ? "
-                "WHERE e.chunk_id IS NULL AND r.rn <= ? LIMIT 1",
+                "WHERE e.chunk_id IS NULL LIMIT 1",
                 (
+                    config.MAX_EMBED_CHUNKS_PER_SESSION,
                     embedder.fingerprint,
                     embedder.name,
                     embedder.dim,
                     embedder.dim * 4,
-                    config.MAX_EMBED_CHUNKS_PER_SESSION,
                 ),
             ).fetchone()
-            if missing is not None:
+            extra = cur.execute(
+                embeddings.embedding_candidates_cte() + "SELECT 1 FROM embeddings e "
+                "LEFT JOIN embedding_candidates candidate "
+                "ON candidate.id = e.chunk_id "
+                "WHERE candidate.id IS NULL LIMIT 1",
+                (config.MAX_EMBED_CHUNKS_PER_SESSION,),
+            ).fetchone()
+            if missing is not None or extra is not None:
                 embeddings.mark_index_dirty(cur)
-        if active and missing is None and (pending is None or pending["value"] != "1"):
+        if (
+            active
+            and missing is None
+            and extra is None
+            and (pending is None or pending["value"] != "1")
+        ):
             _semantic_verified = True
             return True
         ready = _try_embed_pending(progress)

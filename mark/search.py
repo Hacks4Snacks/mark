@@ -677,6 +677,27 @@ def _sort_results(results: list[dict[str, Any]], sort: str) -> list[dict[str, An
         )
     if sort == "turns":
         return sorted(results, key=lambda r: r.get("turn_count") or 0, reverse=True)
+    if sort == "duration":
+
+        def duration_key(result: dict[str, Any]) -> tuple[bool, float, int, str, str]:
+            raw_duration = result.get("duration_seconds")
+            duration = (
+                float(raw_duration) if isinstance(raw_duration, (int, float)) else 0.0
+            )
+            raw_turn_count = result.get("turn_count")
+            turn_count = raw_turn_count if isinstance(raw_turn_count, int) else 0
+            return (
+                raw_duration is None,
+                -duration,
+                -turn_count,
+                result.get("updated_at") or result.get("created_at") or "~",
+                result.get("id") or "",
+            )
+
+        return sorted(
+            results,
+            key=duration_key,
+        )
     if sort == "title":
         return sorted(results, key=lambda r: (r.get("title") or "").lower())
     return results
@@ -711,6 +732,11 @@ def browse(
             "COALESCE(s.updated_at, s.created_at) ASC"
         ),
         "turns": "s.turn_count DESC",
+        "duration": (
+            "s.duration_seconds IS NULL ASC, s.duration_seconds DESC, "
+            "s.turn_count DESC, "
+            "COALESCE(s.updated_at, s.created_at) ASC, s.id ASC"
+        ),
         "title": "s.title COLLATE NOCASE ASC",
     }.get(sort, "COALESCE(s.updated_at, s.created_at) DESC")
 
