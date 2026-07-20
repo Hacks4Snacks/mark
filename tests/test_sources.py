@@ -1704,7 +1704,7 @@ def _make_memory_workspace(tmp_path):
 def test_copilot_memory_indexes_repo_scope_not_session(tmp_path):
     """Repo-scoped notes index as their own `copilot_memory` session (no LLM cost);
     session-scoped notes are left to the VS Code source, not indexed here."""
-    from mark import config, db, search
+    from mark import attachments, config, db, search
     from mark.sources.copilot_memory import CopilotMemorySource
 
     ws = _make_memory_workspace(tmp_path)
@@ -1721,6 +1721,10 @@ def test_copilot_memory_indexes_repo_scope_not_session(tmp_path):
                 "est_cost_usd, input_tokens FROM sessions"
             )
         }
+        attached = cur.execute(
+            "SELECT filename, content, storage_kind, sha256, capture_version "
+            "FROM documents WHERE kind = 'attachment'"
+        ).fetchone()
     assert res == {"added": 1, "updated": 0, "skipped": 0}
     assert set(rows) == {"Repo memory · conventions"}  # session note not indexed here
     repo_row = rows["Repo memory · conventions"]
@@ -1729,6 +1733,12 @@ def test_copilot_memory_indexes_repo_scope_not_session(tmp_path):
     assert repo_row["workspace_id"] == "ws1"
     assert repo_row["est_cost_usd"] == 0.0  # memory is knowledge, not spend
     assert repo_row["input_tokens"] == 0
+    assert attached is not None
+    assert attached["filename"] == "conventions.md"
+    assert attached["content"].startswith("# Conventions")
+    assert attached["storage_kind"] == "inline"
+    assert attached["sha256"]
+    assert attached["capture_version"] == attachments.CAPTURE_VERSION
     # The note body is searchable and traces back to the memory session.
     hits = search.search("refresh", mode="keyword")
     assert any(h["id"] == repo_row["id"] for h in hits)
@@ -1754,6 +1764,58 @@ def test_copilot_memory_reingest_skips_unchanged(tmp_path):
         conn.commit()
     assert first == {"added": 1, "updated": 0, "skipped": 0}
     assert second == {"added": 0, "updated": 0, "skipped": 1}
+
+
+def test_copilot_memory_backfills_attachment_from_legacy_fingerprint(
+    tmp_path, monkeypatch
+):
+    from mark import attachments, config, db, ingest
+    from mark.sources.copilot_memory import CopilotMemorySource
+
+    ws = _make_memory_workspace(tmp_path)
+    cfg = config.SourceConfig(key="copilot_memory", roots=[ws])
+    src = CopilotMemorySource()
+    memory_path = (
+        ws
+        / "ws1"
+        / "GitHub.copilot-chat"
+        / "memory-tool"
+        / "memories"
+        / "repo"
+        / "conventions.md"
+    )
+    st = memory_path.stat()
+    with db.connect() as conn:
+        cur = conn.cursor()
+        src.ingest(cur, {}, cfg, rebuild=False)
+        cur.execute("DELETE FROM documents")
+        cur.execute(
+            "UPDATE source_file_stat SET signature = ? WHERE path = ?",
+            (f"{st.st_mtime_ns}:{st.st_size}", str(memory_path)),
+        )
+        cur.execute(
+            "INSERT INTO source_file_stat(path, signature) VALUES (?, ?)",
+            ("srcfp:copilot_memory", f"mem:1:{st.st_mtime_ns}"),
+        )
+        conn.commit()
+
+    monkeypatch.setattr(src, "default_config", lambda: cfg)
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [src])
+    result = ingest.ingest_all(do_embed=False)
+
+    with db.connect() as conn:
+        attached = conn.execute(
+            "SELECT filename, capture_version FROM documents WHERE kind = 'attachment'"
+        ).fetchone()
+        source_fingerprint = conn.execute(
+            "SELECT signature FROM source_file_stat "
+            "WHERE path = 'srcfp:copilot_memory'"
+        ).fetchone()[0]
+    assert result["updated"] == 1
+    assert attached is not None
+    assert attached["filename"] == "conventions.md"
+    assert attached["capture_version"] == attachments.CAPTURE_VERSION
+    assert source_fingerprint == src.fingerprint(cfg)
 
 
 def test_copilot_memory_multiroot_attributes_repo_per_file(tmp_path):
