@@ -110,7 +110,7 @@ jobs:
 
       - name: Download audit report
         if: env.AUDIT_STATUS == '2'
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: model-pricing-audit
           path: .pricing-audit
