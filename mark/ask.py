@@ -39,6 +39,7 @@ _RETRIEVAL_STOP_WORDS = {
     "my",
     "of",
     "on",
+    "our",
     "please",
     "session",
     "sessions",
@@ -48,7 +49,9 @@ _RETRIEVAL_STOP_WORDS = {
     "this",
     "took",
     "to",
+    "us",
     "was",
+    "we",
     "were",
     "what",
     "when",
@@ -56,6 +59,20 @@ _RETRIEVAL_STOP_WORDS = {
     "which",
     "who",
     "why",
+    "you",
+    "your",
+    "he",
+    "her",
+    "hers",
+    "him",
+    "his",
+    "it",
+    "its",
+    "she",
+    "their",
+    "theirs",
+    "them",
+    "they",
 }
 _DURATION_REQUEST_RE = re.compile(
     r"\b(?:which|what)\s+(?:(?:recent|latest)\s+)?"
@@ -91,6 +108,21 @@ _ACTIVITY_REQUEST_RE = re.compile(
     r")\s*",
     re.I,
 )
+_CONVERSATION_SEARCH_RE = re.compile(
+    r"^\s*(?:(?:find(?!\s+out\b)|search(?:\s+for)?|"
+    r"look(?:\s+|-)?(?:up|for)|lookup)\s+"
+    r"(?:(?:me\s+)?(?:my\s+)?(?:conversations?|sessions?|chats?)\s+"
+    r"(?:about|on|related\s+to|matching)\s*)?|"
+    r"(?:show|list)\s+(?:me\s+)?(?:my\s+)?"
+    r"(?:conversations?|sessions?|chats?)\s+"
+    r"(?:about|on|related\s+to|matching)\s*)",
+    re.I,
+)
+_FIND_OUT_RE = re.compile(r"^\s*find\s+out\s+", re.I)
+_LOOKUP_REQUEST_RES = (
+    re.compile(r"^\s*(?:search|look)\s+(?:for\s+)?", re.I),
+    re.compile(r"^\s*find\s+", re.I),
+)
 _POLITE_REQUEST_RE = re.compile(
     r"^\s*(?:(?:please)|(?:(?:can|could|would|will)\s+you))" r"(?:[\s,;:!.-]+)",
     re.I,
@@ -118,6 +150,14 @@ _SYSTEM = (
     "unrelated to the question. Cite the sources you actually rely on with their "
     "bracket numbers, e.g. [1], [2]. If the context does not contain the answer, "
     "say so plainly in one sentence rather than guessing. Be concise and practical."
+)
+
+_SUMMARY_GUIDANCE = (
+    "Response requirements: summarize only the matching sessions as concise "
+    "bullets. Every bullet and factual claim must end with one or more citation "
+    "IDs copied exactly from the evidence, such as [1]. Do not emit an uncited "
+    "bullet or claim. When matching evidence is present, summarize what it says "
+    "instead of claiming that no information was provided."
 )
 
 
@@ -206,6 +246,20 @@ def _effective_num_ctx(model: str) -> int:
     return max(2048, min(config.ASK_DEFAULT_NUM_CTX, config.ASK_NUM_CTX_CAP))
 
 
+def _consume_conversation_search(text: str) -> tuple[str, bool]:
+    remaining = text
+    matched = False
+    while True:
+        if matched:
+            remaining = re.sub(r"^\s*and\s+", "", remaining, flags=re.I)
+        command = _CONVERSATION_SEARCH_RE.search(remaining)
+        if not command:
+            break
+        matched = True
+        remaining = remaining[command.end() :]
+    return remaining, matched
+
+
 def plan_query(
     question: str, *, now: datetime | None = None, repositories: list[str] | None = None
 ) -> AskQueryPlan:
@@ -264,12 +318,25 @@ def plan_query(
     else:
         recency = "none"
 
-    request_text = _POLITE_REQUEST_RE.sub("", question)
-    duration_match = _DURATION_REQUEST_RE.search(request_text)
-    intent = "duration" if duration_match else "lookup"
+    request_text = question
+    while True:
+        normalized = _POLITE_REQUEST_RE.sub("", request_text, count=1)
+        if normalized == request_text:
+            break
+        request_text = normalized
+    search_text, conversation_search = _consume_conversation_search(request_text)
+    discovery_text = _FIND_OUT_RE.sub("", request_text, count=1)
+    duration_match = (
+        None if conversation_search else _DURATION_REQUEST_RE.search(discovery_text)
+    )
+    intent = (
+        "find" if conversation_search else "duration" if duration_match else "lookup"
+    )
     activity_request = False
-    retrieval_text = request_text
-    if duration_match:
+    retrieval_text = search_text if conversation_search else discovery_text
+    if conversation_search:
+        pass
+    elif duration_match:
         retrieval_text = (
             retrieval_text[: duration_match.start()]
             + " "
@@ -290,6 +357,11 @@ def plan_query(
         ):
             activity_request = True
             retrieval_text = retrieval_text[activity_match.end() :]
+        if intent == "lookup":
+            for lookup_pattern in _LOOKUP_REQUEST_RES:
+                if lookup_match := lookup_pattern.search(retrieval_text):
+                    retrieval_text = retrieval_text[lookup_match.end() :]
+                    break
     if repository:
         retrieval_text = re.sub(
             rf"(?<![\w-]){re.escape(repository)}(?![\w-])",
@@ -319,9 +391,10 @@ def plan_query(
             flags=re.I,
         )
     retrieval_tokens = [
-        token
+        token.lower()
         for token in _RETRIEVAL_TOKEN_RE.findall(retrieval_text)
         if token.lower() not in _RETRIEVAL_STOP_WORDS
+        or (token.isupper() and token in {"IT", "US"})
     ]
     retrieval_query = " ".join(retrieval_tokens).strip()
     if intent == "lookup" and activity_request and not retrieval_query:
@@ -351,13 +424,16 @@ def _encoded_size(text: str) -> int:
     return len(text.encode("utf-8", errors="replace"))
 
 
-def _chat_messages(question: str, context: str) -> list[dict[str, str]]:
+def _chat_messages(
+    question: str, context: str, guidance: str = ""
+) -> list[dict[str, str]]:
+    guidance_block = f"\n\n{guidance}" if guidance else ""
     return [
         {"role": "system", "content": _SYSTEM},
         {
             "role": "user",
             "content": (
-                f"Question: {question}\n\n"
+                f"Question: {question}{guidance_block}\n\n"
                 f'<archive-context format="json">\n{context}\n'
                 "</archive-context>"
             ),
@@ -396,6 +472,31 @@ def _duration_answer(sources: list[dict[str, Any]]) -> str:
         title = _markdown_inline(str(source.get("title") or "Untitled"))
         duration = _format_duration(float(source["duration_seconds"]))
         lines.append(f"- **{title}** — {duration} [{source['n']}]")
+    return "\n".join(lines)
+
+
+def _conversation_search_answer(sources: list[dict[str, Any]]) -> str:
+    if not sources:
+        return "No matching conversations were found."
+    lines = ["Matching conversations:", ""]
+    for source in sources[:8]:
+        title = _markdown_inline(str(source.get("title") or "Untitled"))
+        raw_passages = source.get("passages")
+        passages = (
+            cast(list[dict[str, Any]], raw_passages)
+            if isinstance(raw_passages, list)
+            else []
+        )
+        excerpt = ""
+        if passages:
+            excerpt = re.sub(
+                r"^(?:User|Assistant):\s*",
+                "",
+                str(passages[0].get("excerpt") or ""),
+            )
+            excerpt = _truncate(re.sub(r"\s+", " ", excerpt), 180)
+        detail = f" — {_markdown_inline(excerpt)}" if excerpt else ""
+        lines.append(f"- **{title}**{detail} [{source['n']}]")
     return "\n".join(lines)
 
 
@@ -773,7 +874,7 @@ def _evidence_from_block(block: str) -> str:
 
 
 def _order_session_rows(
-    rows: list[dict[str, Any]], recency: str
+    rows: list[dict[str, Any]], recency: str, *, recency_primary: bool = False
 ) -> list[dict[str, Any]]:
     if recency == "latest":
         return sorted(
@@ -793,11 +894,15 @@ def _order_session_rows(
         reverse=True,
     )
     recent_rank = {row_index: rank for rank, row_index in enumerate(recent_order)}
+    relevance_weight, recency_weight = (1.0, 2.0) if recency_primary else (2.0, 1.0)
     return [
         rows[index]
         for index in sorted(
             range(len(rows)),
-            key=lambda index: (1.0 / (60 + index) + 2.0 / (60 + recent_rank[index])),
+            key=lambda index: (
+                relevance_weight / (60 + index)
+                + recency_weight / (60 + recent_rank[index])
+            ),
             reverse=True,
         )
     ]
@@ -810,6 +915,79 @@ def _merge_session_rows(
     seen = {row["id"] for row in primary}
     merged.extend(row for row in recent if row["id"] not in seen)
     return merged
+
+
+def _rerank_session_rows(
+    query: str, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Rerank topic-summary candidates from their searchable session evidence."""
+    if not query or not rows:
+        return rows
+    documents = [
+        "\n".join(
+            (
+                f"Title: {row.get('title') or ''}",
+                f"Summary: {row.get('summary') or ''}",
+                f"Topics: {' '.join(row.get('tags') or [])}",
+                f"Repository: {row.get('repository') or ''}",
+            )
+        )
+        for row in rows
+    ]
+    scores = embeddings.rerank(query, documents)
+    if not scores or len(scores) != len(rows):
+        allowed_ids = {row["id"] for row in rows}
+        keyword_passages = search.search_passages(
+            query,
+            limit=len(rows),
+            per_session_cap=1,
+            only_ids=allowed_ids,
+            mode="keyword",
+        )
+        by_id = {row["id"]: row for row in rows}
+        return [
+            by_id[passage["session_id"]]
+            for passage in keyword_passages
+            if passage["session_id"] in by_id
+        ]
+    accepted = [
+        index
+        for index, score in enumerate(scores)
+        if score >= config.ASK_MIN_RERANK_SCORE
+    ]
+    return [
+        {**rows[index], "rerank_score": scores[index]}
+        for index in sorted(accepted, key=lambda item: scores[item], reverse=True)
+    ]
+
+
+def _filter_conversation_sources(
+    query: str, sources: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    if not query or not sources:
+        return sources
+    documents = [
+        "\n".join(
+            (
+                f"Title: {source.get('title') or ''}",
+                f"Summary: {source.get('summary') or ''}",
+                f"Repository: {source.get('repository') or ''}",
+            )
+        )
+        for source in sources
+    ]
+    scores = embeddings.rerank(query, documents)
+    if not scores or len(scores) != len(sources):
+        return sources
+    accepted = [
+        index
+        for index, score in enumerate(scores)
+        if score >= config.ASK_MIN_RERANK_SCORE
+    ]
+    return [
+        {**sources[index], "session_rerank_score": scores[index]}
+        for index in sorted(accepted, key=lambda item: scores[item], reverse=True)
+    ]
 
 
 def _build_session_context(
@@ -864,7 +1042,14 @@ def _build_session_context(
         else:
             recent_rows = recent_scope
         rows = _merge_session_rows(rows, recent_rows)
-        rows = _order_session_rows(rows, plan.recency)
+    if plan.intent == "summary" and plan.retrieval_query:
+        rows = _rerank_session_rows(plan.retrieval_query, rows)
+    if plan.recency != "none":
+        rows = _order_session_rows(
+            rows,
+            plan.recency,
+            recency_primary=plan.intent == "duration",
+        )
 
     blocks: list[str] = []
     sources: list[dict[str, Any]] = []
@@ -936,7 +1121,7 @@ def _build_session_context(
                         "source_type": "session_summary",
                         "timestamp": updated_at,
                         "score": row.get("score"),
-                        "rerank_score": None,
+                        "rerank_score": row.get("rerank_score"),
                         "excerpt": excerpt,
                         "prompt_excerpt": accepted_evidence,
                     }
@@ -986,7 +1171,24 @@ def build_context(
     )
     if not passages:
         return "", []
-    passages = _rerank(question, passages, recency=plan.recency)
+    passages = _rerank(
+        plan.retrieval_query or question,
+        passages,
+        recency=plan.recency,
+    )
+    if passages and not any("rerank_score" in passage for passage in passages):
+        passages = search.search_passages(
+            plan.retrieval_query,
+            limit=config.ASK_MAX_CANDIDATE_PASSAGES,
+            per_session_cap=config.ASK_PER_SESSION_PASSAGES,
+            only_ids=session_ids,
+            repo=plan.repository,
+            date_from=plan.date_from,
+            date_to=plan.date_to,
+            recency=plan.recency,
+            recent_session_limit=config.ASK_RECENT_SESSION_CANDIDATES,
+            mode="keyword",
+        )
     passages = _interleave_sessions(passages)
 
     radius = config.ASK_NEIGHBOR_TURNS
@@ -1076,6 +1278,7 @@ def build_context(
                 "n": citation_number,
                 "id": sid,
                 "title": p.get("title"),
+                "summary": p.get("summary"),
                 "source": p.get("source"),
                 "repository": p.get("repository"),
                 "updated_at": p.get("updated_at"),
@@ -1127,15 +1330,36 @@ def stream_answer(
         "recency": plan.recency,
     }
     max_sessions = limit if (limit and limit > 0) else None
-    if plan.intent == "duration":
+    if plan.intent in ("duration", "find"):
+        deterministic_limit = min(
+            max_sessions or config.ASK_AGGREGATE_SESSION_LIMIT,
+            config.ASK_AGGREGATE_SESSION_LIMIT,
+        )
         _context, sources = build_context(
             question,
             char_budget=1_000_000,
-            max_sessions=max_sessions,
+            max_sessions=deterministic_limit,
             session_ids=session_ids,
             query_plan=plan,
         )
+        if plan.intent == "find":
+            sources = _filter_conversation_sources(plan.retrieval_query, sources)
+            renumbered: list[dict[str, Any]] = []
+            for index, source in enumerate(sources, start=1):
+                numbered = dict(source)
+                numbered["n"] = index
+                renumbered.append(numbered)
+            sources = renumbered
         yield {"type": "sources", "sources": sources, "retrieval": retrieval}
+        if plan.intent == "find":
+            cited = [source["n"] for source in sources[:8]]
+            yield {
+                "type": "token",
+                "text": _conversation_search_answer(sources),
+            }
+            yield {"type": "citations", "citations": cited}
+            yield {"type": "done", "model": "mark-search"}
+            return
         measured = _measured_duration_sources(sources)
         cited = [source["n"] for source in measured]
         yield {"type": "token", "text": _duration_answer(measured)}
@@ -1153,7 +1377,8 @@ def stream_answer(
 
     model = st["model"]
     num_ctx = _effective_num_ctx(model)
-    baseline_size = _message_content_size(_chat_messages(question, ""))
+    guidance = _SUMMARY_GUIDANCE if plan.intent == "summary" else ""
+    baseline_size = _message_content_size(_chat_messages(question, "", guidance))
     available = num_ctx - _CHAT_TEMPLATE_TOKEN_MARGIN - baseline_size
     minimum_evidence_budget = _encoded_size(
         _serialize_evidence(
@@ -1198,7 +1423,7 @@ def stream_answer(
         return
     payload: dict[str, Any] = {
         "model": model,
-        "messages": _chat_messages(question, context),
+        "messages": _chat_messages(question, context, guidance),
         "stream": True,
         # Match num_ctx to the model so retrieved context isn't silently truncated
         # (Ollama otherwise defaults to ~2048).

@@ -147,17 +147,22 @@ def _timestamp_value(value: str | None) -> float:
         return float("-inf")
 
 
-def _fts_query(q: str) -> str | None:
+def _fts_query(q: str, *, column: str | None = None) -> str | None:
     tokens = [t for t in _TOKEN_RE.findall(q.lower()) if len(t) > 1]
     if not tokens:
         return None
-    return " OR ".join(f'"{t}"*' for t in tokens)
+    expression = " OR ".join(f'"{t}"*' for t in tokens)
+    return f"{column} : ({expression})" if column else expression
 
 
 def _keyword_search(
-    query: str, limit: int, scope: _SessionScope
+    query: str,
+    limit: int,
+    scope: _SessionScope,
+    *,
+    content_only: bool = False,
 ) -> list[dict[str, Any]]:
-    match = _fts_query(query)
+    match = _fts_query(query, column="content" if content_only else None)
     if not match:
         return []
     with (
@@ -555,6 +560,7 @@ def search_passages(
     date_to: str | None = None,
     recency: str = "none",
     recent_session_limit: int = 20,
+    mode: str = "hybrid",
 ) -> list[dict[str, Any]]:
     """Return the top matching *passages* (chunks) for RAG context assembly.
 
@@ -574,8 +580,21 @@ def search_passages(
         date_to=date_to,
         only_ids=only_ids,
     )
-    kw = _keyword_search(query, limit * candidate_factor, scope)
-    sem = _semantic_search(query, limit * candidate_factor, _scoped_session_ids(scope))
+    kw = (
+        _keyword_search(
+            query,
+            limit * candidate_factor,
+            scope,
+            content_only=True,
+        )
+        if mode in ("hybrid", "keyword")
+        else []
+    )
+    sem = (
+        _semantic_search(query, limit * candidate_factor, _scoped_session_ids(scope))
+        if mode in ("hybrid", "semantic")
+        else []
+    )
     recent: list[dict[str, Any]] = []
     if recency in ("boost", "latest"):
         recent_ids = _recent_session_ids(scope, recent_session_limit)
@@ -585,11 +604,24 @@ def search_passages(
             date_to=date_to,
             only_ids=recent_ids,
         )
-        recent_kw = _keyword_search(query, limit * candidate_factor, recent_scope)
-        recent_sem = _semantic_search(
-            query,
-            limit * candidate_factor,
-            _scoped_session_ids(recent_scope),
+        recent_kw = (
+            _keyword_search(
+                query,
+                limit * candidate_factor,
+                recent_scope,
+                content_only=True,
+            )
+            if mode in ("hybrid", "keyword")
+            else []
+        )
+        recent_sem = (
+            _semantic_search(
+                query,
+                limit * candidate_factor,
+                _scoped_session_ids(recent_scope),
+            )
+            if mode in ("hybrid", "semantic")
+            else []
         )
         recent_scores, recent_meta = _fuse((recent_kw, recent_sem))
         recent = [
@@ -656,6 +688,7 @@ def search_passages(
                 "content": cm["content"],
                 "score": round(score / max_score, 4),
                 "title": s.get("title"),
+                "summary": s.get("summary"),
                 "source": s.get("source"),
                 "repository": s.get("repository"),
                 "updated_at": s.get("updated_at") or s.get("created_at"),

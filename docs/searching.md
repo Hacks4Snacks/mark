@@ -109,4 +109,9 @@ pip install 'markive[semantic]'
 > or more can preserve both speakers and evidence from the beginning to the end;
 > a cap of one necessarily retains only the first chunk.
 
+Automatic topics prioritize session titles and user intent, keep assistant text
+bounded, and discard URL, path, host, filename, and injected-context noise. A
+full reindex regenerates existing automatic topics and summaries; manual topics
+are preserved.
+
 See the full [configuration reference](configuration.md) for everything else.

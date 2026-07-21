@@ -6,6 +6,8 @@ import os
 import time
 from datetime import datetime, timezone
 
+import pytest
+
 from mark import ask, config, embeddings, search
 
 
@@ -99,6 +101,46 @@ def test_search_passages_repository_scope_precedes_candidate_truncation(
     assert [passage["session_id"] for passage in passages] == ["target"]
 
 
+def test_search_passages_ignores_title_only_chunk_matches(persist_session):
+    persist_session(
+        _session(
+            "metadata-only",
+            [("unrelated planning", "nothing about transport security")],
+            title="Certificates management",
+        )
+    )
+    persist_session(
+        _session(
+            "content-match",
+            [("how do certificates rotate", "renew certificates before expiry")],
+            title="Cluster maintenance",
+        )
+    )
+
+    passages = search.search_passages("certificates", limit=10)
+
+    assert {passage["session_id"] for passage in passages} == {"content-match"}
+
+
+def test_search_passages_keyword_mode_does_not_call_semantic_search(
+    persist_session, monkeypatch
+):
+    persist_session(
+        _session("keyword", [("certificate rotation procedure", "renew the CA")])
+    )
+    monkeypatch.setattr(
+        search,
+        "_semantic_search",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("keyword mode must not call semantic search")
+        ),
+    )
+
+    passages = search.search_passages("certificate", mode="keyword")
+
+    assert [passage["session_id"] for passage in passages] == ["keyword"]
+
+
 def test_plan_resolves_repository_case_insensitively():
     plan = ask.plan_query(
         "What was fixed in AFOI-NC-Security?",
@@ -136,6 +178,171 @@ def test_plan_does_not_guess_between_multiple_repositories():
     plan = ask.plan_query("Compare alpha and beta", repositories=["alpha", "beta"])
 
     assert plan.repository is None
+
+
+def test_plan_strips_lookup_request_scaffolding():
+    find = ask.plan_query("find conversations about certificates", repositories=[])
+    search_for = ask.plan_query("search for certificate rotation", repositories=[])
+
+    assert find.intent == "find"
+    assert find.retrieval_query == "certificates"
+    assert search_for.intent == "find"
+    assert search_for.retrieval_query == "certificate rotation"
+
+
+def test_explicit_conversation_search_precedes_duration_intent():
+    plan = ask.plan_query(
+        "find conversations about which sessions took the longest",
+        repositories=[],
+    )
+
+    assert plan.intent == "find"
+    assert plan.retrieval_query == "longest"
+
+
+@pytest.mark.parametrize(
+    ("question", "intent", "query", "recency"),
+    [
+        ("find conversations about certificates", "find", "certificates", "none"),
+        ("search for certificate rotation", "find", "certificate rotation", "none"),
+        (
+            "Could you please find conversations about certificates?",
+            "find",
+            "certificates",
+            "none",
+        ),
+        (
+            "search for my conversations about certificates",
+            "find",
+            "certificates",
+            "none",
+        ),
+        ("look up certificate rotation", "find", "certificate rotation", "none"),
+        ("look-up certificate rotation", "find", "certificate rotation", "none"),
+        ("lookup certificate rotation", "find", "certificate rotation", "none"),
+        ("find certificate rotation", "find", "certificate rotation", "none"),
+        (
+            "search for and find conversations about certificates",
+            "find",
+            "certificates",
+            "none",
+        ),
+        ("find conversations about IT", "find", "it", "none"),
+        ("find conversations about US", "find", "us", "none"),
+        ("show me conversations about auth", "find", "auth", "none"),
+        (
+            "find conversations about which sessions took the longest",
+            "find",
+            "longest",
+            "none",
+        ),
+        (
+            "Summarize my recent debugging sessions",
+            "summary",
+            "debugging",
+            "boost",
+        ),
+        (
+            "Please summarize certificate rotation",
+            "summary",
+            "certificate rotation",
+            "none",
+        ),
+        ("What did I work on this past week?", "summary", "", "none"),
+        ("Which sessions took the longest?", "duration", "", "none"),
+        ("find out which sessions took the longest", "duration", "", "none"),
+        ("find out what I worked on last week", "summary", "", "none"),
+        ("How did we rotate the cluster CA?", "lookup", "rotate cluster ca", "none"),
+        (
+            "What did they do about certificate rotation?",
+            "lookup",
+            "certificate rotation",
+            "none",
+        ),
+        (
+            "What sessions discussed duration parsing?",
+            "lookup",
+            "discussed duration parsing",
+            "none",
+        ),
+    ],
+)
+def test_planner_intent_matrix(question, intent, query, recency):
+    plan = ask.plan_query(question, repositories=[])
+
+    assert (plan.intent, plan.retrieval_query, plan.recency) == (
+        intent,
+        query,
+        recency,
+    )
+
+
+def test_conversation_search_is_deterministic_and_cited(monkeypatch):
+    sources = [
+        {
+            "n": 1,
+            "title": "Cluster CA rotation",
+            "passages": [
+                {
+                    "excerpt": (
+                        "User: Investigate Kubernetes certificate renewal and "
+                        "root CA rotation support."
+                    )
+                }
+            ],
+        }
+    ]
+    monkeypatch.setattr(
+        ask,
+        "status",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("conversation search must not probe Ollama")
+        ),
+    )
+    monkeypatch.setattr(
+        ask, "build_context", lambda *args, **kwargs: ("evidence", sources)
+    )
+
+    events = list(ask.stream_answer("find conversations about certificates"))
+
+    answer = "".join(event.get("text", "") for event in events)
+    assert "Cluster CA rotation" in answer
+    assert "certificate renewal" in answer
+    assert events[-2] == {"type": "citations", "citations": [1]}
+    assert events[-1] == {"type": "done", "model": "mark-search"}
+
+
+def test_conversation_search_filters_literal_code_match_by_session_topic(monkeypatch):
+    sources = [
+        {
+            "n": 1,
+            "title": "Certificate inventory",
+            "summary": "Inventoried Kubernetes certificates and trust chains.",
+            "repository": "cluster",
+            "passages": [{"excerpt": "certificate inventory"}],
+        },
+        {
+            "n": 2,
+            "title": "Improve Ask retrieval",
+            "summary": "Refined tests for local archive search behavior.",
+            "repository": "mark",
+            "passages": [{"excerpt": "test certificate query"}],
+        },
+    ]
+    monkeypatch.setattr(
+        ask, "build_context", lambda *args, **kwargs: ("evidence", sources)
+    )
+    monkeypatch.setattr(embeddings, "rerank", lambda query, docs: [1.5, -10.5])
+
+    events = list(ask.stream_answer("find conversations about certificates"))
+
+    source_event = next(event for event in events if event["type"] == "sources")
+    answer = "".join(event.get("text", "") for event in events)
+    assert [source["title"] for source in source_event["sources"]] == [
+        "Certificate inventory"
+    ]
+    assert "Improve Ask retrieval" not in answer
+    assert events[-2] == {"type": "citations", "citations": [1]}
 
 
 def test_plan_parses_past_week_with_injected_clock():
@@ -258,7 +465,7 @@ def test_recent_intent_blends_retrieval_and_cross_encoder_ranks(monkeypatch):
     ]
 
 
-def test_recent_summary_order_gives_recency_a_real_boost():
+def test_recent_summary_order_keeps_relevance_primary():
     rows = [
         {"id": "relevant-old", "updated_at": "2026-01-01T00:00:00Z"},
         {"id": "recent", "updated_at": "2026-02-01T00:00:00Z"},
@@ -266,7 +473,186 @@ def test_recent_summary_order_gives_recency_a_real_boost():
 
     ordered = ask._order_session_rows(rows, "boost")
 
-    assert [row["id"] for row in ordered] == ["recent", "relevant-old"]
+    assert [row["id"] for row in ordered] == ["relevant-old", "recent"]
+
+
+def test_topic_summary_reranks_and_filters_irrelevant_sessions(monkeypatch):
+    rows = [
+        {
+            "id": "debugging",
+            "title": "Dashboard crashes during navigation",
+            "summary": "Traced a reproducible dashboard crash and fixed its state mutation.",
+            "tags": ["debug", "navigation"],
+            "source": "vscode",
+            "repository": "app",
+            "updated_at": "2026-07-19T00:00:00Z",
+            "turn_count": 8,
+            "score": 1.0,
+        },
+        {
+            "id": "planning",
+            "title": "Continue UX milestone work",
+            "summary": "Reviewed visual-foundation milestones and planned the next slice.",
+            "tags": ["debug", "ux"],
+            "source": "vscode",
+            "repository": "app",
+            "updated_at": "2026-07-20T00:00:00Z",
+            "turn_count": 5,
+            "score": 0.8,
+        },
+        {
+            "id": "path-noise",
+            "title": "Session File Path:",
+            "summary": "Session File Path:",
+            "tags": ["debug"],
+            "source": "cli",
+            "repository": None,
+            "updated_at": "2026-07-20T00:00:00Z",
+            "turn_count": 1,
+            "score": 0.7,
+        },
+    ]
+    monkeypatch.setattr(search, "search", lambda *args, **kwargs: rows)
+    monkeypatch.setattr(search, "browse", lambda **kwargs: [])
+    monkeypatch.setattr(
+        embeddings,
+        "rerank",
+        lambda query, documents: [3.0, -9.0, -12.0],
+    )
+    plan = ask.AskQueryPlan("debugging", recency="boost", intent="summary")
+
+    context, sources = ask.build_context(
+        "Summarize my recent debugging sessions",
+        char_budget=10_000,
+        query_plan=plan,
+    )
+
+    assert [source["id"] for source in sources] == ["debugging"]
+    assert "dashboard crash" in context.lower()
+    assert sources[0]["passages"][0]["rerank_score"] == 3.0
+
+
+def test_topic_summary_does_not_rerank_from_literal_matching_snippet(monkeypatch):
+    rows = [
+        {
+            "id": "debugging",
+            "title": "Dashboard crash investigation",
+            "summary": "Diagnosed a dashboard crash and fixed navigation state.",
+            "tags": ["dashboard", "navigation"],
+            "repository": "app",
+            "snippet": "DEBUG dashboard state",
+        },
+        {
+            "id": "test-code",
+            "title": "Improve Ask retrieval",
+            "summary": "Added planner and retrieval regression coverage.",
+            "tags": ["ask", "tests"],
+            "repository": "mark",
+            "snippet": "test recent debugging sessions",
+        },
+    ]
+    seen_documents = []
+
+    def rerank(query, documents):
+        seen_documents.extend(documents)
+        return [2.0, -10.0]
+
+    monkeypatch.setattr(embeddings, "rerank", rerank)
+
+    ranked = ask._rerank_session_rows("debugging", rows)
+
+    assert [row["id"] for row in ranked] == ["debugging"]
+    assert all("Matched evidence:" not in document for document in seen_documents)
+    assert all(
+        "test recent debugging sessions" not in document for document in seen_documents
+    )
+
+
+def test_topic_summary_keeps_search_order_without_reranker(monkeypatch):
+    rows = [
+        {
+            "id": "first",
+            "title": "First",
+            "summary": "First debugging session",
+            "tags": [],
+            "source": "vscode",
+            "repository": "app",
+            "updated_at": "2026-07-19T00:00:00Z",
+            "turn_count": 1,
+            "score": 1.0,
+        },
+        {
+            "id": "second",
+            "title": "Second",
+            "summary": "Second debugging session",
+            "tags": [],
+            "source": "vscode",
+            "repository": "app",
+            "updated_at": "2026-07-18T00:00:00Z",
+            "turn_count": 1,
+            "score": 0.8,
+        },
+    ]
+    monkeypatch.setattr(search, "search", lambda *args, **kwargs: rows)
+    monkeypatch.setattr(embeddings, "rerank", lambda query, documents: None)
+    monkeypatch.setattr(
+        search,
+        "search_passages",
+        lambda *args, **kwargs: [
+            {"session_id": "first"},
+            {"session_id": "second"},
+        ],
+    )
+    plan = ask.AskQueryPlan("debugging", intent="summary")
+
+    _, sources = ask.build_context(
+        "Summarize debugging sessions",
+        char_budget=10_000,
+        query_plan=plan,
+    )
+
+    assert [source["id"] for source in sources] == ["first", "second"]
+
+
+def test_lookup_falls_back_to_content_keyword_passages_without_reranker(monkeypatch):
+    def passage(chunk_id, session_id, content):
+        return {
+            "chunk_id": chunk_id,
+            "session_id": session_id,
+            "turn_index": None,
+            "source_type": "document",
+            "timestamp": None,
+            "content": content,
+            "score": 1.0,
+            "title": session_id,
+            "source": "upload",
+            "repository": None,
+            "updated_at": None,
+        }
+
+    seen_modes = []
+
+    def passages(*args, **kwargs):
+        mode = kwargs.get("mode", "hybrid")
+        seen_modes.append(mode)
+        if mode == "keyword":
+            return [passage(2, "keyword-match", "certificate rotation evidence")]
+        return [passage(1, "semantic-neighbor", "unrelated nearest vector")]
+
+    monkeypatch.setattr(search, "search_passages", passages)
+    monkeypatch.setattr(embeddings, "rerank", lambda query, documents: None)
+    plan = ask.AskQueryPlan("certificates", intent="find")
+
+    context, sources = ask.build_context(
+        "find conversations about certificates",
+        char_budget=4000,
+        query_plan=plan,
+    )
+
+    assert seen_modes == ["hybrid", "keyword"]
+    assert [source["id"] for source in sources] == ["keyword-match"]
+    assert "certificate rotation evidence" in context
+    assert "unrelated nearest vector" not in context
 
 
 def test_utc_date_scope_normalizes_timestamp_offsets(persist_session):
@@ -1084,6 +1470,42 @@ def test_stream_answer_bounds_complete_model_prompt(monkeypatch):
         complete_bytes + ask._CHAT_TEMPLATE_TOKEN_MARGIN
         <= options["num_ctx"] - options["num_predict"]
     )
+
+
+def test_summary_stream_includes_cited_bullet_guidance(monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            yield b'{"done": true}'
+
+    monkeypatch.setattr(
+        ask, "status", lambda: {"available": True, "model": "test-model"}
+    )
+    monkeypatch.setattr(ask, "_effective_num_ctx", lambda model: 4096)
+    monkeypatch.setattr(
+        ask,
+        "build_context",
+        lambda *args, **kwargs: ("accepted evidence", [{"n": 1}]),
+    )
+
+    def urlopen(request, timeout):
+        captured["payload"] = json.loads(request.data)
+        return Response()
+
+    monkeypatch.setattr(ask.urllib.request, "urlopen", urlopen)
+
+    list(ask.stream_answer("Summarize debugging sessions"))
+
+    user_prompt = captured["payload"]["messages"][1]["content"]
+    assert "Every bullet and factual claim must end" in user_prompt
+    assert "[1]" in user_prompt
 
 
 def test_stream_answer_clamps_output_reserve_to_model_window(monkeypatch):

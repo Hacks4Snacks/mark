@@ -510,7 +510,7 @@ async function checkCollAskStatus() {
     const st = await api("/api/ask/status");
     if (!st.available) {
       note.hidden = false;
-      note.innerHTML = `No local LLM detected. Duration analysis still works; narrative questions require <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> running locally.`;
+      note.innerHTML = `No local LLM detected. Conversation search and duration analysis still work; narrative questions require <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> running locally.`;
       $("#collAskSend").disabled = false;
     } else {
       note.hidden = true;

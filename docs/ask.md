@@ -48,6 +48,9 @@ When you ask a question, Mark:
    mode and any repository or date scope before the evidence list. Structured
    summary and duration modes compare the strongest 12 ranked sessions by
    default so small local models are not overwhelmed.
+   Explicit requests such as *"find conversations about certificates"* return
+   cited matching conversations directly instead of asking the model to
+   reinterpret a search result.
 2. **Retrieves** the most relevant *passages* from your history using the same
    hybrid (keyword + semantic) search that powers the rest of the app — pinning
    the exact turns that answer your question rather than whole sessions. When a
@@ -58,8 +61,10 @@ When you ask a question, Mark:
    pre-ranking scope. *Latest* and *most recent* add recency-first ordering.
 3. **Reranks** those passages with a local cross-encoder (when the `semantic`
    extra is installed), rejects passages below its configured relevance floor,
-   and lets the most on-point excerpts win. Without a reranker it keeps the
-   hybrid-search order.
+   and lets the most on-point excerpts win. Without a reranker, Ask falls back
+   to content-only keyword passages rather than treating unvalidated semantic
+   neighbors or metadata-only matches as evidence. This favors precision over
+   synonym recall on minimal installations.
 4. **Packs** the top passages — each widened with a little surrounding context
    and numbered as a source — into the model's context window, sized to the
    model you're running instead of a fixed per-source slice. Mark admits one

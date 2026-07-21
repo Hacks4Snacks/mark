@@ -61,7 +61,7 @@ async function checkAskStatus() {
     const st = await api("/api/ask/status");
     if (!st.available) {
       note.hidden = false;
-      note.innerHTML = `No local LLM detected. Duration analysis still works. For narrative questions, install <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>, run <code>ollama pull llama3.2</code>, and keep <code>ollama serve</code> running.`;
+      note.innerHTML = `No local LLM detected. Conversation search and duration analysis still work. For narrative questions, install <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>, run <code>ollama pull llama3.2</code>, and keep <code>ollama serve</code> running.`;
       $("#askModel").textContent = "analytics only";
       $("#askSend").disabled = false;
     } else {
@@ -150,6 +150,7 @@ function retrievalPlanHtml(retrieval) {
   if (!retrieval) return "";
   const labels = {
     lookup: "Evidence lookup",
+    find: "Conversation search",
     summary: "Archive summary",
     duration: "Duration analysis",
   };
