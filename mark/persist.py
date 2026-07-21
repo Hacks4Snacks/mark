@@ -172,9 +172,9 @@ def _write_session(cur, session: dict[str, Any]) -> None:
             session["content_hash"],
         ),
     )
-    # User prompts carry the most search signal, so when a session exceeds the
-    # per-session chunk cap we keep every turn's user text before spending the
-    # remaining budget on assistant/tool output.
+    # Keep role groups stable for keyword indexing. Semantic indexing samples
+    # evenly across the complete sequence, so capped sessions retain evidence
+    # from both user prompts and assistant output.
     user_pieces: list[tuple[int, str]] = []  # (turn_index, content)
     asst_pieces: list[tuple[int, str]] = []
     for t in turns:
@@ -222,9 +222,7 @@ def _write_session(cur, session: dict[str, Any]) -> None:
             )
 
     # Every chunk is indexed for keyword (FTS) search — no per-session cap, so no
-    # searchable text is dropped. User prompts are emitted before assistant/tool
-    # output so that the per-session *embedding* cap (applied later, at embed time)
-    # keeps the highest-signal chunks.
+    # searchable text is dropped. Semantic embeddings are sampled separately.
     chunk_rows: list[tuple[int, str]] = []  # (chunk_id, content)
     for turn_index, piece in user_pieces + asst_pieces:
         cur.execute(

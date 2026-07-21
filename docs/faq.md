@@ -89,11 +89,11 @@ Ask is **disabled by default** while it's being refined. Enable it by setting
 `MARK_ENABLE_ASK=1` before starting Mark; the button, view, and its API routes
 only appear when the flag is on.
 
-**The Ask view says it's unavailable.**
-Once enabled, Ask needs a local [Ollama](https://ollama.com) server. Run
-`ollama serve` and pull a model (`ollama pull llama3.2`). Point Mark elsewhere
-with `MARK_OLLAMA_URL` / `MARK_OLLAMA_MODEL` if needed. Every other feature works
-without it. See [Ask your history](ask.md).
+**The Ask view says no local LLM was detected.**
+Duration analysis still works directly from stored metrics. Narrative lookups
+and summaries need a local [Ollama](https://ollama.com) server. Run `ollama
+serve` and pull a model (`ollama pull llama3.2`). Point Mark elsewhere with
+`MARK_OLLAMA_URL` / `MARK_OLLAMA_MODEL` if needed. See [Ask your history](ask.md).
 
 ## MCP
 

@@ -104,7 +104,14 @@ pip install 'markive[semantic]'
 
 > **Keyword search always indexes every chunk** — nothing is lost from FTS. Only
 > *embeddings* are capped per session, because semantic search loads vectors into
-> memory and one giant agent transcript could otherwise dominate the set. The
-> earliest chunks per session win (user prompts come first).
+> memory and one giant agent transcript could otherwise dominate the set. Capped
+> sessions are sampled evenly across their complete chunk sequence. Caps of two
+> or more can preserve both speakers and evidence from the beginning to the end;
+> a cap of one necessarily retains only the first chunk.
+
+Automatic topics prioritize session titles and user intent, keep assistant text
+bounded, and discard URL, path, host, filename, and injected-context noise. A
+full reindex regenerates existing automatic topics and summaries; manual topics
+are preserved.
 
 See the full [configuration reference](configuration.md) for everything else.

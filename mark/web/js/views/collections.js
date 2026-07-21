@@ -300,7 +300,7 @@ async function loadMoreMembers(c) {
 
 function collAskExamples(c, ov) {
   const examples = [
-    `Summarize what I worked on in \u201C${c.name}\u201D`,
+    "Summarize this collection",
     "What were the main topics in this collection?",
   ];
   const top = (ov.topics || [])[0];
@@ -510,8 +510,8 @@ async function checkCollAskStatus() {
     const st = await api("/api/ask/status");
     if (!st.available) {
       note.hidden = false;
-      note.innerHTML = `No local LLM detected. Install <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> and run <code>ollama serve</code> to ask this collection. Everything stays on your machine.`;
-      $("#collAskSend").disabled = true;
+      note.innerHTML = `No local LLM detected. Conversation search and duration analysis still work; narrative questions require <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> running locally.`;
+      $("#collAskSend").disabled = false;
     } else {
       note.hidden = true;
       $("#collAskSend").disabled = false;

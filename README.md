@@ -229,11 +229,12 @@ Everything runs locally over stdio: no network, no API keys.
 ## Ask your history (off by default, local LLM)
 
 Ask is still being refined, so it's **disabled by default** — enable it with
-`MARK_ENABLE_ASK=1`. Once enabled, if a local [Ollama](https://ollama.com) server
-is running, the **✦ Ask** view lets you ask questions in natural language. Mark
-retrieves the most relevant past conversations, has a **local** model synthesise a
-cited answer, and streams it back token-by-token, so your archive stays on your
-machine, no API keys.
+`MARK_ENABLE_ASK=1`. The **✦ Ask** view answers natural-language questions over
+your archive. Duration analysis is computed directly from stored metrics;
+narrative lookups and summaries retrieve relevant conversations and use a local
+[Ollama](https://ollama.com) model to synthesise a cited answer. Everything stays
+on your machine with the default loopback Ollama URL, with no API keys. A custom
+remote `MARK_OLLAMA_URL` receives the selected evidence.
 
 ```bash
 export MARK_ENABLE_ASK=1   # Ask is disabled by default
@@ -243,8 +244,8 @@ ollama serve
 
 Override the model with `MARK_OLLAMA_MODEL` or the endpoint with
 `MARK_OLLAMA_URL`. While Ask is disabled the **✦ Ask** button and view never
-appear; when it's enabled but Ollama isn't reachable, the view simply shows setup
-hints. Every other feature works without it.
+appear; when it's enabled but Ollama isn't reachable, duration analysis remains
+available and the view shows setup guidance for narrative questions.
 
 ## Collections
 
