@@ -9,6 +9,15 @@ From v0.2.0 onward, entries are generated automatically by
 [release-please](https://github.com/googleapis/release-please) from Conventional
 Commits.
 
+## [0.5.0](https://github.com/Hacks4Snacks/mark/compare/v0.4.0...v0.5.0) (2026-07-21)
+
+
+### Features
+
+* Ask feature enhancements ([#26](https://github.com/Hacks4Snacks/mark/issues/26)) ([d533d37](https://github.com/Hacks4Snacks/mark/commit/d533d37483fdbcac07899f0e28d2ad64c7d2b86a))
+* attach copilot memories to session ([#24](https://github.com/Hacks4Snacks/mark/issues/24)) ([4b7ef8c](https://github.com/Hacks4Snacks/mark/commit/4b7ef8cd251a27f6916a8e05ff3a77a27315652d))
+* Model Price Support Update ([#20](https://github.com/Hacks4Snacks/mark/issues/20)) ([9c04f18](https://github.com/Hacks4Snacks/mark/commit/9c04f186de63d7085a18b13964c3ce309ce13337))
+
 ## [0.4.0](https://github.com/Hacks4Snacks/mark/compare/v0.3.0...v0.4.0) (2026-07-14)
 
 
