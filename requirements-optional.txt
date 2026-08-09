@@ -10,4 +10,4 @@ fastembed>=0.3
 model2vec>=0.8.2
 
 # Richer uploads: extract text from PDFs.
-pypdf>=4.0
+pypdf>=6.15.0
