@@ -63,6 +63,87 @@ def test_keyword_search_finds_session(make_session, persist_session):
     assert "b" not in found
 
 
+@pytest.mark.parametrize("mode", ["hybrid", "keyword", "semantic"])
+def test_quoted_search_requires_exact_phrase(
+    make_session, persist_session, monkeypatch, mode
+):
+    persist_session(
+        make_session(sid="exact", user="capture the repository evidence now")
+    )
+    persist_session(
+        make_session(sid="reversed", user="the evidence identifies a repository")
+    )
+    persist_session(
+        make_session(sid="separated", user="repository logs provide strong evidence")
+    )
+    monkeypatch.setattr(
+        search,
+        "_semantic_search",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("quoted search must not call semantic search")
+        ),
+    )
+
+    results = search.search('"repository evidence"', mode=mode)
+
+    assert [result["id"] for result in results] == ["exact"]
+    assert {
+        result["id"] for result in search.search("repository evidence", mode="keyword")
+    } == {"exact", "reversed", "separated"}
+
+
+def test_quoted_search_does_not_lose_sessions_to_chunk_candidate_limit(
+    make_session, persist_session
+):
+    chunk_heavy = make_session(sid="chunk-heavy")
+    template = chunk_heavy["turns"][0]
+    chunk_heavy["turns"] = [
+        {
+            **template,
+            "turn_index": index,
+            "user_message": "repository evidence " * 10,
+            "assistant_response": "noted",
+        }
+        for index in range(20)
+    ]
+    persist_session(chunk_heavy)
+    persist_session(
+        make_session(sid="single-match", user="one repository evidence reference")
+    )
+
+    results = search.search('"repository evidence"', mode="hybrid", limit=2)
+
+    assert {result["id"] for result in results} == {"chunk-heavy", "single-match"}
+    scoped = search.search(
+        '"repository evidence"',
+        mode="hybrid",
+        limit=1,
+        only_ids={"chunk-heavy", "single-match"},
+    )
+    assert len(scoped) == 1
+
+
+def test_multiple_quoted_phrases_and_unquoted_terms_are_required(
+    make_session, persist_session
+):
+    persist_session(
+        make_session(
+            sid="all-clauses",
+            user="repository evidence supports the audit trail rotation",
+        )
+    )
+    persist_session(make_session(sid="first-only", user="repository evidence rotation"))
+    persist_session(
+        make_session(sid="phrases-only", user="repository evidence audit trail")
+    )
+
+    results = search.search(
+        '"repository evidence" "audit trail" rotation', mode="hybrid"
+    )
+
+    assert [result["id"] for result in results] == ["all-clauses"]
+
+
 def test_semantic_search_over_embedded_note():
     # Notes are embedded on write, so semantic search has vectors to match.
     sid = uploads.add_note(

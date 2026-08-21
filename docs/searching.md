@@ -24,6 +24,20 @@ chunk per session.
 An empty query is not an error — it becomes a **browse** of everything, ordered
 by your chosen sort and narrowed by whatever facets are active.
 
+### Exact phrase search
+
+Wrap a phrase in double quotes to require those words together and in that
+order. For example, `"repository evidence"` matches *repository evidence*, but
+not *evidence from the repository* or *repository logs provide evidence*.
+
+Quoted phrases use the complete keyword index and suppress semantic expansion,
+even when **Hybrid** or **Semantic** mode is selected. This keeps every returned
+session tied to a literal phrase match. Multiple quoted phrases are all
+required. In a mixed query such as `rotation "repository evidence"`, the quoted
+phrase is required and the unquoted text is matched as an additional keyword.
+Without quotes, terms retain the normal keyword/semantic behavior described
+above.
+
 ## The sidebar facets
 
 Every filter is additive — combine as many as you like. The result count and an

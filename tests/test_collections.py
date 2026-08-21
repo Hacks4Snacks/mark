@@ -28,6 +28,40 @@ def test_rule_membership(make_session, persist_session):
     assert "b" not in ids
 
 
+def test_quoted_rule_uses_complete_exact_membership(
+    make_session, persist_session, monkeypatch
+):
+    from mark import search
+
+    persist_session(
+        make_session(sid="exact", user="capture the repository evidence now")
+    )
+    persist_session(
+        make_session(sid="separated", user="repository logs provide evidence")
+    )
+    monkeypatch.setattr(
+        search,
+        "ranked_session_ids",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("quoted rules must not use capped ranked membership")
+        ),
+    )
+
+    cid = coll.create(
+        "Exact phrase",
+        rule={"q": '"repository evidence"', "mode": "semantic"},
+    )
+    collection = coll.get_collection(cid)
+
+    assert coll.resolve_member_ids(collection) == {"exact"}
+    listed = next(row for row in coll.list_collections() if row["id"] == cid)
+    assert listed["membership_policy"] == {
+        "kind": "complete",
+        "cap": None,
+        "truncated": False,
+    }
+
+
 def test_rule_with_multiple_topics_requires_all(make_session, persist_session):
     from mark.repositories import sessions as sessions_repo
 

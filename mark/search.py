@@ -13,6 +13,7 @@ from . import config, db, embeddings, ingest, visibility
 
 _RRF_K = 60
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+_QUOTED_RE = re.compile(r'"([^"]+)"')
 
 # Cached embedding matrix: rebuilt whenever the persisted semantic generation changes.
 _vec_lock = threading.Lock()
@@ -147,11 +148,30 @@ def _timestamp_value(value: str | None) -> float:
         return float("-inf")
 
 
+def _query_terms(q: str) -> tuple[list[tuple[str, ...]], list[str]]:
+    quoted = [
+        phrase
+        for match in _QUOTED_RE.finditer(q.lower())
+        if (phrase := tuple(_TOKEN_RE.findall(match.group(1))))
+    ]
+    unquoted = _QUOTED_RE.sub(" ", q.lower())
+    tokens = [token for token in _TOKEN_RE.findall(unquoted) if len(token) > 1]
+    return quoted, tokens
+
+
+def has_quoted_phrase(q: str) -> bool:
+    quoted, _tokens = _query_terms(q)
+    return bool(quoted)
+
+
 def _fts_query(q: str, *, column: str | None = None) -> str | None:
-    tokens = [t for t in _TOKEN_RE.findall(q.lower()) if len(t) > 1]
-    if not tokens:
+    quoted, tokens = _query_terms(q)
+    clauses = [f'"{" ".join(phrase)}"' for phrase in quoted]
+    if tokens:
+        clauses.append("(" + " OR ".join(f'"{token}"*' for token in tokens) + ")")
+    if not clauses:
         return None
-    expression = " OR ".join(f'"{t}"*' for t in tokens)
+    expression = " AND ".join(clauses)
     return f"{column} : ({expression})" if column else expression
 
 
@@ -161,9 +181,10 @@ def _keyword_search(
     scope: _SessionScope,
     *,
     content_only: bool = False,
+    one_per_session: bool = False,
 ) -> list[dict[str, Any]]:
     match = _fts_query(query, column="content" if content_only else None)
-    if not match:
+    if not match or limit <= 0:
         return []
     with (
         db.cursor() as cur,
@@ -178,19 +199,35 @@ def _keyword_search(
             "FROM search_index "
             "JOIN sessions s ON s.id = search_index.session_id "
             f"WHERE search_index MATCH ? AND {where} "
-            "ORDER BY score LIMIT ?"
+            "ORDER BY score"
         )
-        rows = cur.execute(sql, [match, *scope_params, limit]).fetchall()
-    # bm25 returns more-negative = better; rank ascending.
-    return [
-        {
-            "chunk_id": r["chunk_id"],
-            "session_id": r["session_id"],
-            "turn_index": r["turn_index"],
-            "snippet": r["snip"],
-        }
-        for r in rows
-    ]
+        params: list[Any] = [match, *scope_params]
+        if not one_per_session:
+            sql += " LIMIT ?"
+            params.append(limit)
+        results: list[dict[str, Any]] = []
+        seen_sessions: set[str] = set()
+        rows = cur.connection.execute(sql, params)
+        try:
+            for row in rows:
+                session_id = row["session_id"]
+                if one_per_session and session_id in seen_sessions:
+                    continue
+                seen_sessions.add(session_id)
+                results.append(
+                    {
+                        "chunk_id": row["chunk_id"],
+                        "session_id": session_id,
+                        "turn_index": row["turn_index"],
+                        "snippet": row["snip"],
+                    }
+                )
+                if len(results) >= limit:
+                    break
+        finally:
+            rows.close()
+    # bm25 returns more-negative = better; rows are ranked ascending.
+    return results
 
 
 def scoped_session_ids(
@@ -274,8 +311,17 @@ def ranked_session_ids(
         date_to=date_to,
         only_ids=only_ids,
     )
-    keyword_ranked = _keyword_session_ranking(query, scope) if mode == "hybrid" else []
-    semantic_ranked = _semantic_session_ranking(query, _scoped_session_ids(scope))
+    exact_phrase = has_quoted_phrase(query)
+    keyword_ranked = (
+        _keyword_session_ranking(query, scope)
+        if exact_phrase or mode == "hybrid"
+        else []
+    )
+    semantic_ranked = (
+        []
+        if exact_phrase
+        else _semantic_session_ranking(query, _scoped_session_ids(scope))
+    )
     scores: dict[str, float] = {}
     for ranked in (keyword_ranked, semantic_ranked):
         for rank, session_id in enumerate(ranked):
@@ -500,14 +546,20 @@ def search(
         only_ids=only_ids,
         only_hidden=only_hidden,
     )
+    exact_phrase = has_quoted_phrase(query)
     kw = (
-        _keyword_search(query, limit * 6, scope)
-        if mode in ("hybrid", "keyword")
+        _keyword_search(
+            query,
+            limit if exact_phrase else limit * 6,
+            scope,
+            one_per_session=exact_phrase,
+        )
+        if exact_phrase or mode in ("hybrid", "keyword")
         else []
     )
     sem = (
         _semantic_search(query, limit * 6, _scoped_session_ids(scope))
-        if mode in ("hybrid", "semantic")
+        if not exact_phrase and mode in ("hybrid", "semantic")
         else []
     )
 
@@ -580,6 +632,7 @@ def search_passages(
         date_to=date_to,
         only_ids=only_ids,
     )
+    exact_phrase = has_quoted_phrase(query)
     kw = (
         _keyword_search(
             query,
@@ -587,12 +640,12 @@ def search_passages(
             scope,
             content_only=True,
         )
-        if mode in ("hybrid", "keyword")
+        if exact_phrase or mode in ("hybrid", "keyword")
         else []
     )
     sem = (
         _semantic_search(query, limit * candidate_factor, _scoped_session_ids(scope))
-        if mode in ("hybrid", "semantic")
+        if not exact_phrase and mode in ("hybrid", "semantic")
         else []
     )
     recent: list[dict[str, Any]] = []
@@ -611,7 +664,7 @@ def search_passages(
                 recent_scope,
                 content_only=True,
             )
-            if mode in ("hybrid", "keyword")
+            if exact_phrase or mode in ("hybrid", "keyword")
             else []
         )
         recent_sem = (
@@ -620,7 +673,7 @@ def search_passages(
                 limit * candidate_factor,
                 _scoped_session_ids(recent_scope),
             )
-            if mode in ("hybrid", "semantic")
+            if not exact_phrase and mode in ("hybrid", "semantic")
             else []
         )
         recent_scores, recent_meta = _fuse((recent_kw, recent_sem))

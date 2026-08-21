@@ -81,7 +81,7 @@ def _rule_resolution(rule: dict[str, Any]) -> tuple[set[str], dict[str, Any]]:
             "truncated": False,
         }
     mode = rule.get("mode") or "hybrid"
-    if mode == "keyword":
+    if mode == "keyword" or search.has_quoted_phrase(q):
         return search.keyword_session_ids(q, **common), {
             "kind": "complete",
             "cap": None,
