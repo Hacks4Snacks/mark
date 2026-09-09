@@ -155,15 +155,36 @@
       <!-- LIBRARY VIEW -->
       <div id="libraryView" hidden>
         <div class="list-head">
-          <h2>Snippet &amp; command library</h2>
+          <h2>Snippet &amp; solution library</h2>
           <span id="libCount" class="muted"></span>
         </div>
-        <div class="lib-controls">
-          <input id="libSearch" type="search" placeholder="Filter by content..." autocomplete="off" spellcheck="false" />
-          <select id="libLang" aria-label="Filter by language"><option value="">All languages</option></select>
-          <label class="toggle lib-cmd"><input type="checkbox" id="libCommands" /> <span>Commands only</span></label>
+        <div class="segmented library-mode" id="libModeToggle" role="tablist" aria-label="Library content">
+          <button type="button" role="tab" id="libExtractedTab" data-libmode="extracted" aria-controls="libExtractedPanel" aria-selected="true" class="active">Extracted snippets</button>
+          <button type="button" role="tab" id="libCuratedTab" data-libmode="curated" aria-controls="libCuratedPanel" aria-selected="false" tabindex="-1">Curated solutions</button>
         </div>
-        <div id="libResults" class="lib-results"></div>
+        <div id="libExtractedPanel" role="tabpanel" aria-labelledby="libExtractedTab">
+          <div class="lib-controls">
+            <input id="libSearch" type="search" aria-label="Filter extracted snippets" placeholder="Filter by content..." autocomplete="off" spellcheck="false" />
+            <select id="libLang" aria-label="Filter by language"><option value="">All languages</option></select>
+            <label class="toggle lib-cmd"><input type="checkbox" id="libCommands" /> <span>Commands only</span></label>
+          </div>
+          <div id="libResults" class="lib-results"></div>
+        </div>
+        <div id="libCuratedPanel" role="tabpanel" aria-labelledby="libCuratedTab" hidden>
+          <p class="curation-hint">Your saved answers and snippets. These independent copies keep your notes and review status even if the original conversation changes, is hidden, or is deleted.</p>
+          <div class="solution-controls">
+            <input id="solutionSearch" type="search" aria-label="Search curated solutions" placeholder="Search titles, content, notes, or prerequisites..." maxlength="2000" autocomplete="off" />
+            <input id="solutionTagFilter" type="search" aria-label="Filter curated solutions by tag" placeholder="Exact tag" maxlength="40" autocomplete="off" />
+            <select id="solutionStatusFilter" aria-label="Filter by review status">
+              <option value="">All review statuses</option>
+              <option value="needs_review">Needs review</option>
+              <option value="verified">Verified</option>
+              <option value="outdated">Outdated</option>
+            </select>
+            <label class="toggle"><input type="checkbox" id="solutionFavoritesOnly" /> <span>Favorites only</span></label>
+          </div>
+          <div id="solutionResults" class="lib-results"></div>
+        </div>
       </div>
 
       <!-- USAGE VIEW -->
@@ -304,6 +325,54 @@
       <div class="dialog-foot">
         <button type="button" class="btn" id="collCancel">Cancel</button>
         <button type="button" class="btn btn-primary" id="collSave">Save collection</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="solutionDialog" class="dialog solution-dialog" aria-labelledby="solutionDialogTitle">
+    <form id="solutionForm">
+      <div class="dialog-head">
+        <strong id="solutionDialogTitle">Save solution</strong>
+        <button type="button" class="btn btn-ghost icon-only" id="solutionClose" aria-label="Close solution editor"><span class="bi" data-icon="x"></span></button>
+      </div>
+      <p id="solutionOwnership" class="curation-hint">Save an independent copy of the full answer or snippet. Source changes, hiding, and deletion will not remove it. Manage saved copies here in Curated solutions.</p>
+      <p id="solutionError" class="solution-error" role="alert" hidden></p>
+      <p id="solutionLoading" class="muted" role="status" hidden>Loading source...</p>
+      <fieldset id="solutionFields">
+        <label for="solutionTitle">Title</label>
+        <input id="solutionTitle" required maxlength="160" autocomplete="off" />
+        <div class="solution-editor-row">
+          <div><label for="solutionStatus">Review status</label>
+            <select id="solutionStatus">
+              <option value="needs_review">Needs review</option>
+              <option value="verified">Verified</option>
+              <option value="outdated">Outdated</option>
+            </select>
+          </div>
+          <label class="toggle solution-favorite-label"><input type="checkbox" id="solutionFavorite" /> <span>Favorite</span></label>
+        </div>
+        <label for="solutionTags">Tags <span class="muted">(comma-separated; up to 20)</span></label>
+        <input id="solutionTags" maxlength="820" placeholder="auth, go, runbook" autocomplete="off" />
+        <label for="solutionPrerequisites">Environment / version prerequisites</label>
+        <textarea id="solutionPrerequisites" rows="2" maxlength="4000" placeholder="Required versions, environment, permissions, or safety checks"></textarea>
+        <label for="solutionNotes">Annotations</label>
+        <textarea id="solutionNotes" rows="4" maxlength="10000" placeholder="Why this works, verification notes, caveats, or a replacement for outdated advice"></textarea>
+      </fieldset>
+      <div class="solution-provenance">
+        <strong>Source provenance</strong>
+        <p id="solutionOrigin"></p>
+        <p id="solutionSourceStatus" role="status"></p>
+        <a id="solutionSourceLink" class="btn btn-ghost" hidden>Open source turn</a>
+      </div>
+      <details id="solutionContentPanel" class="solution-content-panel">
+        <summary id="solutionContentLabel">Saved content (read-only)</summary>
+        <div id="solutionContent"></div>
+      </details>
+      <div class="dialog-foot solution-dialog-foot">
+        <button type="button" class="btn btn-ghost detail-delete" id="solutionDelete" hidden>Delete saved copy</button>
+        <button type="button" class="btn" id="solutionCopy">Copy content</button>
+        <button type="button" class="btn" id="solutionCancel">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="solutionSave">Save solution</button>
       </div>
     </form>
   </dialog>

@@ -6,7 +6,7 @@
 import { api } from "./api.js";
 import { state } from "./state.js";
 import { loadFacets, loadStats, syncFilterUI } from "./sidebar.js";
-import { $, $$, debounce, srcMeta, toast } from "./utils.js";
+import { $, $$, srcMeta, toast } from "./utils.js";
 import { icon } from "./icons.js";
 import { routeFromHash } from "./router.js";
 import {
@@ -16,7 +16,7 @@ import { openSession } from "./views/detail.js";
 import {
   hideCollMenu, openCollectionDialog, saveCollection, saveCollectionFromFilters, showCollections,
 } from "./views/collections.js";
-import { libState, loadSnippets, showLibrary } from "./views/library.js";
+import { setupLibrary, showLibrary } from "./views/library.js";
 import { loadUsage, showUsage } from "./views/usage.js";
 import { showAsk, submitAsk } from "./views/ask.js";
 import { closePalette, isPaletteOpen, openPalette, setupPalette } from "./palette.js";
@@ -304,15 +304,7 @@ function setup() {
   });
 
   $("#libraryBtn").addEventListener("click", () => showLibrary());
-  $("#libSearch").addEventListener("input", debounce(() => {
-    libState.q = $("#libSearch").value.trim(); loadSnippets();
-  }, 200));
-  $("#libLang").addEventListener("change", () => { libState.language = $("#libLang").value; loadSnippets(); });
-  $("#libCommands").addEventListener("change", () => {
-    libState.commands = $("#libCommands").checked;
-    $("#libLang").disabled = libState.commands;
-    loadSnippets();
-  });
+  setupLibrary();
 
   $("#usageBtn").addEventListener("click", () => showUsage());
 
@@ -325,6 +317,7 @@ function setup() {
   document.addEventListener("keydown", (e) => {
     const tag = document.activeElement?.tagName;
     const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    if (document.querySelector("dialog[open]")) return; // native dialog owns Escape/focus
     // Cmd/Ctrl-K opens the command palette from anywhere.
     if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
       e.preventDefault();

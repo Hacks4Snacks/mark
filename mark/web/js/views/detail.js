@@ -13,6 +13,7 @@ import {
 import { icon } from "../icons.js";
 import { doSearch, showList } from "./list.js";
 import { openCollMenu } from "./collections.js";
+import { openSolutionDialog } from "./library.js";
 
 let detailScrollHandler = null; // active reading-progress listener
 let detailResizeHandler = null; // re-measures cached scroll metrics on resize
@@ -205,7 +206,7 @@ function renderDetail(s) {
           <button class="btn btn-ghost" id="addToColl" title="Add this conversation to a collection">${icon("plus")} Collection</button>
           <button class="btn btn-ghost" id="copyLink" title="Copy a link to this conversation">${icon("link")} Link</button>
           <a class="btn btn-ghost" id="exportMd" href="/api/sessions/${encodeURIComponent(s.id)}/export.md" download title="Download as Markdown">${icon("download")} Markdown</a>
-          <button class="btn btn-ghost${isHidden ? " is-hidden" : ""}" id="hideBtn" title="${isHidden ? "Unhide this conversation" : "Hide this conversation from listings"}">${icon(isHidden ? "eye" : "eye-off")} ${isHidden ? "Unhide" : "Hide"}</button>
+          <button class="btn btn-ghost${isHidden ? " is-hidden" : ""}" id="hideBtn" title="${isHidden ? "Unhide this conversation" : "Hide this conversation; independently saved solutions remain visible"}">${icon(isHidden ? "eye" : "eye-off")} ${isHidden ? "Unhide" : "Hide"}</button>
           <button class="btn btn-ghost detail-delete" id="deleteBtn" title="Permanently delete this conversation">${icon("trash")} Delete</button>
         </div>
       </div>
@@ -249,7 +250,7 @@ function renderDetail(s) {
       await api(`/api/sessions/${encodeURIComponent(s.id)}/${willHide ? "hide" : "unhide"}`, { method: "POST" });
       if (generation !== detailGeneration || state.currentId !== s.id) return;
       s.hidden = willHide ? 1 : 0;
-      toast(willHide ? "Session hidden" : "Session unhidden");
+      toast(willHide ? "Session hidden; saved solutions are managed separately" : "Session unhidden");
       // Hidden sessions stay reachable here, but counts/facets shift, so refresh.
       loadStats();
       loadFacets();
@@ -259,7 +260,7 @@ function renderDetail(s) {
   $("#deleteBtn")?.addEventListener("click", async () => {
     const generation = detailGeneration;
     const name = s.title || "this conversation";
-    if (!window.confirm(`Permanently delete \u201C${name}\u201D? This removes it for good and keeps it from being re-imported on the next scan. This cannot be undone \u2014 use Hide if you only want it out of the way.`)) return;
+    if (!window.confirm(`Permanently delete \u201C${name}\u201D? This removes it for good and keeps it from being re-imported on the next scan. This cannot be undone \u2014 use Hide if you only want it out of the way. Independently saved solutions remain in Curated solutions; delete those separately if needed.`)) return;
     try {
       await api(`/api/sessions/${encodeURIComponent(s.id)}`, { method: "DELETE" });
       if (generation !== detailGeneration || state.currentId !== s.id) return;
@@ -520,6 +521,13 @@ async function loadMoreTurns(s, previous = false) {
 }
 
 function wireDeferredTurns(s) {
+  $$("#detailView .save-answer").forEach((button) => {
+    if (button.dataset.wired) return;
+    button.dataset.wired = "1";
+    button.addEventListener("click", () => openSolutionDialog({
+      source: { kind: "answer", session_id: s.id, turn_index: Number(button.dataset.turn) },
+    }));
+  });
   $$("#detailView .copy-turn-link").forEach((button) => {
     if (button.dataset.wired) return;
     button.dataset.wired = "1";
@@ -732,7 +740,7 @@ function turnHTML(t) {
     : "";
   const asst = (t.assistant_html || thinking)
     ? `<div class="role"><span class="who">Copilot</span></div>${tools}${thinking}`
-      + (t.assistant_html ? `<div class="bubble assistant"><div class="md">${t.assistant_html}</div></div>` : "")
+      + (t.assistant_html ? `<div class="bubble assistant"><div class="md">${t.assistant_html}</div><div class="answer-actions"><button class="btn btn-ghost save-answer" type="button" data-turn="${number}">${icon("plus", { size: 14 })} Save answer</button></div></div>` : "")
     : "";
   const preview = t.preview ? `<div class="turn-preview-note">Showing excerpts from a large turn (${Number(t.content_chars || 0).toLocaleString()} characters).<button class="btn btn-ghost deferred-turn-load" type="button" data-turn="${number}">Load full turn</button></div>` : "";
   return `<section class="turn${t.preview ? " turn-preview" : ""}" id="turn-${number}" data-turn-index="${number}" tabindex="-1" aria-label="Turn ${number + 1}">${heading}${preview}${user}${asst}</section>`;

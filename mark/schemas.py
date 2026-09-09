@@ -116,6 +116,56 @@ class NoteIn(BaseModel):
     text: str = Field(default="", max_length=config.MAX_NOTE_TEXT_CHARS)
 
 
+class SolutionSourceIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    kind: Literal["answer", "snippet"]
+    session_id: str = Field(min_length=1, max_length=512)
+    turn_index: int | None = Field(default=None, ge=0, le=2**63 - 1)
+    snippet_id: int | None = Field(default=None, ge=1, le=2**63 - 1)
+
+    @model_validator(mode="after")
+    def validate_reference(self) -> SolutionSourceIn:
+        if self.kind == "answer":
+            if self.turn_index is None or self.snippet_id is not None:
+                raise ValueError("answers require a turn_index, not a snippet_id")
+        elif self.snippet_id is None or self.turn_index is not None:
+            raise ValueError("snippets require a snippet_id, not a turn_index")
+        return self
+
+
+class SolutionFields(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(min_length=1, max_length=config.MAX_SOLUTION_TITLE_CHARS)
+    notes: str = Field(default="", max_length=config.MAX_SOLUTION_NOTES_CHARS)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    favorite: bool = False
+    status: Literal["needs_review", "verified", "outdated"] = "needs_review"
+    prerequisites: str = Field(
+        default="", max_length=config.MAX_SOLUTION_PREREQUISITES_CHARS
+    )
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_solution_tags(cls, tags: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(" ".join(t.lower().split()) for t in tags))
+        if any(len(tag) > config.MAX_TAG_CHARS for tag in normalized):
+            raise ValueError(f"tags must be at most {config.MAX_TAG_CHARS} characters")
+        if any("," in tag for tag in normalized):
+            raise ValueError("tags cannot contain commas")
+        return [tag for tag in normalized if tag]
+
+
+class SolutionIn(SolutionFields):
+    source: SolutionSourceIn
+    source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class SolutionUpdate(SolutionFields):
+    revision: int = Field(ge=1, le=2**63 - 1)
+
+
 class OkResponse(BaseModel):
     ok: bool = True
 

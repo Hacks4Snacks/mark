@@ -20,8 +20,11 @@ export function routeFromHash() {
   // Back can return to an already-visible view before a detail GET finishes.
   // Invalidate that request even if this route needs no new view rendering.
   if (!location.hash.startsWith("#/session/")) teardownReading();
-  if (location.hash === "#/library") {
-    if (state.view !== "library") showLibrary({ fromHash: true });
+  if (location.hash === "#/library" || location.hash === "#/library/curated") {
+    const mode = location.hash.endsWith("/curated") ? "curated" : "extracted";
+    if (state.view !== "library" || (state.libraryMode || "extracted") !== mode) {
+      showLibrary({ fromHash: true, mode });
+    }
     return;
   }
   if (location.hash === "#/usage") {
