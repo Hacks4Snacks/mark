@@ -210,6 +210,7 @@ class StatsResponse(BaseModel):
 class StatusResponse(BaseModel):
     running: bool
     queued: bool = False
+    stopping: bool = False
     message: str
     last_result: dict[str, Any] | None = None
     last_error: str | None = None
@@ -241,6 +242,12 @@ class ReindexStatusResponse(StatusResponse):
     admission: Literal["accepted", "covered", "stopping"]
 
 
+class SourceRoot(BaseModel):
+    path: str
+    state: Literal["present", "missing", "unreadable", "error"]
+    error: str | None = None
+
+
 class SourceInfo(BaseModel):
     key: str
     label: str
@@ -249,6 +256,21 @@ class SourceInfo(BaseModel):
     roots: list[str]
     exists: bool
     indexed: int
+    health: Literal[
+        "healthy", "detected", "missing", "disabled", "degraded", "error", "import"
+    ] = "detected"
+    root_status: list[SourceRoot] = Field(default_factory=list[SourceRoot])
+    history: dict[str, Any] | None = None
+    configuration_changed: bool = False
+    error: str | None = None
+    action: str = ""
+
+
+class HealthResponse(BaseModel):
+    checked_at: str
+    coordinator: StatusResponse
+    sources: list[SourceInfo]
+    index: dict[str, Any]
 
 
 class FacetsResponse(BaseModel):

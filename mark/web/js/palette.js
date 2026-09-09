@@ -23,6 +23,7 @@ const COMMANDS = [
   { id: "nav-collections", icon: "layers", label: "Collections", hint: "Saved, auto-updating groups", kind: "Go to", run: () => showCollections() },
   { id: "nav-library", icon: "code", label: "Snippet & command library", kind: "Go to", run: () => showLibrary() },
   { id: "nav-usage", icon: "pie", label: "Usage & spend", kind: "Go to", run: () => showUsage() },
+  { id: "nav-sources", icon: "activity", label: "Sources & index health", hint: "Sync diagnostics and retry", kind: "Go to", run: () => $("#sourcesBtn")?.click() },
   { id: "nav-ask", icon: "sparkles", label: "Ask your history", hint: "Local LLM", kind: "Go to", run: () => showAsk() },
   { id: "act-add", icon: "plus", label: "Add a note or file", kind: "Action", run: () => $("#addBtn")?.click() },
   { id: "act-rescan", icon: "sync", label: "Re-scan history now", kind: "Action", run: () => $("#reindexBtn")?.click() },

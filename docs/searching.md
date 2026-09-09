@@ -147,7 +147,9 @@ Semantic search needs vectors. Mark picks a backend automatically, in order:
    embeddings.
 3. A **built-in NumPy hashing vectorizer** that always works offline.
 
-The status card in the sidebar shows which engine is active. To upgrade quality:
+The **Sources & index health** view shows the active/building backend and eligible
+chunk coverage, including built-in fallback or pending indexing. See
+[Sources](sources.md#inspecting-sources-in-the-app). To upgrade quality:
 
 ```bash
 pip install -r requirements-optional.txt

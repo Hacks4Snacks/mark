@@ -1154,12 +1154,437 @@ def test_ingest_coordinator_auto_sync_stops_and_restarts(
     assert not second_ingest_worker.is_alive()
 
 
+@pytest.fixture
+def health_source(tmp_path, monkeypatch):
+    from mark import config, ingest
+    from mark.sources.base import WatchedSource
+
+    root = tmp_path / "source-store"
+    root.mkdir()
+
+    class HealthSource(WatchedSource):
+        key = "health-fixture"
+        row_sources = ("health-fixture",)
+        enabled = True
+        fail = False
+        bad_config = False
+        scans = 0
+        fingerprint_value = "fixture-v1"
+
+        def __init__(self):
+            self.roots = [root]
+
+        def default_config(self):
+            if self.bad_config:
+                raise ValueError("Invalid roots configuration")
+            return config.SourceConfig(
+                self.key, enabled=self.enabled, roots=self.roots, label="Fixture source"
+            )
+
+        def fingerprint(self, cfg):
+            return self.fingerprint_value
+
+        def ingest(self, cur, existing, cfg, *, rebuild, progress=None):
+            self.scans += 1
+            if self.fail:
+                raise PermissionError("Cannot read fixture history")
+            return {"added": 0, "updated": 0, "skipped": 0}
+
+    source = HealthSource()
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [source])
+    monkeypatch.setattr(ingest, "IMPORT_SOURCES", [])
+    return source
+
+
+def test_source_health_persists_failure_success_and_unchanged_checks(
+    client, health_source
+):
+    from mark import db, ingest
+
+    assert client.get("/api/sources").json()[0]["health"] == "detected"
+    ingest.ingest_all(do_embed=False)
+    first = client.get("/api/sources").json()[0]
+    assert first["health"] == "healthy"
+    success = first["history"]["last_success_at"]
+    assert success
+    ingest.ingest_all(do_embed=False)
+    unchanged = client.get("/api/sources").json()[0]
+    assert health_source.scans == 1
+    assert unchanged["history"]["status"] == "unchanged"
+    assert unchanged["history"]["last_success_at"] == success
+    health_source.fail = True
+    ingest.ingest_all(rebuild=True, do_embed=False)
+    db.init_db()
+    failed = client.get("/api/sources").json()[0]
+    assert failed["health"] == "error"
+    assert failed["history"]["last_success_at"] == success
+    assert failed["error"] == "Cannot read fixture history"
+    assert failed["history"]["last_error_at"]
+    health_source.fail = False
+    ingest.ingest_all(do_embed=False)
+    recovered = client.get("/api/sources").json()[0]
+    assert recovered["health"] == "healthy"
+    assert recovered["error"] is None
+    assert recovered["history"]["last_error"] == "Cannot read fixture history"
+    assert recovered["history"]["last_success_at"] >= success
+
+
+def test_source_health_missing_partial_disabled_and_config_changes(
+    client, health_source, tmp_path
+):
+    from mark import ingest
+
+    ingest.ingest_all(do_embed=False)
+    health_source.roots = [tmp_path / "missing"]
+    missing = client.get("/api/sources").json()[0]
+    assert missing["health"] == "missing"
+    assert missing["configuration_changed"] is True
+    assert missing["root_status"][0]["state"] == "missing"
+    assert missing["history"]["last_success_at"]
+    health_source.roots.append(tmp_path / "source-store")
+    assert client.get("/api/sources").json()[0]["health"] == "degraded"
+    health_source.enabled = False
+    assert client.get("/api/sources").json()[0]["health"] == "disabled"
+    before = health_source.scans
+    ingest.ingest_all(do_embed=False)
+    assert health_source.scans == before
+    health_source.enabled = True
+    health_source.roots = [tmp_path / "another-store"]
+    health_source.roots[0].mkdir()
+    assert client.get("/api/sources").json()[0]["health"] == "detected"
+    ingest.ingest_all(do_embed=False)
+    assert health_source.scans == before + 1
+    assert client.get("/api/sources").json()[0]["health"] == "healthy"
+
+
+def test_source_health_isolates_config_and_permission_failures(
+    client, health_source, monkeypatch
+):
+    from mark import ingest
+    from mark.api import sources
+
+    health_source.bad_config = True
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    broken = response.json()["sources"][0]
+    assert broken["health"] == "error" and "configuration" in broken["error"]
+    result = ingest.ingest_all(do_embed=False)
+    assert result["errors"][health_source.key] == "Invalid roots configuration"
+    health_source.bad_config = False
+    monkeypatch.setattr(sources.os, "access", lambda *args: False)
+    unreadable = client.get("/api/sources").json()[0]
+    assert unreadable["health"] == "error"
+    assert unreadable["root_status"][0]["state"] == "unreadable"
+    assert "permissions" in unreadable["action"]
+
+
+def test_source_health_counts_stable_adapter_and_hidden_rows(
+    client, health_source, make_session, persist_session
+):
+    from mark.repositories import sessions
+
+    s = make_session(sid="dynamic-owner", source="custom-label")
+    s["source_adapter"] = health_source.key
+    persist_session(s)
+    persist_session(make_session(sid="legacy-owner", source=health_source.key))
+    sessions.set_hidden("dynamic-owner", True)
+    health_source.enabled = False
+    source = client.get("/api/sources").json()[0]
+    assert source["indexed"] == 2
+    assert source["health"] == "disabled"
+
+
+def test_health_does_not_load_models_or_scan_sources(
+    client, health_source, monkeypatch
+):
+    from mark import embeddings
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("health GET must not start model loading or source scans")
+
+    monkeypatch.setattr(embeddings, "get_embedder", forbidden)
+    monkeypatch.setattr(health_source, "fingerprint", forbidden)
+    monkeypatch.setattr(health_source, "ingest", forbidden)
+    payload = client.get("/api/health").json()
+    coverage = payload["index"]["coverage"]
+    assert coverage["total_chunks"] == coverage["keyword_chunks"] == 0
+    assert coverage["eligible_chunks"] == 0
+    assert coverage["identity"] is None
+    assert coverage["embedded_chunks"] is None
+    assert payload["sources"][0]["history"] is None
+
+
+def test_health_counts_compatible_vectors_against_capped_policy(
+    client, health_source, monkeypatch, make_session, persist_session
+):
+    from mark import config, db, embeddings, ingest
+
+    monkeypatch.setattr(config, "MAX_EMBED_CHUNKS_PER_SESSION", 2)
+    session = make_session(sid="coverage")
+    turn = session["turns"][0]
+    session["turns"] = [{**turn, "turn_index": i} for i in range(5)]
+    persist_session(session)
+    assert ingest.ensure_index_ready()
+    ready = client.get("/api/health").json()["index"]
+    coverage = ready["coverage"]
+    assert ready["active"] is True
+    assert coverage["identity"]["backend"] == "builtin-hash"
+    assert coverage["total_chunks"] == coverage["keyword_chunks"] == 10
+    assert coverage["eligible_chunks"] == coverage["embedded_chunks"] == 2
+    assert coverage["excluded_by_cap"] == 8
+    assert coverage["pending_chunks"] == 0
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE embeddings SET vector = ? WHERE chunk_id = (SELECT MIN(chunk_id) FROM embeddings)",
+            (b"bad",),
+        )
+        embeddings.mark_index_dirty(cur)
+    db.set_meta("embed_error", "Interrupted inference")
+    ingest.mark_semantic_unverified()
+    pending = client.get("/api/health").json()["index"]
+    assert pending["active"] is False and pending["pending"] is True
+    assert pending["error"] == "Interrupted inference"
+    assert pending["coverage"]["embedded_chunks"] == 1
+    assert pending["coverage"]["pending_chunks"] == 1
+    assert pending["coverage"]["identity"]["model"] == "builtin-hash"
+    assert ingest.ensure_index_ready()
+    recovered = client.get("/api/health").json()["index"]
+    assert recovered["active"] is True
+    assert recovered["error"] is None
+    assert recovered["coverage"]["embedded_chunks"] == 2
+
+
+def test_health_unknown_fingerprint_and_keyword_gap(
+    client, health_source, make_session, persist_session
+):
+    from mark import db
+
+    persist_session(make_session())
+    db.set_meta("embed_target_fingerprint", "not-json")
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM search_index")
+    index = client.get("/api/health").json()["index"]
+    assert index["coverage"]["keyword_chunks"] == 0
+    assert index["coverage"]["total_chunks"] == 2
+    assert index["coverage"]["identity"] is None
+    assert index["coverage"]["embedded_chunks"] is None
+
+
+def test_health_rejects_foreign_process_embedding_identity(
+    client, health_source, make_session, persist_session, monkeypatch
+):
+    from mark import db, embeddings, ingest
+
+    persist_session(make_session())
+    assert ingest.ensure_index_ready()
+    with db.cursor() as cur:
+        embeddings.set_index_fingerprint(cur, embeddings._HashEmbed(dim=16))
+    monkeypatch.setattr(
+        embeddings, "get_embedder", lambda: pytest.fail("model loaded in diagnostics")
+    )
+    index = client.get("/api/health").json()["index"]
+    assert index["active"] is False
+    assert index["pending"] is True
+    assert index["coverage"]["identity"]["dim"] == 16
+    assert index["coverage"]["embedded_chunks"] == 0
+
+
+def test_health_post_scan_error_without_prior_history_is_visible(client, health_source):
+    from mark import db, persist
+
+    with db.cursor() as cur:
+        persist.record_source_health(
+            cur,
+            health_source.key,
+            {"status": "error", "error": "Post-scan check failed"},
+        )
+    source = client.get("/api/sources").json()[0]
+    assert source["health"] == "error"
+    assert source["configuration_changed"] is False
+    assert source["error"] == "Post-scan check failed"
+
+
+def test_health_status_poll_keeps_coverage_off_hot_path(client, monkeypatch):
+    from mark import embeddings
+
+    monkeypatch.setattr(
+        embeddings,
+        "index_coverage",
+        lambda *args: pytest.fail("expensive coverage on heartbeat"),
+    )
+    assert client.get("/api/status").status_code == 200
+
+
+def test_health_history_bounds_errors_and_recovers_malformed_metadata(
+    client, health_source
+):
+    from mark import db, persist
+
+    db.set_meta("source_health:" + health_source.key, "not-json")
+    assert client.get("/api/sources").json()[0]["history"] is None
+    with db.cursor() as cur:
+        persist.record_source_health(
+            cur,
+            health_source.key,
+            {"status": "error", "error": "x" * 5000, "content": "must not persist"},
+        )
+    history = client.get("/api/sources").json()[0]["history"]
+    assert len(history["last_error"]) == 2000
+    assert "content" not in history
+
+
+def test_health_frontend_classification_and_retry_ordering():
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for frontend health regression tests")
+    script = r"""
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createContext, SourceTextModule, SyntheticModule } from "node:vm";
+import { describeIndexHealth } from "./mark/web/js/sidebar.js";
+const coverage = {total_chunks: 10, keyword_chunks: 10, eligible_chunks: 2,
+    embedded_chunks: 2, pending_chunks: 0, identity: {backend: "fastembed"}};
+const ready = {active: true, pending: false, coverage};
+assert.equal(describeIndexHealth(ready).label, "Semantic index ready");
+assert.equal(describeIndexHealth({...ready, pending: true}).label, "Semantic indexing pending");
+assert.equal(describeIndexHealth({...ready, active: false}).label, "Semantic indexing pending");
+assert.equal(describeIndexHealth({...ready, error: "broken"}).label, "Index error");
+assert.equal(describeIndexHealth({...ready, coverage: {...coverage, total_chunks: 0, keyword_chunks: 0}}).label, "Empty archive");
+assert.equal(describeIndexHealth({...ready, coverage: {...coverage, identity: null}}).label, "Semantic indexing pending");
+assert.equal(describeIndexHealth({...ready, coverage: {...coverage, keyword_chunks: 9}}).label, "Keyword coverage gap");
+assert.equal(describeIndexHealth({...ready, coverage: {...coverage, identity:{backend:"builtin-hash"}}}).label, "Built-in fallback");
+
+// Execute the app shell's actual request ordering, with just its DOM/imports mocked.
+const elements = new Map();
+const element = selector => {
+    if (!elements.has(selector)) elements.set(selector, {disabled:false,hidden:false,dataset:{},value:"",
+        listeners:{},classList:{toggle() {},add() {},remove() {}},
+        addEventListener(name,fn) {this.listeners[name]=fn;}});
+    return elements.get(selector);
+};
+const observed = [], timers = new Map();
+let nextTimer = 0, retry, resolveFirstPoll, resolvePost, startup;
+let polls = 0;
+const started = new Promise(resolve => startup=resolve);
+const idle = {running:false,queued:false,message:"idle",ask_enabled:false};
+const api = async (url) => {
+    if (url === "/api/status") {
+        polls += 1;
+        if (polls === 1) return idle;
+        return new Promise(resolve => {resolveFirstPoll=resolve;});
+    }
+    if (url.startsWith("/api/reindex")) return new Promise(resolve => {resolvePost=resolve;});
+    throw new Error("Unexpected API " + url);
+};
+const noop=()=>{};
+const modules = {
+    "./api.js": {api},
+    "./state.js": {state:{view:"sources"}},
+    "./sidebar.js": {loadFacets:async()=>{},loadStats:async()=>({sessions:0}),syncFilterUI:noop,
+        setupSourceHealth:callback=>{retry=callback;},showSources:noop,
+        observeSourceHealth:st=>observed.push(st.message),sourceHealthUnavailable:noop},
+    "./utils.js": {$:element,$$:()=>[],srcMeta:noop,toast:noop},
+    "./icons.js": {icon:noop}, "./router.js":{routeFromHash:()=>startup()},
+    "./views/list.js":{clearAllFilters:noop,doSearch:noop,handleListKey:noop,run:noop,showList:noop},
+    "./views/detail.js":{openSession:noop},
+    "./views/collections.js":{hideCollMenu:noop,openCollectionDialog:noop,saveCollection:noop,saveCollectionFromFilters:noop,showCollections:noop},
+    "./views/library.js":{setupLibrary:noop,showLibrary:noop},
+    "./views/usage.js":{loadUsage:noop,showUsage:noop},
+    "./views/ask.js":{showAsk:noop,submitAsk:noop},
+    "./palette.js":{closePalette:noop,isPaletteOpen:()=>false,openPalette:noop,setupPalette:noop},
+};
+const context = createContext({document:{documentElement:{dataset:{}},addEventListener:noop,activeElement:null},
+    localStorage:{getItem:()=>null},setTimeout:(fn,delay)=>{timers.set(++nextTimer,{fn,delay});return nextTimer;},
+    clearTimeout:id=>timers.delete(id)});
+const main = new SourceTextModule(readFileSync("mark/web/js/main.js","utf8"),{context});
+await main.link(path=>new SyntheticModule(Object.keys(modules[path]),function(){
+    for(const [key,value] of Object.entries(modules[path]))this.setExport(key,value);
+},{context}));
+await main.evaluate();
+await started;
+const oldGet=[...timers.values()][0].fn();
+const post=retry(true);
+resolvePost({...idle,queued:true,message:"queued-new",admission:"accepted"});
+await post;
+assert.equal([...timers.values()].some(timer=>timer.delay===1100),true);
+resolveFirstPoll({...idle,message:"stale-idle"});
+await oldGet;
+assert.deepEqual(observed,["idle","queued-new"]);
+"""
+    result = subprocess.run(
+        [node, "--experimental-vm-modules", "--input-type=module", "-e", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_health_retry_uses_existing_coordinator(client, monkeypatch):
+    from mark import background
+
+    calls = []
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        return "accepted"
+
+    monkeypatch.setattr(background, "request_reindex", request)
+    response = client.post("/api/reindex?repair_semantic=true")
+    assert response.status_code == 200
+    assert calls == [{"rebuild": False, "repair_semantic": True}]
+    assert response.json()["admission"] == "accepted"
+
+
+def test_health_import_outcomes_are_durable_and_not_watched(
+    client, health_source, monkeypatch, make_session
+):
+    from mark import ingest
+    from mark.sources.base import ImportSource
+
+    class ImportFixture(ImportSource):
+        key = "fixture-import"
+        label = "Fixture export"
+        fail = False
+
+        def detect(self, filename, data):
+            return True
+
+        def parse_export(self, data):
+            if self.fail:
+                raise ValueError("Invalid export structure")
+            yield make_session(sid="imported", source=self.key)
+
+    source = ImportFixture()
+    monkeypatch.setattr(ingest, "IMPORT_SOURCES", [source])
+    ingest.import_export("fixture.json", b"{}", do_embed=False)
+    imported = client.get("/api/sources").json()[1]
+    assert imported["health"] == "import"
+    assert imported["history"]["last_success_at"]
+    assert imported["indexed"] == 1
+    source.fail = True
+    with pytest.raises(ValueError, match="Invalid export"):
+        ingest.import_export("bad.json", b"{}", do_embed=False)
+    failed = client.get("/api/sources").json()[1]
+    assert failed["health"] == "error"
+    assert (
+        failed["history"]["last_success_at"] == imported["history"]["last_success_at"]
+    )
+    assert failed["indexed"] == 1
+    assert "not watched" in failed["action"]
+
+
 def test_read_endpoints_ok(client):
     for path in [
         "/api/stats",
         "/api/status",
         "/api/facets",
         "/api/sources",
+        "/api/health",
         "/api/usage",
         "/api/snippets",
         "/api/snippets/languages",
@@ -1788,6 +2213,7 @@ const record = name => (...args) => calls.push([name, ...args]);
 const modules = {
     "./state.js": {state},
     "./utils.js": {parseSessionHash, toast: record("toast")},
+    "./sidebar.js": {showSources: record("sources")},
     "./views/list.js": {showList: record("list")},
     "./views/detail.js": {openSession: record("session"), teardownReading: record("cancel")},
     "./views/library.js": {showLibrary: record("library")},
@@ -1817,6 +2243,11 @@ router.namespace.routeFromHash();
 assert.equal(calls[0][0], "toast");
 assert.equal(calls[1][0], "list");
 calls.length = 0;
+location.hash = "#/sources";
+router.namespace.routeFromHash();
+assert.equal(calls[0][0], "cancel");
+assert.equal(calls[1][0], "sources");
+calls.length = 0;
 location.hash = "#att-2";
 router.namespace.routeFromHash();
 assert.equal(calls.length, 0); // preserve non-app anchors
@@ -1829,6 +2260,525 @@ assert.equal(calls.length, 0); // preserve non-app anchors
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.fixture
+def curated_source(make_session, persist_session):
+    session = make_session(
+        sid="curation-source",
+        title="Authentication repair",
+        asst="Use a refresh token.\n\n```bash\nprintf '%s' token\n```",
+        code_blocks=[{"language": "bash", "content": "printf '%s' token"}],
+    )
+    persist_session(session)
+    return session
+
+
+def _save_curated(client, reference, **fields):
+    preview = client.post("/api/solutions/preview", json=reference)
+    assert preview.status_code == 200, preview.text
+    response = client.post(
+        "/api/solutions",
+        json={
+            "title": "Known-good token repair",
+            **fields,
+            "source": reference,
+            "source_sha256": preview.json()["source_sha256"],
+        },
+    )
+    assert response.status_code in (200, 201), response.text
+    return client.get("/api/solutions/" + response.json()["id"]).json()
+
+
+def _solution_fields(solution, **overrides):
+    return {
+        key: overrides.get(key, solution[key])
+        for key in (
+            "title",
+            "notes",
+            "tags",
+            "favorite",
+            "status",
+            "prerequisites",
+            "revision",
+        )
+    }
+
+
+def test_curated_answer_snapshot_metadata_and_duplicate_save(client, curated_source):
+    from mark import db
+
+    reference = {"kind": "answer", "session_id": curated_source["id"], "turn_index": 0}
+    preview = client.post("/api/solutions/preview", json=reference).json()
+    assert client.get("/api/solutions").json()["total"] == 0
+    assert preview["content"] == curated_source["turns"][0]["assistant_response"]
+    first = _save_curated(
+        client,
+        reference,
+        tags=[" Auth ", "auth", "", "Token Repair"],
+        favorite=True,
+        notes="Works after rotation",
+        status="verified",
+        prerequisites="CLI v2; sandbox only",
+    )
+    assert first["tags"] == ["auth", "token repair"]
+    assert first["content"] == preview["content"]
+    assert first["source_session_id"] == curated_source["id"]
+    assert first["source_turn_index"] == 0
+    assert first["source_title"] == "Authentication repair"
+    assert first["source_kind"] == "answer"
+    assert first["source_status"] == "available"
+    assert first["source_hidden"] is False
+    assert first["favorite"] is True
+    assert first["revision"] == 1
+    again = _save_curated(client, reference, notes="Must not replace my notes")
+    assert again["id"] == first["id"]
+    assert again["notes"] == "Works after rotation"
+    assert client.get("/api/solutions").json()["total"] == 1
+    with db.cursor() as cur:
+        assert cur.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
+
+
+def test_curated_metadata_survives_source_reingest_and_removal(
+    client, curated_source, persist_session
+):
+    from mark import db
+    from mark.repositories import sessions
+
+    reference = {"kind": "answer", "session_id": curated_source["id"], "turn_index": 0}
+    solution = _save_curated(client, reference)
+    path = "/api/solutions/" + solution["id"]
+    edit = _solution_fields(
+        solution,
+        title="Curated title",
+        notes="Personal findings",
+        favorite=True,
+        tags=["ops"],
+        prerequisites="Python 3.14",
+        status="outdated",
+    )
+    assert client.put(path, json=edit).status_code == 200
+    assert client.put(path, json=edit).status_code == 409
+
+    curated_source["turns"][0]["assistant_response"] = "New source advice"
+    persist_session(curated_source)
+    saved = client.get(path).json()
+    assert saved["source_status"] == "changed"
+    assert saved["title"] == "Curated title"
+    assert saved["notes"] == "Personal findings"
+    assert saved["prerequisites"] == "Python 3.14"
+    assert saved["favorite"] is True
+    assert saved["tags"] == ["ops"]
+    assert saved["status"] == "outdated"
+    assert saved["content"] == solution["content"]
+    assert saved["revision"] == 2
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM turns WHERE session_id = ?", (curated_source["id"],))
+    assert client.get(path).json()["source_status"] == "missing"
+    assert sessions.purge(curated_source["id"]) is True
+    db.init_db()
+    missing = client.get(path).json()
+    assert missing["source_status"] == "missing"
+    assert missing["content"] == solution["content"]
+    assert missing["source_title"] == "Authentication repair"
+    assert client.get("/api/solutions").json()["total"] == 1
+
+
+def test_curated_snippet_keeps_provenance_across_regenerated_ids(
+    client, curated_source, persist_session
+):
+    from mark import db
+
+    snippet = client.get("/api/snippets").json()["snippets"][0]
+    reference = {
+        "kind": "snippet",
+        "session_id": curated_source["id"],
+        "snippet_id": snippet["id"],
+    }
+    saved = _save_curated(client, reference)
+    assert saved["content"] == snippet["content"]
+    assert saved["language"] == "bash"
+    assert saved["source_kind"] == "snippet"
+    assert saved["source_status"] == "available"
+    persist_session(curated_source)
+    new_snippet = client.get("/api/snippets").json()["snippets"][0]
+    assert new_snippet["id"] != snippet["id"]
+    assert (
+        client.get("/api/solutions/" + saved["id"]).json()["source_status"]
+        == "available"
+    )
+    duplicate = _save_curated(client, {**reference, "snippet_id": new_snippet["id"]})
+    assert duplicate["id"] == saved["id"]
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE code_blocks SET content = 'different' WHERE session_id = ?",
+            (curated_source["id"],),
+        )
+    assert (
+        client.get("/api/solutions/" + saved["id"]).json()["source_status"] == "changed"
+    )
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_curated_snippet_preview_survives_regenerated_ids_without_losing_edits(
+    client, curated_source, persist_session, changed
+):
+    snippet = client.get("/api/snippets").json()["snippets"][0]
+    reference = {
+        "kind": "snippet",
+        "session_id": curated_source["id"],
+        "snippet_id": snippet["id"],
+    }
+    preview = client.post("/api/solutions/preview", json=reference).json()
+    if changed:
+        curated_source["turns"][0]["code_blocks"][0]["content"] = "different command"
+    persist_session(curated_source)
+    response = client.post(
+        "/api/solutions",
+        json={
+            "title": "Draft survives sync",
+            "notes": "Carefully written annotations",
+            "source": reference,
+            "source_sha256": preview["source_sha256"],
+        },
+    )
+    if changed:
+        assert response.status_code == 404
+        assert client.get("/api/solutions").json()["total"] == 0
+    else:
+        assert response.status_code == 201
+        saved = client.get("/api/solutions/" + response.json()["id"]).json()
+        assert saved["content"] == snippet["content"]
+        assert saved["notes"] == "Carefully written annotations"
+        assert saved["source_status"] == "available"
+
+
+def test_curated_source_change_since_preview_is_not_silently_saved(
+    client, curated_source, persist_session
+):
+    reference = {"kind": "answer", "session_id": curated_source["id"], "turn_index": 0}
+    preview = client.post("/api/solutions/preview", json=reference).json()
+    curated_source["turns"][0]["assistant_response"] = "Changed while editing"
+    persist_session(curated_source)
+    response = client.post(
+        "/api/solutions",
+        json={
+            "title": "Do not silently substitute",
+            "source": reference,
+            "source_sha256": preview["source_sha256"],
+        },
+    )
+    assert response.status_code == 409
+    assert client.get("/api/solutions").json()["total"] == 0
+
+
+@pytest.mark.parametrize("hidden", ["manual", "source"])
+def test_curated_copies_have_explicit_independent_visibility(
+    client, curated_source, monkeypatch, hidden
+):
+    from mark import visibility
+    from mark.repositories import sessions
+
+    saved = _save_curated(
+        client, {"kind": "answer", "session_id": curated_source["id"], "turn_index": 0}
+    )
+    if hidden == "manual":
+        sessions.set_hidden(curated_source["id"], True)
+    else:
+        monkeypatch.setattr(
+            visibility, "disabled_adapters", lambda: ({"vscode"}, {"vscode"})
+        )
+    listing = client.get("/api/solutions").json()
+    assert listing["total"] == 1
+    assert listing["solutions"][0]["source_hidden"] is True
+    assert client.get("/api/solutions/" + saved["id"]).json()["source_hidden"] is True
+    assert client.get("/api/snippets").json()["snippets"] == []
+
+
+def test_curated_filters_pagination_and_separate_search(client, curated_source):
+    first = _save_curated(
+        client,
+        {"kind": "answer", "session_id": curated_source["id"], "turn_index": 0},
+        notes="rareannotation",
+        tags=["ops"],
+        status="verified",
+        favorite=True,
+    )
+    snippet = client.get("/api/snippets").json()["snippets"][0]
+    second = _save_curated(
+        client,
+        {
+            "kind": "snippet",
+            "session_id": curated_source["id"],
+            "snippet_id": snippet["id"],
+        },
+        prerequisites="Version100%_ready",
+        status="needs_review",
+    )
+    page = client.get("/api/solutions?limit=1").json()
+    assert page["total"] == 2 and page["has_more"] is True
+    assert page["solutions"][0]["id"] == first["id"]
+    assert "content" not in page["solutions"][0]
+    assert len(page["solutions"][0]["content_preview"]) <= 240
+    next_page = client.get("/api/solutions?limit=1&offset=1").json()
+    assert next_page["solutions"][0]["id"] == second["id"]
+    assert next_page["has_more"] is False
+    for params in (
+        {"q": "rareannotation"},
+        {"tag": " OPS "},
+        {"status": "verified"},
+        {"favorite": True},
+    ):
+        matches = client.get("/api/solutions", params=params).json()["solutions"]
+        assert [row["id"] for row in matches] == [first["id"]]
+    assert client.get("/api/solutions", params={"q": "%_"}).json()["total"] == 1
+    assert client.get("/api/solutions", params={"q": "token"}).json()["total"] == 2
+    assert client.get("/api/solutions?tag=unknown").json()["total"] == 0
+    assert client.get("/api/snippets?q=rareannotation").json()["snippets"] == []
+    assert (
+        client.get("/api/search?q=rareannotation&mode=keyword").json()["results"] == []
+    )
+
+
+def test_curated_delete_affects_only_copy_and_checks_revision(client, curated_source):
+    solution = _save_curated(
+        client, {"kind": "answer", "session_id": curated_source["id"], "turn_index": 0}
+    )
+    path = "/api/solutions/" + solution["id"]
+    assert client.delete(path + "?revision=2").status_code == 409
+    assert client.delete(path + "?revision=1").status_code == 200
+    assert client.get(path).status_code == 404
+    assert client.delete(path + "?revision=1").status_code == 404
+    assert client.get("/api/sessions/" + curated_source["id"]).status_code == 200
+
+
+@pytest.mark.parametrize("content", ["x" * 100_001, "\x00" + "x" * 500_000])
+def test_curated_oversized_sources_are_rejected_without_partial_save(
+    client, curated_source, content
+):
+    from mark import db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE turns SET assistant_response = ? WHERE session_id = ?",
+            (content, curated_source["id"]),
+        )
+    response = client.post(
+        "/api/solutions/preview",
+        json={"kind": "answer", "session_id": curated_source["id"], "turn_index": 0},
+    )
+    assert response.status_code == 413
+    assert client.get("/api/solutions").json()["total"] == 0
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        {"kind": "answer", "session_id": "s"},
+        {"kind": "answer", "session_id": "s", "turn_index": -1},
+        {"kind": "answer", "session_id": "s", "turn_index": 2**63},
+        {"kind": "answer", "session_id": "s", "turn_index": 0, "snippet_id": 1},
+        {"kind": "snippet", "session_id": "s", "turn_index": 0},
+        {"kind": "snippet", "session_id": "s", "snippet_id": 0},
+        {"kind": "unknown", "session_id": "s", "turn_index": 0},
+    ],
+)
+def test_curated_source_validation(client, reference):
+    assert client.post("/api/solutions/preview", json=reference).status_code == 422
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"title": "   "},
+        {"title": "x" * 161},
+        {"notes": "x" * 10001},
+        {"tags": ["x" * 41]},
+        {"tags": ["a,b"]},
+        {"tags": ["a"] * 21},
+        {"status": "approved"},
+        {"content": "Cannot change source copy"},
+        {"prerequisites": "x" * 4001},
+    ],
+)
+def test_curated_metadata_validation(client, curated_source, fields):
+    reference = {"kind": "answer", "session_id": curated_source["id"], "turn_index": 0}
+    preview = client.post("/api/solutions/preview", json=reference).json()
+    response = client.post(
+        "/api/solutions",
+        json={
+            "title": "Valid",
+            "source": reference,
+            "source_sha256": preview["source_sha256"],
+            **fields,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_curated_update_rejects_immutable_fields(client, curated_source):
+    solution = _save_curated(
+        client, {"kind": "answer", "session_id": curated_source["id"], "turn_index": 0}
+    )
+    path = "/api/solutions/" + solution["id"]
+    for field in (
+        "content",
+        "source_session_id",
+        "source_title",
+        "source_sha256",
+        "source_kind",
+    ):
+        response = client.put(
+            path, json={**_solution_fields(solution), field: "replacement"}
+        )
+        assert response.status_code == 422
+    assert client.get(path).json()["content"] == solution["content"]
+    assert client.get(path).json()["revision"] == 1
+
+
+def test_curated_frontend_metadata_payload_and_validation_errors():
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for frontend helper regression tests")
+    script = r"""
+import assert from "node:assert/strict";
+import { editableSolutionFields } from "./mark/web/js/views/library.js";
+import { api } from "./mark/web/js/api.js";
+const original = {id: "s", title: "Title", notes: "Notes", tags: ["auth"], favorite: true,
+    status: "verified", prerequisites: "CLI v2", revision: 3, content: "immutable",
+    source_sha256: "immutable hash", source_session_id: "origin", source_kind: "answer"};
+assert.deepEqual(editableSolutionFields(original, {favorite: false}), {
+    title: "Title", notes: "Notes", tags: ["auth"], favorite: false, status: "verified",
+    prerequisites: "CLI v2", revision: 3,
+});
+assert.equal(original.favorite, true);
+globalThis.fetch = async () => ({ok: false, statusText: "Unprocessable Entity",
+    json: async () => ({detail: [{msg: "Title is too long"}, {msg: "Too many tags"}]})});
+await assert.rejects(api("/api/solutions"), {message: "Title is too long; Too many tags"});
+"""
+    result = subprocess.run(
+        [node, "--input-type=module", "-e", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_curated_editor_refreshes_closed_mutations_and_stops_escape():
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for frontend editor regression tests")
+    script = r"""
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createContext, SourceTextModule, SyntheticModule } from "node:vm";
+const elements = new Map();
+const focused = {isConnected: true, focus() {}};
+function element(selector) {
+    if (!elements.has(selector)) elements.set(selector, {
+        dataset: {}, value: "", checked: false, disabled: false, hidden: false, open: false,
+        isConnected: true, listeners: {}, classList: {toggle() {}},
+        addEventListener(name, fn) {this.listeners[name] = fn;},
+        focus() {}, reset() {}, replaceChildren() {}, setAttribute() {},
+        showModal() {this.open = true;},
+        close() {this.open = false; this.listeners.close?.();},
+    });
+    return elements.get(selector);
+}
+const state = {view: "library", libraryMode: "curated", currentId: null};
+const data = {id: "one", title: "Saved", notes: "", tags: [], favorite: false,
+    status: "needs_review", prerequisites: "", revision: 1, content: "printf safe",
+    source_kind: "snippet", source_session_id: "origin", source_turn_index: 0,
+    source_title: "Original", source: "cli", source_status: "available"};
+let listReads = 0, finishWrite;
+const api = async (url, options = {}) => {
+    if (["PUT", "DELETE"].includes(options.method)) return new Promise(resolve => {finishWrite = resolve;});
+    if (url === "/api/solutions/one") return {...data};
+    if (url.startsWith("/api/solutions?")) {listReads += 1; return {total: 0, solutions: [], offset: 0, has_more: false};}
+    throw new Error("Unexpected API request " + url);
+};
+const modules = {
+    "../api.js": {api},
+    "../state.js": {state, showOnly() {}, setLayoutWide() {}},
+    "../utils.js": {$: element, $$: () => [], debounce: fn => fn, esc: value => value,
+        fmtDate: () => "today", sessionHash: () => "#/session/origin?turn=1",
+        srcMeta: () => ({label: "CLI"}), toast() {}, withTransition: fn => fn()},
+    "../icons.js": {icon: () => ""},
+    "./detail.js": {openSession() {}, teardownReading() {}},
+};
+const context = createContext({URLSearchParams, document: {activeElement: focused, createElement: () => ({})},
+    window: {addEventListener() {}, confirm: () => true}, location: {hash: "#/library/curated"},
+    history: {pushState() {}}, navigator: {}});
+const library = new SourceTextModule(readFileSync("mark/web/js/views/library.js", "utf8"), {context});
+await library.link(path => new SyntheticModule(Object.keys(modules[path]), function () {
+    for (const [name, value] of Object.entries(modules[path])) this.setExport(name, value);
+}, {context}));
+await library.evaluate();
+library.namespace.setupLibrary();
+const dialog = element("#solutionDialog");
+await library.namespace.openSolutionDialog({solutionId: "one"});
+const saving = element("#solutionForm").listeners.submit({preventDefault() {}});
+dialog.close();
+finishWrite({ok: true});
+await saving;
+assert.equal(listReads, 1, "Save must refresh committed state after editor closes");
+await library.namespace.openSolutionDialog({solutionId: "one"});
+const deleting = element("#solutionDelete").listeners.click();
+dialog.close();
+finishWrite({ok: true});
+await deleting;
+assert.equal(listReads, 2, "Delete must refresh committed state after editor closes");
+await library.namespace.openSolutionDialog({solutionId: "one"});
+let prevented = false, stopped = false;
+dialog.listeners.keydown({key: "Escape", preventDefault() {prevented = true;}, stopPropagation() {stopped = true;}});
+assert.equal(prevented && stopped, true, "Escape must not reach the page navigation handler");
+assert.equal(dialog.open, false);
+"""
+    result = subprocess.run(
+        [node, "--experimental-vm-modules", "--input-type=module", "-e", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_curated_missing_or_mismatched_source_is_404(client, curated_source):
+    assert (
+        client.post(
+            "/api/solutions/preview",
+            json={
+                "kind": "answer",
+                "session_id": curated_source["id"],
+                "turn_index": 99,
+            },
+        ).status_code
+        == 404
+    )
+    snippet = client.get("/api/snippets").json()["snippets"][0]
+    assert (
+        client.post(
+            "/api/solutions/preview",
+            json={
+                "kind": "snippet",
+                "session_id": "wrong-session",
+                "snippet_id": snippet["id"],
+            },
+        ).status_code
+        == 404
+    )
+    assert client.get("/api/solutions/missing").status_code == 404
+    assert client.get("/api/solutions?limit=101").status_code == 422
+    assert client.get("/api/solutions?status=unknown").status_code == 422
 
 
 def test_missing_session_is_404(client):

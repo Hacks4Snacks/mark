@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 from . import config, db, embeddings, enrich
@@ -58,6 +61,79 @@ def record_file_signature(cur, path: str, signature: str) -> None:
         "INSERT INTO source_file_stat(path, signature) VALUES(?, ?) "
         "ON CONFLICT(path) DO UPDATE SET signature = excluded.signature",
         (path, signature),
+    )
+
+
+def source_config_fingerprint(cfg: config.SourceConfig) -> str:
+    """Identify the effective paths/options without persisting option contents."""
+    payload = json.dumps(
+        {"roots": [str(path) for path in cfg.roots], "options": cfg.options},
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def source_health_records(cur: sqlite3.Cursor) -> dict[str, dict[str, Any]]:
+    records: dict[str, dict[str, Any]] = {}
+    for row in cur.execute(
+        "SELECT key, value FROM meta WHERE key LIKE 'source_health:%'"
+    ):
+        try:
+            value = json.loads(row["value"])
+        except (TypeError, ValueError):
+            continue
+        if isinstance(value, dict):
+            records[row["key"].removeprefix("source_health:")] = value
+    return records
+
+
+def record_source_health(
+    cur: sqlite3.Cursor,
+    key: str,
+    result: dict[str, Any],
+    *,
+    configuration: str | None = None,
+    checked_at: str | None = None,
+) -> None:
+    """Keep the last outcome, successful scan, and failure across process restarts.
+
+    An unchanged fingerprint is a check, not another successful content scan.
+    A recovered source retains its previous error for diagnosis, separately from
+    its current outcome. Only bounded metadata/counts are stored, never content.
+    """
+    now = checked_at or datetime.now(timezone.utc).isoformat()
+    row = cur.execute(
+        "SELECT value FROM meta WHERE key = ?", (f"source_health:{key}",)
+    ).fetchone()
+    try:
+        history = json.loads(row["value"]) if row else {}
+    except (TypeError, ValueError):
+        history = {}
+    if not isinstance(history, dict):
+        history = {}
+    if configuration is not None and configuration != history.get("configuration"):
+        history = {"configuration": configuration}
+    outcome = result.get("status", "error")
+    history["status"] = outcome
+    if outcome != "disabled":
+        history["last_checked_at"] = now
+    if outcome == "ok":
+        history["last_success_at"] = now
+    error = str(result.get("error") or "")[:2000]
+    history["current_error"] = error or None
+    if error:
+        history["last_error"] = error
+        history["last_error_at"] = now
+    history["result"] = {
+        name: max(0, value)
+        for name in ("added", "updated", "skipped")
+        if isinstance(value := result.get(name), int)
+    }
+    cur.execute(
+        "INSERT INTO meta(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (f"source_health:{key}", json.dumps(history)),
     )
 
 

@@ -246,7 +246,7 @@ def ensure_index_ready(
         return ready
 
 
-def semantic_status() -> dict[str, Any]:
+def semantic_status(*, include_coverage: bool = False) -> dict[str, Any]:
     conn = db.connect()
     try:
         conn.execute("BEGIN")
@@ -263,12 +263,19 @@ def semantic_status() -> dict[str, Any]:
             "SELECT value FROM meta WHERE key = ?", (_EMBED_ERROR_KEY,)
         ).fetchone()
         has_chunks = cur.execute("SELECT 1 FROM chunks LIMIT 1").fetchone() is not None
+        coverage = (
+            embeddings.index_coverage(cur, target or fingerprint)
+            if include_coverage
+            else None
+        )
     finally:
         conn.close()
     model_name = model["value"] if model and model["value"] else ""
-    return {
+    local_identity = embeddings.loaded_fingerprint()
+    locally_compatible = bool(_semantic_verified and local_identity == fingerprint)
+    status: dict[str, Any] = {
         "active": bool(
-            _semantic_verified and fingerprint and model_name and not target
+            locally_compatible and fingerprint and model_name and not target
         ),
         "model": model_name,
         "fingerprint": fingerprint,
@@ -276,9 +283,14 @@ def semantic_status() -> dict[str, Any]:
         "generation": generation,
         "pending": bool(target)
         or bool(pending and pending["value"] == "1")
-        or bool(has_chunks and not _semantic_verified),
+        or bool(has_chunks and not locally_compatible),
         "error": error["value"] if error and error["value"] else None,
     }
+    if coverage is not None:
+        status["coverage"] = coverage
+        status["configured_model"] = config.EMBED_MODEL
+        status["per_session_cap"] = config.MAX_EMBED_CHUNKS_PER_SESSION
+    return status
 
 
 def semantic_repair_needed() -> bool:
@@ -361,13 +373,16 @@ def _ingest_all(
         }
         _seed_tombstones(cur, existing)
         src_fps = persist.load_file_signatures(cur, prefix="srcfp:")
+        histories = persist.source_health_records(cur)
         for index, source in enumerate(WATCHED_SOURCES):
             savepoint = f"source_{index}"
             fp_key = f"srcfp:{source.key}"
             fingerprint_recorded = False
+            configuration = None
             cur.execute(f"SAVEPOINT {savepoint}")
             try:
                 cfg = config.resolve_source_config(source.default_config())
+                configuration = persist.source_config_fingerprint(cfg)
                 if not cfg.enabled:
                     source_results[source.key] = {"status": "disabled"}
                     cur.execute(f"RELEASE SAVEPOINT {savepoint}")
@@ -386,7 +401,14 @@ def _ingest_all(
                     fingerprint_errors[source.key] = str(exc)
                     fingerprint_parts.append(f"{source.key}=!error")
                     fingerprint_recorded = True
-                if not rebuild and fp and src_fps.get(fp_key) == fp:
+                prior_health = histories.get(source.key, {})
+                if (
+                    not rebuild
+                    and fp
+                    and src_fps.get(fp_key) == fp
+                    and prior_health.get("configuration") == configuration
+                    and prior_health.get("status") in ("ok", "unchanged")
+                ):
                     source_results[source.key] = {"status": "unchanged"}
                     cur.execute(f"RELEASE SAVEPOINT {savepoint}")
                     continue
@@ -422,7 +444,14 @@ def _ingest_all(
                     fingerprint_parts.append(f"{source.key}=!error")
                 if progress:
                     progress(f"Error reading {source.key}: {error}")
-            conn.commit()
+            finally:
+                persist.record_source_health(
+                    cur,
+                    source.key,
+                    source_results[source.key],
+                    configuration=configuration,
+                )
+                conn.commit()
 
     # Database references are now authoritative; reclaim snapshots replaced by
     # reingest and any orphan captures left by a failed adapter/savepoint.
@@ -500,27 +529,35 @@ def _import_export(
         return {"matched": None, "added": 0, "updated": 0, "skipped": 0, "imported": 0}
 
     counts: Counter[str] = Counter()
-    with db.transaction() as conn:
-        cur = conn.cursor()
-        existing = {
-            row["id"]: row["content_hash"]
-            for row in cur.execute("SELECT id, content_hash FROM sessions")
-        }
-        _seed_tombstones(cur, existing)
-        n = 0
-        for session in src.parse_export(data):
-            if not session or not session.get("turns"):
-                continue
-            prior = existing.get(session["id"])
-            if prior is not None and prior == session["content_hash"]:
-                counts["skipped"] += 1
-                continue
-            persist._write_session(cur, session)
-            counts["added" if prior is None else "updated"] += 1
-            n += 1
-            if progress and n % 50 == 0:
-                progress(f"Imported {n} {src.key} conversations...")
-        conn.commit()
+    try:
+        with db.transaction() as conn:
+            cur = conn.cursor()
+            existing = {
+                row["id"]: row["content_hash"]
+                for row in cur.execute("SELECT id, content_hash FROM sessions")
+            }
+            _seed_tombstones(cur, existing)
+            n = 0
+            for session in src.parse_export(data):
+                if not session or not session.get("turns"):
+                    continue
+                prior = existing.get(session["id"])
+                if prior is not None and prior == session["content_hash"]:
+                    counts["skipped"] += 1
+                    continue
+                persist._write_session(cur, session)
+                counts["added" if prior is None else "updated"] += 1
+                n += 1
+                if progress and n % 50 == 0:
+                    progress(f"Imported {n} {src.key} conversations...")
+            persist.record_source_health(cur, src.key, {"status": "ok", **counts})
+            conn.commit()
+    except Exception as exc:
+        with db.cursor() as cur:
+            persist.record_source_health(
+                cur, src.key, {"status": "error", "error": str(exc)}
+            )
+        raise
 
     attachments.cleanup_unreferenced()
 

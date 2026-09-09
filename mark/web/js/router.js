@@ -12,6 +12,7 @@ import { showLibrary } from "./views/library.js";
 import { showUsage } from "./views/usage.js";
 import { showAsk } from "./views/ask.js";
 import { openCollection, showCollections } from "./views/collections.js";
+import { showSources } from "./sidebar.js";
 
 export function routeFromHash() {
   // In-page anchors (e.g. "#att-2" to jump to an attachment) are not app
@@ -29,6 +30,10 @@ export function routeFromHash() {
   }
   if (location.hash === "#/usage") {
     if (state.view !== "usage") showUsage({ fromHash: true });
+    return;
+  }
+  if (location.hash === "#/sources") {
+    if (state.view !== "sources") showSources({ fromHash: true });
     return;
   }
   if (location.hash === "#/ask" && state.askEnabled) {

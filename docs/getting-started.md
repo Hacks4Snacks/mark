@@ -87,6 +87,7 @@ consistent read-only snapshot.
   - **Collections** — auto-updating groups of conversations.
   - **Library** — every extracted code block and shell command.
   - **Usage** — spend, duration and token analytics.
+  - **Sources** — source paths, sync history, index coverage, and retry controls.
   - **Ask** — natural-language Q&A (off by default; needs `MARK_ENABLE_ASK=1` and a local LLM).
   - **Add** — drop in a note or file.
   - **⟳** — re-scan now.
@@ -95,7 +96,7 @@ consistent read-only snapshot.
 Each result opens a **detail view** showing the full conversation, the files it
 touched, code blocks, tools that ran, a session id, and a copyable resume
 command. Deep links work: `#/session/<id>`, `#/collection/<id>`, `#/library`,
-`#/usage`, `#/ask`, `#/collections`.
+`#/usage`, `#/sources`, `#/ask`, `#/collections`.
 
 ## Next steps
 
