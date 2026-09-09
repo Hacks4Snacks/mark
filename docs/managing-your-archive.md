@@ -78,6 +78,14 @@ When an agent created or edited a file during a session, Mark records it and —
 to a size cap — snapshots its content so you can view and **download** it later,
 even if the original file has since changed or been removed.
 
+The **Files** list records paths reported by the agent or discovered in its
+session artifact directory; it is provenance only.
+The **Attachments** list contains the immutable snapshots retained by Mark. For
+Copilot CLI sessions, Mark captures every non-symlink regular file in
+`~/.copilot/session-state/<session-id>/files`, including outputs produced
+indirectly by scripts or shell commands. Successful writes inside the session's
+repository workspace are captured as well.
+
 | Variable                    | Default   | Purpose                                                              |
 |-----------------------------|-----------|----------------------------------------------------------------------|
 | `MARK_MAX_ATTACHMENT_BYTES` | `512 KiB` | Largest agent file snapshotted; larger files record path + size only |

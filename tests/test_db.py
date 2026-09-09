@@ -41,7 +41,7 @@ def test_tags_has_manual_column():
 def test_attachment_provenance_columns_exist():
     with db.connect() as conn:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
-    assert {"storage_kind", "sha256", "capture_version"} <= cols
+    assert {"source_path", "storage_kind", "sha256", "capture_version"} <= cols
 
 
 def test_embedding_generation_meta_exists():
@@ -218,6 +218,10 @@ def test_attachment_provenance_migration_quarantines_legacy_cli(tmp_path):
 
         migrations.run_migrations(con)
         con.commit()
+
+        assert "source_path" in {
+            row["name"] for row in con.execute("PRAGMA table_info(documents)")
+        }
 
         assert (
             con.execute(

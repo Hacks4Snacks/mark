@@ -63,6 +63,7 @@ def _attachment_metadata(att: dict[str, Any]) -> dict[str, Any]:
     att["downloadable"] = kind in ("inline", "managed")
     att["content_available"] = kind in ("inline", "managed")
     att["content"] = None
+    att.pop("source_path", None)
     att.pop("stored_path", None)
     att.pop("storage_kind", None)
     att.pop("sha256", None)

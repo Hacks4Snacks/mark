@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS documents (
     session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     kind         TEXT NOT NULL DEFAULT 'note',
     filename     TEXT,
+    source_path  TEXT,
     stored_path  TEXT,
     mime         TEXT,
     size_bytes   INTEGER,
