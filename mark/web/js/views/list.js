@@ -188,7 +188,7 @@ export function cardHTML(r, gid = "", groupSize = 1) {
     ? `<button class="dupe-badge" data-group="${gid}" title="Show ${groupSize - 1} more similar session${groupSize - 1 === 1 ? "" : "s"}">${icon("layers", { size: 13 })} ${groupSize}</button>`
     : "";
   return `
-    <div class="card" data-id="${esc(r.id)}"${gid ? ` data-group-rep="${gid}"` : ""}>
+    <div class="card" data-id="${esc(r.id)}" data-match-turn="${r.match?.turn_index ?? ""}" data-match-query="${esc(r.match?.query || "")}"${gid ? ` data-group-rep="${gid}"` : ""}>
       <div class="card-top">
         <h3 class="card-title">${esc(r.title || "Untitled")}</h3>
         ${unhide}
@@ -207,12 +207,19 @@ export function cardHTML(r, gid = "", groupSize = 1) {
     </div>`;
 }
 
+function openCard(el) {
+  openSession(el.dataset.id, {
+    turnIndex: el.dataset.matchTurn === "" ? null : Number(el.dataset.matchTurn),
+    q: el.dataset.matchQuery || "",
+  });
+}
+
 function wireCards() {
   $$("#results .card").forEach((el) =>
     el.addEventListener("click", (e) => {
       if (e.target.closest(".dupe-badge")) return;
       if (e.target.closest(".card-unhide")) return;
-      openSession(el.dataset.id);
+      openCard(el);
     })
   );
   $$("#results .dupe-badge").forEach((b) =>
@@ -251,8 +258,8 @@ function toggleGroup(badge) {
     let n = rep.nextElementSibling;
     for (let i = 0; i < extras.length && n; i++) {
       n.classList.add("group-extra");
-      const id = n.dataset.id;
-      n.addEventListener("click", () => openSession(id));
+      const card = n;
+      n.addEventListener("click", () => openCard(card));
       n = n.nextElementSibling;
     }
     rep.dataset.expanded = "1";
@@ -330,6 +337,6 @@ export function handleListKey(e) {
   } else if (e.key === "ArrowUp") {
     e.preventDefault(); kbdIndex = Math.max(kbdIndex - 1, 0); highlightCard();
   } else if (e.key === "Enter" && kbdIndex >= 0 && cards[kbdIndex]) {
-    e.preventDefault(); openSession(cards[kbdIndex].dataset.id);
+    e.preventDefault(); openCard(cards[kbdIndex]);
   }
 }

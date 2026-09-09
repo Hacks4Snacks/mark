@@ -78,6 +78,53 @@ Click any result to open the **detail view**, which shows:
   configurable via `MARK_RESUME_CMD`.
 - A **reading-progress** bar as you scroll a long transcript.
 
+### Jump to evidence
+
+Search results open the turn containing their best-matching passage. Mark loads
+only the page containing that turn, highlights matching text, and outlines the
+selected turn. Use **Load previous turns** or **Load more** to expand its context.
+Browse results and document-only records still open at the conversation/document
+level when no turn target exists.
+
+The sticky **Find in conversation** control searches all indexed user and
+assistant messages, including turns that have not been loaded in the browser.
+Press Enter or **Find** to search. Double quotes require a phrase, just as in
+keyword search. The previous/next controls move between **matching turns**, not
+individual word occurrences, and show your position in the complete match set.
+Session titles, tags, attachments, and display-only reasoning are not part of
+this transcript search. Semantic results can point to a relevant turn without
+a literal highlight; Mark indicates that distinction instead of fabricating one.
+
+An oversized target opens a bounded excerpt around the matched text, with at
+most 4,000 characters per message/reasoning field. **Load full turn** remains an
+explicit action. Finding or navigating evidence does not eagerly render the
+whole conversation or change the archive.
+
+Each turn has a **Copy turn link** button. A link such as
+`#/session/example?turn=40&q=%22orbital%20evidence%22` identifies turn 40 and retains
+the search query; the turn number in a URL is one-based. Reload and browser
+back/forward preserve the target. A missing or invalid turn falls back to the
+beginning with an explanatory message. These links refer to your local archive;
+they are not public sharing links. They rely on source turn numbering rather
+than regenerated chunk IDs and are not immutable snapshots of edited content.
+
+### Evidence API
+
+- Search responses include an additive `match` object containing `turn_index`,
+  `source_type`, and `query`. Document matches have no turn target.
+- `GET /api/sessions/{id}?turn_index=39` loads the normal-sized page containing
+  that zero-based turn and reports `target_turn_found` plus `turns_offset`.
+- `GET /api/sessions/{id}/matches?q=...` returns ordered, deduplicated
+  `turn_indices`, `total`, `offset`, `limit`, and `has_more`. Pages are limited
+  to 100 turns. An optional `turn_index` selects the matching page near a target;
+  `target_position` reports how many matches precede it.
+- `GET /api/sessions/{id}/turns/39?preview=true&q=...` returns a bounded rendered
+  excerpt, marked `preview` when truncated. Omit `preview` to retain the existing
+  explicit full-turn read. Evidence queries are limited to 2,000 characters.
+
+Exact-ID evidence reads retain the same visibility behavior as conversation
+detail reads, including access to a user-hidden conversation by its ID.
+
 ### Related sessions
 
 Each conversation links to a handful of **related sessions** — found by semantic

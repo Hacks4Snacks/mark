@@ -151,6 +151,87 @@ def test_semantic_search_over_embedded_note():
     )
     res = search.search("token timeout", mode="semantic")
     assert any(r["id"] == sid for r in res)
+    hit = next(r for r in res if r["id"] == sid)
+    assert hit["match"] == {
+        "turn_index": None,
+        "source_type": "document",
+        "query": "token timeout",
+    }
+
+
+def test_search_exposes_exact_evidence_turn(make_session, persist_session):
+    session = make_session(sid="evidence")
+    template = session["turns"][0]
+    session["turns"] = [
+        {
+            **template,
+            "turn_index": index,
+            "user_message": "ordinary prompt",
+            "assistant_response": (
+                "The orbital evidence is here." if index == 39 else "ordinary reply"
+            ),
+        }
+        for index in range(45)
+    ]
+    persist_session(session)
+
+    hit = search.search('"orbital evidence"', mode="hybrid")[0]
+
+    assert hit["id"] == "evidence"
+    assert hit["match"] == {
+        "turn_index": 39,
+        "source_type": "turn",
+        "query": '"orbital evidence"',
+    }
+
+
+def test_session_matches_deduplicates_chunks_and_ignores_metadata(
+    make_session, persist_session
+):
+    session = make_session(sid="matches", title="orbital evidence")
+    template = session["turns"][0]
+    session["turns"] = [
+        {
+            **template,
+            "turn_index": index,
+            "user_message": "ordinary prompt",
+            "assistant_response": (
+                "orbital evidence " * 200 if index in (0, 32) else "ordinary reply"
+            ),
+        }
+        for index in range(40)
+    ]
+    persist_session(session)
+    persist_session(make_session(sid="other", user="orbital evidence"))
+
+    first = search.session_matches("matches", '"orbital evidence"', limit=1)
+    second = search.session_matches("matches", '"orbital evidence"', offset=1, limit=1)
+
+    assert first["turn_indices"] == [0]
+    assert first["total"] == 2
+    assert first["has_more"] is True
+    assert second["turn_indices"] == [32]
+    assert second["has_more"] is False
+    assert search.session_matches("matches", "")["total"] == 0
+    assert search.session_matches("matches", '"evidence orbital"')["total"] == 2
+    between = search.session_matches(
+        "matches", '"orbital evidence"', turn_index=10, limit=1
+    )
+    assert between["target_position"] == 1
+    assert between["turn_indices"] == [32]
+    after = search.session_matches(
+        "matches", '"orbital evidence"', turn_index=39, limit=1
+    )
+    assert after["target_position"] == 2
+    assert after["turn_indices"] == [32]
+
+
+def test_session_matches_keeps_reasoning_display_only(make_session, persist_session):
+    session = make_session(sid="reasoning", user="ordinary prompt")
+    session["turns"][0]["thinking"] = "private reasoning probe"
+    persist_session(session)
+
+    assert search.session_matches("reasoning", '"private reasoning"')["total"] == 0
 
 
 def _scoped_search_fixture(make_session, persist_session, scope_kind):

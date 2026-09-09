@@ -5,8 +5,9 @@
 // and an empty hash shows the list.
 
 import { state } from "./state.js";
+import { parseSessionHash, toast } from "./utils.js";
 import { showList } from "./views/list.js";
-import { openSession } from "./views/detail.js";
+import { openSession, teardownReading } from "./views/detail.js";
 import { showLibrary } from "./views/library.js";
 import { showUsage } from "./views/usage.js";
 import { showAsk } from "./views/ask.js";
@@ -16,6 +17,9 @@ export function routeFromHash() {
   // In-page anchors (e.g. "#att-2" to jump to an attachment) are not app
   // routes; ignore them so they never fall through to the list view.
   if (location.hash && !location.hash.startsWith("#/")) return;
+  // Back can return to an already-visible view before a detail GET finishes.
+  // Invalidate that request even if this route needs no new view rendering.
+  if (!location.hash.startsWith("#/session/")) teardownReading();
   if (location.hash === "#/library") {
     if (state.view !== "library") showLibrary({ fromHash: true });
     return;
@@ -39,11 +43,14 @@ export function routeFromHash() {
     openCollection(cid, { fromHash: true });
     return;
   }
-  const m = location.hash.match(/^#\/session\/(.+)$/);
-  if (m) {
-    const id = decodeURIComponent(m[1]);
-    if (state.view === "detail" && state.currentId === id) return;
-    openSession(id, { fromHash: true });
+  if (location.hash.startsWith("#/session/")) {
+    const target = parseSessionHash(location.hash);
+    if (!target) {
+      toast("Invalid conversation link", true);
+      showList({ fromHash: true });
+      return;
+    }
+    openSession(target.id, { ...target, fromHash: true });
   } else if (state.view !== "list") {
     showList({ fromHash: true });
   }

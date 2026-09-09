@@ -28,6 +28,19 @@ def turn_count(session_id: str) -> int:
     return int(row["turn_count"] or 0) if row else 0
 
 
+def turn_offset(session_id: str, turn_index: int) -> int | None:
+    """Resolve a turn's row offset without assuming indices are contiguous."""
+    with db.cursor() as cur:
+        row = cur.execute(
+            "SELECT (SELECT COUNT(*) FROM turns earlier "
+            "WHERE earlier.session_id = t.session_id "
+            "AND earlier.turn_index < t.turn_index) AS offset "
+            "FROM turns t WHERE t.session_id = ? AND t.turn_index = ?",
+            (session_id, turn_index),
+        ).fetchone()
+    return int(row["offset"]) if row else None
+
+
 def _child_count(session_id: str, table: str, predicate: str = "") -> int:
     with db.cursor() as cur:
         row = cur.execute(

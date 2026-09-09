@@ -35,6 +35,8 @@ def _render_turn(turn: dict[str, Any], *, allow_deferred: bool) -> dict[str, Any
         "timestamp": turn.get("timestamp"),
         "content_chars": content_chars,
     }
+    if turn.get("preview"):
+        rendered["preview"] = True
     try:
         rendered["tools"] = json.loads(turn.get("tools") or "[]")
     except (TypeError, json.JSONDecodeError):
@@ -107,12 +109,33 @@ def api_session_turns(
     }
 
 
+@router.get("/api/sessions/{session_id}/matches")
+def api_session_matches(
+    session_id: str,
+    q: str = Query(default="", max_length=2_000),
+    offset: int = Query(default=0, ge=0, le=_SQLITE_MAX_INT),
+    limit: int = Query(default=100, ge=1, le=100),
+    turn_index: int | None = Query(default=None, ge=0, le=_SQLITE_MAX_INT),
+) -> dict[str, Any]:
+    if not sessions_repo.exists(session_id):
+        raise HTTPException(status_code=404, detail="session not found")
+    return search.session_matches(
+        session_id, q, offset=offset, limit=limit, turn_index=turn_index
+    )
+
+
 @router.get("/api/sessions/{session_id}/turns/{turn_index}")
 def api_session_turn(
     session_id: str,
     turn_index: int = ApiPath(ge=0, le=_SQLITE_MAX_INT),
+    preview: bool = False,
+    q: str = Query(default="", max_length=2_000),
 ) -> dict[str, Any]:
-    turn = search.get_session_turn(session_id, turn_index)
+    turn = (
+        search.get_session_turn_preview(session_id, turn_index, q)
+        if preview
+        else search.get_session_turn(session_id, turn_index)
+    )
     if not turn:
         raise HTTPException(status_code=404, detail="turn not found")
     return _render_turn(turn, allow_deferred=False)
@@ -179,7 +202,19 @@ def api_session(
     session_id: str,
     turns_offset: int = Query(default=0, ge=0, le=_SQLITE_MAX_INT),
     turns_limit: int = Query(default=config.DETAIL_TURN_PAGE_SIZE, ge=1, le=100),
+    turn_index: int | None = Query(default=None, ge=0, le=_SQLITE_MAX_INT),
 ) -> dict[str, Any]:
+    target_offset = (
+        sessions_repo.turn_offset(session_id, turn_index)
+        if turn_index is not None
+        else None
+    )
+    if turn_index is not None:
+        turns_offset = (
+            (target_offset // turns_limit) * turns_limit
+            if target_offset is not None
+            else 0
+        )
     session = search.get_session(
         session_id,
         turns_offset=turns_offset,
@@ -193,6 +228,8 @@ def api_session(
     session["turns"] = _render_turn_page(session["turns"])
     session["turns_offset"] = turns_offset
     session["turns_limit"] = turns_limit
+    if turn_index is not None:
+        session["target_turn_found"] = target_offset is not None
     turns_total = sessions_repo.turn_count(session_id)
     session["turns_total"] = turns_total
     session["has_more_turns"] = turns_offset + len(session["turns"]) < turns_total

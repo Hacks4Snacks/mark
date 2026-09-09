@@ -7,7 +7,8 @@ import { api } from "../api.js";
 import { showOnly, setLayoutWide, state } from "../state.js";
 import { loadFacets, loadStats } from "../sidebar.js";
 import {
-  $, $$, esc, fmtBytes, fmtCost, fmtDate, fmtDuration, fmtTokens, srcMeta, toast, withTransition,
+  $, $$, adjacentMatchPosition, esc, fmtBytes, fmtCost, fmtDate, fmtDuration, fmtTokens, highlightEvidence,
+  sessionHash, srcMeta, toast, withTransition,
 } from "../utils.js";
 import { icon } from "../icons.js";
 import { doSearch, showList } from "./list.js";
@@ -17,6 +18,12 @@ let detailScrollHandler = null; // active reading-progress listener
 let detailResizeHandler = null; // re-measures cached scroll metrics on resize
 let detailStickyTimer = null; // pending sticky-header reveal (dwell debounce)
 let detailGeneration = 0; // invalidates stale navigation/page/content responses
+let detailRoute = null;
+let activeSession = null;
+let activeEvidence = { turnIndex: null, q: "" };
+let evidenceRequest = 0;
+let matchPage = null;
+let matchIndex = -1;
 
 const fileRowHTML = (file) =>
   `<div class="aside-file" title="${esc(file.file_path)}">${esc(file.file_path)}</div>`;
@@ -62,28 +69,42 @@ function attachmentGroupHTML(session, attachments, category) {
 }
 
 export async function openSession(id, opts = {}) {
+  const target = {
+    turnIndex: Number.isSafeInteger(opts.turnIndex) && opts.turnIndex >= 0 ? opts.turnIndex : null,
+    q: (opts.q || "").trim().slice(0, 2000),
+    invalidTarget: !!opts.invalidTarget,
+  };
+  const route = sessionHash(id, target);
+  if (state.view === "detail" && detailRoute === route && !target.invalidTarget && !opts.refresh) return;
   const generation = ++detailGeneration;
+  evidenceRequest += 1;
+  detailRoute = route;
   try {
-    const s = await api("/api/sessions/" + encodeURIComponent(id));
+    const params = new URLSearchParams();
+    if (target.turnIndex != null) params.set("turn_index", String(target.turnIndex));
+    const s = await api("/api/sessions/" + encodeURIComponent(id) + (params.size ? "?" + params : ""));
     if (generation !== detailGeneration) return;
-    withTransition(() => {
-      if (generation !== detailGeneration) return;
+    activeEvidence = target;
+    if (!opts.fromHash && location.hash !== route) history.pushState(null, "", route);
+    await new Promise((resolve) => withTransition(() => {
+      if (generation !== detailGeneration) { resolve(); return; }
       state.currentId = id;
-      renderDetail(s);
-    });
-    if (!opts.fromHash) location.hash = "#/session/" + encodeURIComponent(id);
+      resolve(renderDetail(s));
+    }));
   } catch (e) {
     if (generation !== detailGeneration) return;
-    toast(e.message, true);
+    detailRoute = null;
+    toast("Conversation unavailable: " + e.message, true);
   }
 }
 
 function renderDetail(s) {
+  activeSession = s;
   state.view = "detail";
   setLayoutWide(false);
   showOnly("#detailView");
   const view = $("#detailView");
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  window.scrollTo({ top: 0, behavior: "instant" });
 
   const isHidden = !!s.hidden;
   const manualSet = new Set(s.manual_tags || []);
@@ -168,7 +189,8 @@ function renderDetail(s) {
       : `<div class="md">${s.document.html || ""}</div>`;
   } else {
     turnsBody = (s.turns || []).map(turnHTML).join("");
-    body = `<div id="detailTurns">${turnsBody}</div>`
+    body = `<button class="btn btn-ghost detail-load-more" id="detailLoadPrevious" type="button"${s.turns_offset > 0 ? "" : " hidden"}>${icon("arrow-left")} Load previous turns</button>`
+      + `<div id="detailTurns">${turnsBody}</div>`
       + `<button class="btn btn-ghost detail-load-more" id="detailLoadMore" type="button"${s.has_more_turns ? "" : " hidden"}>${icon("plus")} Load more</button>`;
   }
   if (attachmentsTotal) {
@@ -191,8 +213,18 @@ function renderDetail(s) {
       ${s.summary ? `<p class="detail-summary">${esc(s.summary)}</p>` : ""}
       <div class="detail-meta">${meta}</div>
     </div>
-    <div class="detail-sticky" id="detailSticky">
+    <div class="detail-sticky evidence-toolbar" id="detailSticky">
       <button type="button" class="ds-back" id="dsBack" title="Back to results">${icon("arrow-left", { size: 16 })}<span class="ds-title">${esc(s.title || "Untitled")}</span></button>
+      ${s.turns_total ? `<form id="detailFind" class="detail-find" role="search" aria-label="Find in conversation">
+        <input type="search" id="detailQuery" aria-label="Find in conversation" placeholder='Find in conversation; use "quotes" for phrases' maxlength="2000" value="${esc(activeEvidence.q)}" />
+        <button class="btn btn-ghost" type="submit">Find</button>
+        <div class="detail-match-controls">
+          <button class="btn btn-ghost" type="button" id="detailMatchPrevious" aria-label="Previous matching turn" disabled>${icon("arrow-left")}</button>
+          <output id="detailMatchCount" aria-live="polite">All indexed turns</output>
+          <button class="btn btn-ghost" type="button" id="detailMatchNext" aria-label="Next matching turn" disabled>${icon("arrow-right")}</button>
+        </div>
+      </form>` : ""}
+      <p id="evidenceNotice" class="evidence-notice" role="status" hidden></p>
     </div>
     <div class="detail-body">
       <div class="transcript detail-scroll">${body || '<p class="muted">No content.</p>'}</div>
@@ -206,7 +238,7 @@ function renderDetail(s) {
     openCollMenu(e.currentTarget, s.id);
   });
   $("#copyLink")?.addEventListener("click", async () => {
-    const url = location.origin + location.pathname + "#/session/" + encodeURIComponent(s.id);
+    const url = location.origin + location.pathname + sessionHash(s.id, activeEvidence);
     try { await navigator.clipboard.writeText(url); toast("Link copied"); }
     catch (_) { toast("Copy failed", true); }
   });
@@ -252,6 +284,13 @@ function renderDetail(s) {
   wireMetadataPaging(s);
   $("#documentLoad")?.addEventListener("click", (event) => loadDocument(s, event.currentTarget));
   $("#detailLoadMore")?.addEventListener("click", () => loadMoreTurns(s));
+  $("#detailLoadPrevious")?.addEventListener("click", () => loadMoreTurns(s, true));
+  $("#detailFind")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    openSession(s.id, { q: $("#detailQuery").value, refresh: true });
+  });
+  $("#detailMatchPrevious")?.addEventListener("click", () => moveMatch(s, -1));
+  $("#detailMatchNext")?.addEventListener("click", () => moveMatch(s, 1));
   $("#topicAdd")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const generation = detailGeneration;
@@ -284,6 +323,151 @@ function renderDetail(s) {
     })
   );
   loadRelated(s.id);
+  return initializeEvidence(s);
+}
+
+function evidenceNotice(message = "") {
+  const host = $("#evidenceNotice");
+  if (!host) return;
+  host.textContent = message;
+  host.hidden = !message;
+}
+
+function evidenceCurrent(s, request, generation) {
+  return request === evidenceRequest && generation === detailGeneration
+    && activeSession === s && state.view === "detail";
+}
+
+function updateMatchControls() {
+  const total = matchPage?.total || 0;
+  const position = matchIndex < 0 ? -1 : matchPage.offset + matchIndex;
+  const output = $("#detailMatchCount");
+  if (output) output.textContent = !activeEvidence.q ? "All indexed turns"
+    : position >= 0 ? `${position + 1} / ${total} matching turns` : `${total} matching turns`;
+  const previous = $("#detailMatchPrevious");
+  const next = $("#detailMatchNext");
+  if (previous) previous.disabled = !total || adjacentMatchPosition(matchPage, matchIndex, -1) < 0;
+  if (next) next.disabled = !total || adjacentMatchPosition(matchPage, matchIndex, 1) >= total;
+}
+
+function rememberEvidence(s, replace = false) {
+  const route = sessionHash(s.id, activeEvidence);
+  detailRoute = route;
+  if (location.hash !== route) history[replace ? "replaceState" : "pushState"](null, "", route);
+}
+
+async function matchingTurns(s, params) {
+  const query = new URLSearchParams({ q: activeEvidence.q, ...params });
+  return api(`/api/sessions/${encodeURIComponent(s.id)}/matches?${query}`);
+}
+
+async function initializeEvidence(s) {
+  const request = ++evidenceRequest;
+  const generation = detailGeneration;
+  matchPage = null;
+  matchIndex = -1;
+  const missing = activeEvidence.invalidTarget || s.target_turn_found === false;
+  if (missing) {
+    activeEvidence.turnIndex = null;
+    evidenceNotice("This turn is no longer available or the link is invalid. Showing the beginning of the conversation.");
+  }
+  try {
+    if (activeEvidence.q && s.turns_total) {
+      const params = activeEvidence.turnIndex == null ? {} : { turn_index: activeEvidence.turnIndex };
+      const page = await matchingTurns(s, params);
+      if (!evidenceCurrent(s, request, generation)) return;
+      matchPage = page;
+      if (activeEvidence.turnIndex == null && !missing) activeEvidence.turnIndex = page.turn_indices[0] ?? null;
+      matchIndex = page.turn_indices.indexOf(activeEvidence.turnIndex);
+      if (!page.total && !missing) evidenceNotice("No matching indexed messages. Matches use keyword/phrase search, not semantic similarity or session metadata.");
+    }
+    updateMatchControls();
+    if (activeEvidence.turnIndex != null) {
+      await focusEvidenceTurn(s, activeEvidence.turnIndex, request, generation);
+    } else if (!s.turns_total && activeEvidence.q) {
+      const document = $(".transcript > .md");
+      if (document) highlightEvidence(document, activeEvidence.q);
+    }
+    if (evidenceCurrent(s, request, generation) && !missing) rememberEvidence(s, true);
+  } catch (error) {
+    if (evidenceCurrent(s, request, generation)) evidenceNotice("Evidence lookup failed: " + error.message);
+  }
+}
+
+async function moveMatch(s, delta) {
+  if (!matchPage?.total) return;
+  const request = ++evidenceRequest;
+  const generation = detailGeneration;
+  const position = adjacentMatchPosition(matchPage, matchIndex, delta);
+  if (position < 0 || position >= matchPage.total) return;
+  $("#detailMatchPrevious").disabled = true;
+  $("#detailMatchNext").disabled = true;
+  try {
+    if (position < matchPage.offset || position >= matchPage.offset + matchPage.turn_indices.length) {
+      const page = await matchingTurns(s, { offset: Math.floor(position / 100) * 100 });
+      if (!evidenceCurrent(s, request, generation)) return;
+      matchPage = page;
+    }
+    matchIndex = position - matchPage.offset;
+    const turn = matchPage.turn_indices[matchIndex];
+    if (turn == null) { evidenceNotice("Matches changed during indexing. Run Find again."); return; }
+    if (await focusEvidenceTurn(s, turn, request, generation)) {
+      activeEvidence.turnIndex = turn;
+      rememberEvidence(s);
+    }
+  } catch (error) {
+    if (evidenceCurrent(s, request, generation)) evidenceNotice(error.message);
+  } finally {
+    if (evidenceCurrent(s, request, generation)) updateMatchControls();
+  }
+}
+
+function updateTurnPaging(s) {
+  const previous = $("#detailLoadPrevious");
+  const next = $("#detailLoadMore");
+  if (previous) previous.hidden = !(s.turns_offset > 0);
+  if (next) next.hidden = !s.has_more_turns;
+}
+
+async function focusEvidenceTurn(s, index, request, generation) {
+  let turn = $("#turn-" + index);
+  if (!turn) {
+    const page = await api(`/api/sessions/${encodeURIComponent(s.id)}?turn_index=${index}`);
+    if (!evidenceCurrent(s, request, generation)) return false;
+    if (!page.target_turn_found) {
+      evidenceNotice("This turn is no longer available. Open the conversation again to refresh it.");
+      return false;
+    }
+    s.turns = page.turns;
+    s.turns_offset = page.turns_offset;
+    s.has_more_turns = page.has_more_turns;
+    $("#detailTurns").innerHTML = page.turns.map(turnHTML).join("");
+    updateTurnPaging(s);
+    wireDeferredTurns(s);
+    turn = $("#turn-" + index);
+  }
+  if (turn?.classList.contains("deferred-turn") || turn?.classList.contains("turn-preview")) {
+    const params = new URLSearchParams({ preview: "true", q: activeEvidence.q });
+    const preview = await api(`/api/sessions/${encodeURIComponent(s.id)}/turns/${index}?${params}`);
+    if (!evidenceCurrent(s, request, generation) || !turn.isConnected) return false;
+    const replacement = htmlElement(turnHTML(preview));
+    turn.replaceWith(replacement);
+    turn = replacement;
+    wireDeferredTurns(s);
+  }
+  if (!turn || !evidenceCurrent(s, request, generation)) return false;
+  $$("#detailTurns .evidence-target").forEach((previous) => {
+    previous.classList.remove("evidence-target");
+    highlightEvidence(previous, "");
+  });
+  turn.classList.add("evidence-target");
+  const highlighted = highlightEvidence(turn, activeEvidence.q);
+  if (activeEvidence.q && !highlighted) evidenceNotice("Showing the selected turn; no literal highlight was found. The match may use stemming or semantic similarity.");
+  else evidenceNotice();
+  setupReading();
+  turn.focus({ preventScroll: true });
+  (highlighted || turn).scrollIntoView({ block: highlighted ? "center" : "start", behavior: "instant" });
+  return true;
 }
 
 async function loadDocument(s, button) {
@@ -296,6 +480,7 @@ async function loadDocument(s, button) {
     if (host) {
       host.className = "md";
       host.innerHTML = document.html;
+      highlightEvidence(host, activeEvidence.q);
       setupReading();
     }
   } catch (error) {
@@ -305,20 +490,25 @@ async function loadDocument(s, button) {
   }
 }
 
-async function loadMoreTurns(s) {
-  const button = $("#detailLoadMore");
+async function loadMoreTurns(s, previous = false) {
+  const button = $(previous ? "#detailLoadPrevious" : "#detailLoadMore");
   if (!button || button.disabled) return;
   const generation = detailGeneration;
   const transcript = $("#detailTurns");
   button.disabled = true;
   try {
-    const offset = (s.turns || []).length;
-    const page = await api(`/api/sessions/${encodeURIComponent(s.id)}/turns?offset=${offset}`);
+    const start = s.turns_offset || 0;
+    const size = s.turns_limit || 20;
+    const offset = previous ? Math.max(0, start - size) : start + (s.turns || []).length;
+    const limit = previous ? start - offset : size;
+    const page = await api(`/api/sessions/${encodeURIComponent(s.id)}/turns?offset=${offset}&limit=${limit}`);
     if (generation !== detailGeneration || state.currentId !== s.id || !transcript?.isConnected) return;
-    transcript.insertAdjacentHTML("beforeend", page.turns.map(turnHTML).join(""));
-    s.turns = (s.turns || []).concat(page.turns);
-    s.has_more_turns = page.has_more;
-    button.hidden = !page.has_more;
+    if ((s.turns_offset || 0) !== start) return;
+    transcript.insertAdjacentHTML(previous ? "afterbegin" : "beforeend", page.turns.map(turnHTML).join(""));
+    s.turns = previous ? page.turns.concat(s.turns || []) : (s.turns || []).concat(page.turns);
+    if (previous) s.turns_offset = offset;
+    else s.has_more_turns = page.has_more;
+    updateTurnPaging(s);
     wireDeferredTurns(s);
     setupReading();
   } catch (error) {
@@ -330,6 +520,15 @@ async function loadMoreTurns(s) {
 }
 
 function wireDeferredTurns(s) {
+  $$("#detailView .copy-turn-link").forEach((button) => {
+    if (button.dataset.wired) return;
+    button.dataset.wired = "1";
+    button.addEventListener("click", async () => {
+      const hash = sessionHash(s.id, { turnIndex: Number(button.dataset.turn), q: activeEvidence.q });
+      try { await navigator.clipboard.writeText(location.origin + location.pathname + hash); toast("Turn link copied"); }
+      catch (_) { toast("Copy failed", true); }
+    });
+  });
   $$("#detailView .deferred-turn-load").forEach((button) => {
     if (button.dataset.wired) return;
     button.dataset.wired = "1";
@@ -339,7 +538,13 @@ function wireDeferredTurns(s) {
       try {
         const turn = await api(`/api/sessions/${encodeURIComponent(s.id)}/turns/${encodeURIComponent(button.dataset.turn)}`);
         if (generation !== detailGeneration || state.currentId !== s.id || !button.isConnected) return;
-        button.closest(".turn")?.replaceWith(htmlElement(turnHTML(turn)));
+        const replacement = htmlElement(turnHTML(turn));
+        button.closest(".turn")?.replaceWith(replacement);
+        wireDeferredTurns(s);
+        if (activeEvidence.turnIndex === turn.turn_index) {
+          replacement.classList.add("evidence-target");
+          highlightEvidence(replacement, activeEvidence.q);
+        }
         setupReading();
       } catch (error) {
         if (generation !== detailGeneration) return;
@@ -509,11 +714,13 @@ async function loadRelated(id) {
 }
 
 function turnHTML(t) {
+  const number = Number(t.turn_index);
+  const heading = `<div class="turn-heading"><a href="${esc(sessionHash(activeSession?.id || state.currentId, { turnIndex: number, q: activeEvidence.q }))}">Turn ${number + 1}</a><button class="btn btn-ghost copy-turn-link" type="button" data-turn="${number}" aria-label="Copy link to turn ${number + 1}">${icon("link", { size: 13 })} Copy turn link</button></div>`;
   if (t.deferred) {
-    return `<div class="turn deferred-turn" data-turn-index="${t.turn_index}">
-      <div><strong>Large turn</strong><span>${Number(t.content_chars || 0).toLocaleString()} characters</span></div>
+    return `<section class="turn deferred-turn" id="turn-${number}" data-turn-index="${number}" tabindex="-1" aria-label="Turn ${number + 1}">${heading}
+      <div class="deferred-message"><div><strong>Large turn</strong><span>${Number(t.content_chars || 0).toLocaleString()} characters</span></div>
       <button class="btn btn-ghost deferred-turn-load" type="button" data-turn="${t.turn_index}">${icon("download")} Load turn</button>
-    </div>`;
+      </div></section>`;
   }
   const tools = (t.tools || []).length
     ? `<div class="tool-tags">${t.tools.map((x) => `<span class="tool">${esc(x)}</span>`).join("")}</div>`
@@ -527,7 +734,8 @@ function turnHTML(t) {
     ? `<div class="role"><span class="who">Copilot</span></div>${tools}${thinking}`
       + (t.assistant_html ? `<div class="bubble assistant"><div class="md">${t.assistant_html}</div></div>` : "")
     : "";
-  return `<div class="turn">${user}${asst}</div>`;
+  const preview = t.preview ? `<div class="turn-preview-note">Showing excerpts from a large turn (${Number(t.content_chars || 0).toLocaleString()} characters).<button class="btn btn-ghost deferred-turn-load" type="button" data-turn="${number}">Load full turn</button></div>` : "";
+  return `<section class="turn${t.preview ? " turn-preview" : ""}" id="turn-${number}" data-turn-index="${number}" tabindex="-1" aria-label="Turn ${number + 1}">${heading}${preview}${user}${asst}</section>`;
 }
 
 // ---------- reading mode (progress bar + sticky header) ----------
@@ -573,7 +781,9 @@ function setupReading() {
   const measure = () => {
     pinTop = topbar ? topbar.getBoundingClientRect().height : 0;
     headBottom = head ? head.getBoundingClientRect().bottom + window.scrollY : 0;
+    const offset = pinTop + (sticky?.offsetHeight || 0) + 16;
     if (sticky) sticky.style.top = pinTop + "px";
+    $("#detailView")?.style.setProperty("--evidence-scroll-top", offset + "px");
   };
 
   // Coalesce bursts of scroll events to one update per animation frame, and do
@@ -621,6 +831,9 @@ function setupReading() {
 
 export function teardownReading() {
   detailGeneration += 1;
+  evidenceRequest += 1;
+  detailRoute = null;
+  activeSession = null;
   if (detailScrollHandler) {
     window.removeEventListener("scroll", detailScrollHandler);
     detailScrollHandler = null;

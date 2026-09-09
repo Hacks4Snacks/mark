@@ -152,6 +152,7 @@ async function render(q) {
         type: "session", group: "Conversations",
         id: r.id, title: r.title, source: r.source,
         updated_at: r.updated_at, created_at: r.created_at,
+        match: r.match,
       }));
       // conversations on top when the user is clearly searching
       items = [...sessions, ...buildStatic(q)];
@@ -165,7 +166,7 @@ function choose(idx) {
   const it = items[idx];
   if (!it) return;
   closePalette();
-  if (it.type === "session") openSession(it.id);
+  if (it.type === "session") openSession(it.id, { turnIndex: it.match?.turn_index, q: it.match?.query || "" });
   else if (typeof it.run === "function") it.run();
 }
 

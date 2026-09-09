@@ -1589,6 +1589,248 @@ def test_session_turn_integer_bounds_are_validated(
     assert client.get(path).status_code == 422
 
 
+def test_evidence_target_resolves_sparse_turn_indices(
+    client, make_session, persist_session
+):
+    session = make_session(sid="sparse-evidence")
+    template = session["turns"][0]
+    session["turns"] = [{**template, "turn_index": index * 3} for index in range(45)]
+    persist_session(session)
+
+    detail = client.get(
+        "/api/sessions/sparse-evidence", params={"turn_index": 123}
+    ).json()
+
+    assert detail["target_turn_found"] is True
+    assert detail["turns_offset"] == 40
+    assert [t["turn_index"] for t in detail["turns"]] == [120, 123, 126, 129, 132]
+    assert detail["has_more_turns"] is False
+    missing = client.get(
+        "/api/sessions/sparse-evidence", params={"turn_index": 124}
+    ).json()
+    assert missing["target_turn_found"] is False
+    assert missing["turns_offset"] == 0
+    assert missing["turns"][0]["turn_index"] == 0
+
+
+@pytest.mark.parametrize("chunk_size", [1200, 6000])
+def test_evidence_preview_finds_late_text_without_rendering_whole_turn(
+    client, make_session, persist_session, monkeypatch, chunk_size
+):
+    from mark import config, render
+
+    monkeypatch.setattr(config, "DETAIL_INLINE_TURN_CHARS", 1_000)
+    monkeypatch.setattr(config, "MAX_CHUNK_CHARS", chunk_size)
+    persist_session(
+        make_session(
+            sid="huge-evidence",
+            user="Find the fix",
+            asst=("ordinary words " * 10_000) + "orbital evidence solution",
+        )
+    )
+    original_render = render.render_markdown
+    lengths = []
+
+    def record_render(text):
+        lengths.append(len(text or ""))
+        return original_render(text)
+
+    monkeypatch.setattr(render, "render_markdown", record_render)
+    initial = client.get("/api/sessions/huge-evidence", params={"turn_index": 0}).json()
+    assert initial["turns"][0]["deferred"] is True
+    assert lengths == []
+
+    response = client.get(
+        "/api/sessions/huge-evidence/turns/0",
+        params={"preview": True, "q": '"orbital evidence"'},
+    )
+    preview = response.json()
+    assert preview["preview"] is True
+    assert "orbital evidence solution" in preview["assistant_html"]
+    assert max(lengths) <= 4_000
+    assert len(response.content) < 20_000
+    assert preview["content_chars"] > 100_000
+
+
+def test_conversation_matches_are_bounded_and_available_for_hidden_sessions(
+    client, make_session, persist_session, monkeypatch
+):
+    from mark import render
+    from mark.repositories import sessions
+
+    session = make_session(sid="many-matches", user="orbital evidence")
+    template = session["turns"][0]
+    session["turns"] = [{**template, "turn_index": index} for index in range(125)]
+    persist_session(session)
+    sessions.set_hidden("many-matches", True)
+    monkeypatch.setattr(
+        render,
+        "render_markdown",
+        lambda _text: pytest.fail("finding matches must not render turn bodies"),
+    )
+
+    page = client.get(
+        "/api/sessions/many-matches/matches", params={"q": '"orbital evidence"'}
+    ).json()
+    assert page["turn_indices"] == list(range(100))
+    assert page["total"] == 125
+    assert page["has_more"] is True
+    final = client.get(
+        "/api/sessions/many-matches/matches",
+        params={"q": '"orbital evidence"', "offset": 100},
+    ).json()
+    assert final["turn_indices"] == list(range(100, 125))
+    assert final["has_more"] is False
+    around = client.get(
+        "/api/sessions/many-matches/matches",
+        params={"q": '"orbital evidence"', "turn_index": 120},
+    ).json()
+    assert around["offset"] == 100
+    assert around["target_position"] == 120
+    assert around["turn_indices"] == list(range(100, 125))
+    assert client.get("/api/sessions/missing/matches?q=orbital").status_code == 404
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/sessions/evidence?turn_index=-1",
+        "/api/sessions/evidence?turn_index=9223372036854775808",
+        "/api/sessions/evidence/matches?offset=-1",
+        "/api/sessions/evidence/matches?limit=101",
+        "/api/sessions/evidence/matches?q=" + "x" * 2001,
+        "/api/sessions/evidence/turns/0?preview=true&q=" + "x" * 2001,
+    ],
+)
+def test_evidence_parameters_are_validated(client, path):
+    assert client.get(path).status_code == 422
+
+
+def test_evidence_url_and_highlight_helpers():
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for frontend helper regression tests")
+    root = Path(__file__).resolve().parents[1]
+    script = r"""
+import assert from "node:assert/strict";
+import { sessionHash, parseSessionHash, evidencePattern, adjacentMatchPosition, withTransition } from "./mark/web/js/utils.js";
+const id = "repo / ? # % café";
+const q = '"orbital evidence" naïve <script> & +';
+const hash = sessionHash(id, { turnIndex: 0, q });
+assert.deepEqual(parseSessionHash(hash), { id, turnIndex: 0, q, invalidTarget: false });
+assert.equal(sessionHash("s"), "#/session/s");
+assert.equal(parseSessionHash("#/session/s?turn=40").turnIndex, 39);
+assert.equal(parseSessionHash("#/session/%GG"), null);
+assert.equal(parseSessionHash("#/library"), null);
+for (const turn of ["0", "-1", "1.5", "9007199254740992", "oops", ""]) {
+  const parsed = parseSessionHash("#/session/s?turn=" + turn);
+  assert.equal(parsed.turnIndex, null);
+  assert.equal(parsed.invalidTarget, true);
+}
+assert.equal(parseSessionHash(sessionHash("s", { q: "x".repeat(3000) })).q.length, 2000);
+assert.equal(evidencePattern('"orbital evidence"').test("orbital logs then evidence"), false);
+assert.equal(evidencePattern('"orbital evidence"').test("ORBITAL evidence"), true);
+assert.equal(evidencePattern('"open file"').test("open filename"), false);
+assert.equal(evidencePattern("open file").test("open filename"), true);
+assert.equal(evidencePattern("orbital").test("suborbital"), false);
+assert.equal(evidencePattern("naïve").test("NAÏVE"), true);
+assert.equal(evidencePattern("[.*]"), null);
+const page = {total: 125, offset: 100, target_position: 100};
+assert.equal(adjacentMatchPosition(page, -1, 1), 100);
+assert.equal(adjacentMatchPosition(page, -1, -1), 99);
+assert.equal(adjacentMatchPosition(page, 0, 1), 101);
+assert.equal(adjacentMatchPosition(page, 0, -1), 99);
+assert.equal(adjacentMatchPosition({...page, target_position: 125}, -1, 1), 125);
+assert.equal(adjacentMatchPosition({...page, target_position: 125}, -1, -1), 124);
+let updates = 0, animations = 0;
+globalThis.window = {matchMedia: () => ({matches: false})};
+globalThis.document = {visibilityState: "hidden", startViewTransition: fn => {
+    animations += 1; fn(); return {ready: Promise.reject(new Error("animation skipped"))};
+}};
+withTransition(() => updates += 1);
+assert.equal(updates, 1);
+assert.equal(animations, 0);
+document.visibilityState = "visible";
+withTransition(() => updates += 1);
+await Promise.resolve();
+assert.equal(updates, 2);
+assert.equal(animations, 1);
+"""
+    result = subprocess.run(
+        [node, "--input-type=module", "-e", script],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_evidence_route_cancels_pending_navigation_to_visible_view():
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for frontend routing regression tests")
+    script = r"""
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createContext, SourceTextModule, SyntheticModule } from "node:vm";
+import { parseSessionHash } from "./mark/web/js/utils.js";
+const state = {view: "library", askEnabled: true};
+const location = {hash: "#/library"};
+const calls = [];
+const record = name => (...args) => calls.push([name, ...args]);
+const modules = {
+    "./state.js": {state},
+    "./utils.js": {parseSessionHash, toast: record("toast")},
+    "./views/list.js": {showList: record("list")},
+    "./views/detail.js": {openSession: record("session"), teardownReading: record("cancel")},
+    "./views/library.js": {showLibrary: record("library")},
+    "./views/usage.js": {showUsage: record("usage")},
+    "./views/ask.js": {showAsk: record("ask")},
+    "./views/collections.js": {openCollection: record("collection"), showCollections: record("collections")},
+};
+const context = createContext({location, window: {addEventListener() {}}});
+const router = new SourceTextModule(readFileSync("mark/web/js/router.js", "utf8"), {context});
+await router.link(path => new SyntheticModule(Object.keys(modules[path]), function () {
+    for (const [name, value] of Object.entries(modules[path])) this.setExport(name, value);
+}, {context}));
+await router.evaluate();
+router.namespace.routeFromHash();
+assert.deepEqual(calls, [["cancel"]]); // visible Library must still cancel the pending GET
+calls.length = 0;
+location.hash = "#/session/s?turn=40&q=%22open%20file%22";
+router.namespace.routeFromHash();
+assert.equal(calls[0][0], "session");
+assert.equal(calls[0][1], "s");
+assert.equal(calls[0][2].turnIndex, 39);
+assert.equal(calls[0][2].q, '"open file"');
+assert.equal(calls[0][2].fromHash, true);
+calls.length = 0;
+location.hash = "#/session/%GG";
+router.namespace.routeFromHash();
+assert.equal(calls[0][0], "toast");
+assert.equal(calls[1][0], "list");
+calls.length = 0;
+location.hash = "#att-2";
+router.namespace.routeFromHash();
+assert.equal(calls.length, 0); // preserve non-app anchors
+"""
+    result = subprocess.run(
+        [node, "--experimental-vm-modules", "--input-type=module", "-e", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_missing_session_is_404(client):
     assert client.get("/api/sessions/nope").status_code == 404
 

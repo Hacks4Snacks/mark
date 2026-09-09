@@ -4,7 +4,7 @@
 
 import { api } from "../api.js";
 import { showOnly, setLayoutWide, state } from "../state.js";
-import { $, $$, esc, srcMeta, toast, withTransition } from "../utils.js";
+import { $, $$, esc, sessionHash, srcMeta, toast, withTransition } from "../utils.js";
 import { icon } from "../icons.js";
 import { openSession, teardownReading } from "./detail.js";
 
@@ -52,7 +52,13 @@ export async function loadSnippets() {
       return;
     }
     host.innerHTML = snippetData.map(snippetCardHTML).join("");
-    $$("#libResults .snip-open").forEach((a) => a.addEventListener("click", () => openSession(a.dataset.id)));
+    $$("#libResults .snip-open").forEach((a) => a.addEventListener("click", (event) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      openSession(a.dataset.id, {
+        turnIndex: a.dataset.turn === "" ? null : Number(a.dataset.turn), q: libState.q,
+      });
+    }));
     $$("#libResults .snip-copy").forEach((b) => b.addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(snippetData[+b.dataset.idx].content); toast("Copied"); }
       catch (_) { toast("Copy failed", true); }
@@ -68,7 +74,7 @@ function snippetCardHTML(s, i) {
   return `<div class="snip-card">
     <div class="snip-head">
       <span class="snip-lang">${esc(lang)}</span>
-      <a class="snip-open" data-id="${esc(s.session_id)}" title="Open conversation">${srcMeta(s.source).icon} ${esc(s.session_title || "Untitled")}${repo}</a>
+      <a class="snip-open" data-id="${esc(s.session_id)}" data-turn="${s.turn_index ?? ""}" href="${esc(sessionHash(s.session_id, { turnIndex: s.turn_index, q: libState.q }))}" title="Open matching turn">${srcMeta(s.source).icon} ${esc(s.session_title || "Untitled")}${repo}</a>
       <button class="snip-copy" data-idx="${i}" title="Copy snippet">${icon("copy", { size: 14 })}</button>
     </div>
     <pre class="snip-code"><code>${esc(s.content)}</code></pre>

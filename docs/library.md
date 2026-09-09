@@ -16,7 +16,7 @@ Each snippet card shows:
 
 - The **language** tag.
 - The **source session** title (with its source icon and repository), which opens
-  the full conversation in one click.
+  the turn containing that snippet in one click when its turn is known.
 - A **copy** button to grab the snippet to your clipboard.
 
 ## Filtering
@@ -32,8 +32,10 @@ incantation I ran three weeks ago."*
 
 ## Tips
 
-- Click a snippet's title to jump straight to the conversation it came from — the
-  surrounding discussion often explains *why* the command was what it was.
+- Click a snippet's title to jump straight to its source turn — the surrounding
+  discussion often explains *why* the command was what it was. The content filter
+  is carried into the conversation's evidence search. Use **Copy turn link** to
+  return to that location later; see [Jump to evidence](searching.md#jump-to-evidence).
 - Combine the content filter with **Commands only** to find, say, every `docker`
   command you've ever been given.
 - The library reflects whatever is indexed, so it grows automatically as Mark

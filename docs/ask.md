@@ -81,6 +81,12 @@ to the model, including turn and date metadata, then open the full conversation
 when more context is needed. Context is listed only after its passage is accepted
 into the prompt budget; items cited by the generated answer are highlighted.
 
+Turn-based passages include **Open turn N**, which loads that turn's page and
+carries the retrieval query into the conversation's evidence search. This also
+works in collection-scoped Ask. Summary/document evidence keeps the existing
+**Open conversation** action. See [Jump to evidence](searching.md#jump-to-evidence)
+for matching-turn navigation, large-turn excerpts, and copyable evidence links.
+
 The model is instructed to answer **only** from your excerpts and to say plainly
 when the answer isn't in your history — rather than guessing. Your archive never
 leaves your machine.
