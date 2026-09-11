@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -39,6 +41,11 @@ def test_packaged_registry_drives_runtime_prices():
 
 def test_registry_freshness_warns_then_fails():
     registry = load_registry()
+    # Test a fixed stale fixture, independently of the shipped review date.
+    registry["verified_at"] = "2026-07-14"
+    for spec in registry["models"].values():
+        spec.pop("review_after", None)
+    registry["models"]["claude-sonnet-5"]["review_after"] = "2026-08-31"
 
     warning = validate_registry(
         registry, today=date(2026, 8, 15), enforce_freshness=True
@@ -51,6 +58,179 @@ def test_registry_freshness_warns_then_fails():
     )
     assert "registry is 62 days old (failure threshold: 60)" in failure.errors
     assert any("claude-sonnet-5" in error for error in failure.errors)
+
+
+def test_refreshed_registry_is_valid_and_tracks_scheduled_reviews():
+    registry = load_registry()
+    assert registry["verified_at"] == "2026-09-10"
+    assert (
+        validate_registry(
+            registry, today=date(2026, 9, 10), enforce_freshness=True
+        ).errors
+        == ()
+    )
+    models = registry["models"]
+    assert "review_after" not in models["claude-sonnet-5"]
+    assert "effective_until" not in models["claude-sonnet-5"]
+    assert models["gpt-5-6-sol"]["review_after"] == "2026-11-21"
+    assert "effective_until" not in models["gpt-5-6-sol"]
+    for key in ("gemini-3-6-flash", "gemini-3-7-flash", "gemini-3-8-flash"):
+        assert models[key]["effective_until"] == "2026-12-31"
+        assert models[key]["review_after"] == "2026-12-31"
+    registry["verified_at"] = "2026-12-31"
+    expired = validate_registry(
+        registry, today=date(2026, 12, 31), enforce_freshness=True
+    )
+    assert any("gemini-3-8-flash" in error for error in expired.errors)
+
+
+def test_lifecycle_distinguishes_retired_variants_from_active_models():
+    models = load_registry()["models"]
+    for key in ("gpt-5-1", "gpt-5-2", "gpt-5-2-pro", "gemini-3-1-flash-lite"):
+        assert models[key]["status"] == "active"
+    for key in (
+        "claude-opus-4-1",
+        "claude-opus-4",
+        "claude-sonnet-4",
+        "gpt-5-2-codex",
+        "codex-mini-latest",
+        "gemini-3-pro",
+        "gemini-3-1-flash-lite-preview",
+        "grok-3",
+    ):
+        assert models[key]["status"] == "retired"
+    assert models["gpt-5"]["status"] == "deprecated"
+    assert models["gpt-4o-2024-05-13"]["status"] == "deprecated"
+    assert models["gpt-4o"]["status"] == "active"
+    assert "Invite-only" in models["claude-mythos-5-1"]["notes"]
+
+
+def _public_xai_source(data: object, tail: str = ";") -> bytes:
+    return (
+        "<script>globalThis.__XAI_PUBLIC_MODELS__="
+        + json.dumps(data)
+        + tail
+        + "</script>"
+    ).encode()
+
+
+def _public_xai_provider() -> dict[str, Any]:
+    return {
+        "audit_format": "embedded",
+        "audit_start": "globalThis.__XAI_PUBLIC_MODELS__=",
+        "audit_end": "</script>",
+        "required_markers": ["languageModels"],
+    }
+
+
+def _public_xai_model() -> dict[str, Any]:
+    return {
+        "name": "grok-4.6",
+        "aliases": ["model-b", "model-a"],
+        "promptTextTokenPrice": "20000",
+        "completionTextTokenPrice": "60000",
+        "cachedPromptTokenPrice": "5000",
+        "longContextThreshold": "200000",
+        "rpm": 123,
+    }
+
+
+def test_xai_public_snapshot_tracks_prices_and_aliases_not_regional_churn():
+    model = _public_xai_model()
+    provider = _public_xai_provider()
+    first = _public_xai_source({"clusterConfigs": [{"languageModels": [model]}]})
+    changed_metadata: dict[str, Any] = {
+        **model,
+        "rpm": 456,
+        "aliases": list(reversed(model["aliases"])),
+    }
+    reordered_data: dict[str, Any] = {
+        "clusterConfigs": [
+            {"imageGenerationModels": []},
+            {"clusterName": "empty"},
+            {"languageModels": [changed_metadata, model]},
+        ]
+    }
+    reordered = _public_xai_source(reordered_data)
+    assert update_model_pricing._source_hash(
+        first, provider
+    ) == update_model_pricing._source_hash(reordered, provider)
+    for field, value in (
+        ("cachedPromptTokenPrice", "3000"),
+        ("longContextThreshold", "300000"),
+        ("aliases", ["retargeted"]),
+    ):
+        variant: dict[str, Any] = {**model, field: value}
+        changed = _public_xai_source(
+            {"clusterConfigs": [{"languageModels": [variant]}]}
+        )
+        assert update_model_pricing._source_hash(
+            first, provider
+        ) != update_model_pricing._source_hash(changed, provider)
+
+
+_INVALID_XAI_PAYLOADS: list[dict[str, Any]] = [
+    {},
+    {"clusterConfigs": []},
+    {"clusterConfigs": [None]},
+    {"clusterConfigs": [{"languageModels": {}}]},
+    {"clusterConfigs": [{"languageModels": [{"name": "incomplete"}]}]},
+    {
+        "clusterConfigs": [
+            {"languageModels": [dict(_public_xai_model(), cachedPromptTokenPrice=None)]}
+        ]
+    },
+    {
+        "clusterConfigs": [
+            {"languageModels": [dict(_public_xai_model(), promptTextTokenPrice="NaN")]}
+        ]
+    },
+]
+
+
+@pytest.mark.parametrize("data", _INVALID_XAI_PAYLOADS)
+def test_xai_public_snapshot_fails_closed_on_invalid_data(data: object):
+    provider = _public_xai_provider()
+    provider["required_markers"] = ["globalThis.__XAI_PUBLIC_MODELS__"]
+    with pytest.raises(RuntimeError, match="invalid public model data"):
+        update_model_pricing._source_hash(_public_xai_source(data), provider)
+
+
+def test_xai_public_snapshot_rejects_scripts_after_json():
+    with pytest.raises(RuntimeError, match="unexpected content"):
+        update_model_pricing._source_hash(
+            _public_xai_source(
+                {"clusterConfigs": [{"languageModels": [_public_xai_model()]}]},
+                tail=";run_code()",
+            ),
+            _public_xai_provider(),
+        )
+
+
+def test_xai_public_snapshot_does_not_decode_script_html_entities():
+    model = _public_xai_model()
+    provider = _public_xai_provider()
+    malformed: dict[str, Any] = {**model, "promptTextTokenPrice": "&#50;0000"}
+    with pytest.raises(RuntimeError, match="invalid public model data"):
+        update_model_pricing._source_hash(
+            _public_xai_source({"clusterConfigs": [{"languageModels": [malformed]}]}),
+            provider,
+        )
+    plain = _public_xai_source({"clusterConfigs": [{"languageModels": [model]}]})
+    entity_alias: dict[str, Any] = {**model, "aliases": ["model&#45;a", "model-b"]}
+    literal = _public_xai_source(
+        {"clusterConfigs": [{"languageModels": [entity_alias]}]}
+    )
+    assert update_model_pricing._source_hash(
+        plain, provider
+    ) != update_model_pricing._source_hash(literal, provider)
+
+
+def test_new_openai_family_is_covered_by_model_discovery():
+    registry = load_registry()
+    upstream = {"gpt-6-astra-mini": {"litellm_provider": "openai", "mode": "chat"}}
+    *_, discovered = update_model_pricing._audit_litellm(registry, upstream)
+    assert any("gpt-6-astra-mini" in item for item in discovered)
 
 
 def test_registry_rejects_normalised_alias_collisions():
@@ -97,7 +277,7 @@ def test_visible_page_hash_ignores_script_churn():
 
 
 def test_source_hash_is_scoped_to_pricing_section():
-    provider = {
+    provider: dict[str, Any] = {
         "audit_format": "text",
         "audit_start": "PRICING START",
         "audit_end": "PRICING END",
@@ -115,7 +295,7 @@ def test_source_hash_is_scoped_to_pricing_section():
 
 
 def test_source_hash_fails_closed_on_missing_section_boundary():
-    provider = {
+    provider: dict[str, Any] = {
         "audit_format": "text",
         "audit_start": "PRICING START",
         "audit_end": "PRICING END",
@@ -129,7 +309,7 @@ def test_source_hash_fails_closed_on_missing_section_boundary():
 
 
 def test_embedded_source_hash_ignores_non_pricing_model_metadata():
-    provider = {
+    provider: dict[str, Any] = {
         "audit_format": "embedded",
         "audit_start": "languageModels",
         "audit_end": "embeddingModels",
@@ -173,7 +353,7 @@ def test_informational_candidates_do_not_trigger_audit_pr():
 
 
 def test_litellm_audit_filters_specialized_and_prefix_false_positives():
-    registry = {
+    registry: dict[str, Any] = {
         "providers": {
             "openai": {
                 "litellm_provider": "openai",
@@ -192,7 +372,7 @@ def test_litellm_audit_filters_specialized_and_prefix_false_positives():
             }
         },
     }
-    upstream = {
+    upstream: dict[str, Any] = {
         "gpt-5": {
             "litellm_provider": "openai",
             "output_cost_per_token": 0.00001,

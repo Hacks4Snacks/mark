@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "revision": "2026-07-14.1",
-  "verified_at": "2026-07-14",
+  "revision": "2026-09-10.1",
+  "verified_at": "2026-09-10",
   "warn_after_days": 30,
   "fail_after_days": 60,
   "providers": {
@@ -9,18 +9,19 @@
       "discovery_prefixes": [
         "claude-"
       ],
-      "official_pricing_url": "https://platform.claude.com/docs/en/docs/about-claude/pricing",
+      "official_pricing_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "audit_url": "https://platform.claude.com/docs/en/about-claude/pricing.md",
       "audit_format": "text",
       "audit_start": "## Model pricing",
       "audit_end": "## Cloud platform pricing",
       "required_markers": [
-        "Claude Opus 4.8",
-        "$5 / MTok",
+        "Claude Fable 5.1",
+        "$0.25 / MTok",
+        "Claude Opus 5",
         "Claude Sonnet 5"
       ],
       "litellm_provider": "anthropic",
-      "pricing_page_sha256": "f4091fad100b39d999caf36ee93b8323dafd40e887e264fd1237f17f48f58562"
+      "pricing_page_sha256": "5b83da8833243d59cee82c3ed89a42d4076b563b34ba417f7ba58885008787c5"
     },
     "google": {
       "discovery_prefixes": [
@@ -29,24 +30,39 @@
       "official_pricing_url": "https://ai.google.dev/gemini-api/docs/pricing",
       "audit_url": "https://ai.google.dev/gemini-api/docs/pricing",
       "audit_format": "visible",
-      "audit_start": "Gemini 3.5 Flash",
+      "audit_start": "Gemini Developer API pricing",
       "audit_end": "Notes",
       "required_markers": [
-        "gemini-3.5-flash",
-        "$1.50",
+        "gemini-3.8-flash",
+        "$0.75",
+        "gemini-3.5-flash-lite",
         "gemini-2.5-pro"
       ],
       "litellm_provider": "gemini",
-      "pricing_page_sha256": "8fc2a0066baf881eac7280a25d9720f1e8d143a1e985dc0f158c9b241747ccb7"
+      "pricing_page_sha256": "0e239d19c33329de03424f1920a29897725663ba2b01ecf8a1868fa06c3919d8"
     },
     "local": {
       "official_pricing_url": null,
       "litellm_provider": null
     },
+    "cursor": {
+      "discovery_prefixes": ["composer-"],
+      "official_pricing_url": "https://cursor.com/docs/models",
+      "audit_url": "https://cursor.com/docs/models",
+      "audit_format": "visible",
+      "audit_start": "The Cursor Models pool includes",
+      "audit_end": "Other Models",
+      "required_markers": ["Composer 2.5", "Cache Read", "$ 0.5", "$ 2.5"],
+      "litellm_provider": "cursor",
+      "pricing_page_sha256": "32db5d6d20449f5fa4f4606d546d353e1228e88d8b5ded7b869cb46bbde14484"
+    },
     "openai": {
       "discovery_prefixes": [
+        "gpt-6",
         "gpt-5",
         "gpt-4.1",
+        "chat-latest",
+        "gpt-daybreak-",
         "o1",
         "o3",
         "o4",
@@ -57,12 +73,13 @@
       "audit_format": "text",
       "audit_start": "Flagship models",
       "required_markers": [
+        "gpt-6-astra",
         "gpt-5.6-sol",
         "gpt-5.5-pro",
         "gpt-5.4-mini"
       ],
       "litellm_provider": "openai",
-      "pricing_page_sha256": "9549c24f5036e4cf981917b46761f2a7227df1de42a8c0e363eed0683a559610"
+      "pricing_page_sha256": "8267eb458b8efa3e3a91937012a9359d24b9c69d7b7ed079099b0d11dd68ef82"
     },
     "xai": {
       "discovery_prefixes": [
@@ -71,18 +88,45 @@
       "official_pricing_url": "https://docs.x.ai/developers/models",
       "audit_url": "https://docs.x.ai/developers/models",
       "audit_format": "embedded",
-      "audit_start": "languageModels",
-      "audit_end": "embeddingModels",
+      "audit_start": "globalThis.__XAI_PUBLIC_MODELS__=",
+      "audit_end": "</script>",
       "required_markers": [
-        "grok-4.3",
+        "grok-4.6",
+        "grok-4.5",
+        "cachedPromptTokenPrice",
         "promptTextTokenPrice",
         "completionTextTokenPrice"
       ],
       "litellm_provider": "xai",
-      "pricing_page_sha256": "ad2e1647c8d7329110f5b339c9212749ad26b546b3d5b3fb91c31843e5e8f2b6"
+      "pricing_page_sha256": "09097e54e0b47b7b491c7368bb2a5601ca3335a1eb9395a89c9793ebfe0f0022"
     }
   },
   "models": {
+    "claude-fable-5-1": {
+      "provider": "anthropic",
+      "status": "active",
+      "effective_from": "2026-09-01",
+      "pricing": {
+        "input": 10.0,
+        "output": 50.0,
+        "cached_input": 0.25,
+        "cache_write_5m": 12.5,
+        "cache_write_1h": 20.0
+      }
+    },
+    "claude-mythos-5-1": {
+      "provider": "anthropic",
+      "status": "active",
+      "effective_from": "2026-09-01",
+      "notes": "Invite-only Project Glasswing model; catalog inclusion does not imply account access.",
+      "pricing": {
+        "input": 10.0,
+        "output": 50.0,
+        "cached_input": 0.25,
+        "cache_write_5m": 12.5,
+        "cache_write_1h": 20.0
+      }
+    },
     "claude-fable-5": {
       "provider": "anthropic",
       "status": "active",
@@ -95,15 +139,27 @@
       }
     },
     "claude-mythos-5": {
-      "audit": false,
       "provider": "anthropic",
       "status": "active",
+      "notes": "Invite-only Project Glasswing model; retains its original cache-read rate.",
       "pricing": {
         "input": 10.0,
         "output": 50.0,
         "cached_input": 1.0,
         "cache_write_5m": 12.5,
         "cache_write_1h": 20.0
+      }
+    },
+    "claude-opus-5": {
+      "provider": "anthropic",
+      "status": "active",
+      "effective_from": "2026-07-24",
+      "pricing": {
+        "input": 5.0,
+        "output": 25.0,
+        "cached_input": 0.5,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.0
       }
     },
     "claude-opus-4-8": {
@@ -152,13 +208,24 @@
     },
     "claude-opus-4-1": {
       "provider": "anthropic",
-      "status": "deprecated",
+      "status": "retired",
+      "notes": "Retired on the direct Claude API on 2026-08-05; cloud-hosted availability can differ.",
       "aliases": [
-        "claude-opus-4-20250514",
-        "claude-opus-4",
-        "claude-4-opus",
         "claude-4-1-opus"
       ],
+      "pricing": {
+        "input": 15.0,
+        "output": 75.0,
+        "cached_input": 1.5,
+        "cache_write_5m": 18.75,
+        "cache_write_1h": 30.0
+      }
+    },
+    "claude-opus-4": {
+      "provider": "anthropic",
+      "status": "retired",
+      "notes": "Retired on the direct Claude API on 2026-06-15; retained for historical sessions.",
+      "aliases": ["claude-opus-4-20250514", "claude-opus-4-0", "claude-4-opus"],
       "pricing": {
         "input": 15.0,
         "output": 75.0,
@@ -170,8 +237,7 @@
     "claude-sonnet-5": {
       "provider": "anthropic",
       "status": "active",
-      "effective_until": "2026-08-31",
-      "review_after": "2026-08-31",
+      "notes": "The launch price is now permanent; the planned 2026-09-01 increase was canceled.",
       "pricing": {
         "input": 2.0,
         "output": 10.0,
@@ -194,6 +260,32 @@
     "claude-sonnet-4-5": {
       "provider": "anthropic",
       "status": "active",
+      "pricing": {
+        "input": 3.0,
+        "output": 15.0,
+        "cached_input": 0.3,
+        "cache_write_5m": 3.75,
+        "cache_write_1h": 6.0
+      }
+    },
+    "claude-sonnet-4": {
+      "provider": "anthropic",
+      "status": "retired",
+      "notes": "Retired on the direct Claude API on 2026-06-15.",
+      "aliases": ["claude-sonnet-4-0", "claude-4-sonnet"],
+      "pricing": {
+        "input": 3.0,
+        "output": 15.0,
+        "cached_input": 0.3,
+        "cache_write_5m": 3.75,
+        "cache_write_1h": 6.0
+      }
+    },
+    "claude-3-7-sonnet": {
+      "provider": "anthropic",
+      "status": "retired",
+      "notes": "Retired on the direct Claude API on 2026-02-19.",
+      "aliases": ["claude-sonnet-3-7"],
       "pricing": {
         "input": 3.0,
         "output": 15.0,
@@ -294,37 +386,89 @@
         "cache_write_1h": 2.0
       }
     },
+    "gpt-6-astra": {
+      "provider": "openai",
+      "status": "active",
+      "effective_from": "2026-09-03",
+      "notes": "Standard short-context rates. OpenAI cache writes have a 30-minute TTL; cache_write_5m is Mark's compatibility field name.",
+      "pricing": {
+        "input": 10.0,
+        "output": 50.0,
+        "cached_input": 1.0,
+        "cache_write_5m": 12.5
+      }
+    },
     "gpt-5-6-sol": {
       "provider": "openai",
       "status": "active",
+      "effective_from": "2026-08-21",
+      "review_after": "2026-11-21",
+      "notes": "Promotional pricing is available at least through 2026-11-21; no fixed expiration or successor price announced. Cache-write TTL is 30 minutes.",
       "aliases": [
-        "gpt-5-6"
+        "gpt-5-6",
+        "gpt-daybreak-blue-latest"
       ],
       "pricing": {
-        "input": 5.0,
-        "output": 30.0,
-        "cached_input": 0.5,
-        "cache_write_5m": 6.25
+        "input": 4.0,
+        "output": 20.0,
+        "cached_input": 0.4,
+        "cache_write_5m": 5.0
       }
     },
     "gpt-5-6-terra": {
       "provider": "openai",
       "status": "active",
+      "effective_from": "2026-07-30",
       "pricing": {
-        "input": 2.5,
-        "output": 15.0,
-        "cached_input": 0.25,
-        "cache_write_5m": 3.125
+        "input": 2.0,
+        "output": 12.0,
+        "cached_input": 0.2,
+        "cache_write_5m": 2.5
       }
     },
     "gpt-5-6-luna": {
       "provider": "openai",
       "status": "active",
+      "effective_from": "2026-07-30",
       "pricing": {
-        "input": 1.0,
-        "output": 6.0,
-        "cached_input": 0.1,
-        "cache_write_5m": 1.25
+        "input": 0.2,
+        "output": 1.2,
+        "cached_input": 0.02,
+        "cache_write_5m": 0.25
+      }
+    },
+    "gpt-5-6-cyber": {
+      "provider": "openai",
+      "status": "active",
+      "aliases": ["gpt-daybreak-red-latest"],
+      "notes": "Daybreak access requires approval; not a general account-availability claim. Cache-write TTL is 30 minutes.",
+      "pricing": {
+        "input": 12.5,
+        "output": 75.0,
+        "cached_input": 1.25,
+        "cache_write_5m": 15.625
+      }
+    },
+    "gpt-5-5-cyber": {
+      "provider": "openai",
+      "status": "active",
+      "notes": "Daybreak restricted-access model; no extra cache-write tariff published.",
+      "pricing": {
+        "input": 12.5,
+        "output": 75.0,
+        "cached_input": 1.25,
+        "cache_write_5m": 12.5
+      }
+    },
+    "chat-latest": {
+      "provider": "openai",
+      "status": "active",
+      "notes": "ChatGPT Instant snapshot; not an alias for GPT-5.6 Sol or GPT-6 Astra.",
+      "pricing": {
+        "input": 5.0,
+        "output": 30.0,
+        "cached_input": 0.5,
+        "cache_write_5m": 5.0
       }
     },
     "gpt-5-5-pro": {
@@ -407,7 +551,7 @@
     },
     "gpt-5-2-pro": {
       "provider": "openai",
-      "status": "deprecated",
+      "status": "active",
       "pricing": {
         "input": 21.0,
         "output": 168.0,
@@ -417,7 +561,8 @@
     },
     "gpt-5-2-codex": {
       "provider": "openai",
-      "status": "deprecated",
+      "status": "retired",
+      "notes": "Direct API shutdown on 2026-07-23; historical rates retained.",
       "pricing": {
         "input": 1.75,
         "output": 14.0,
@@ -427,7 +572,7 @@
     },
     "gpt-5-2": {
       "provider": "openai",
-      "status": "deprecated",
+      "status": "active",
       "pricing": {
         "input": 1.75,
         "output": 14.0,
@@ -437,7 +582,7 @@
     },
     "gpt-5-1-codex-mini": {
       "provider": "openai",
-      "status": "deprecated",
+      "status": "retired",
       "pricing": {
         "input": 0.25,
         "output": 2.0,
@@ -447,7 +592,7 @@
     },
     "gpt-5-1-codex": {
       "provider": "openai",
-      "status": "deprecated",
+      "status": "retired",
       "pricing": {
         "input": 1.25,
         "output": 10.0,
@@ -457,7 +602,7 @@
     },
     "gpt-5-1": {
       "provider": "openai",
-      "status": "deprecated",
+      "status": "active",
       "pricing": {
         "input": 1.25,
         "output": 10.0,
@@ -477,7 +622,7 @@
     },
     "gpt-5-mini": {
       "provider": "openai",
-      "status": "active",
+      "status": "deprecated",
       "pricing": {
         "input": 0.25,
         "output": 2.0,
@@ -487,7 +632,7 @@
     },
     "gpt-5-nano": {
       "provider": "openai",
-      "status": "active",
+      "status": "deprecated",
       "pricing": {
         "input": 0.05,
         "output": 0.4,
@@ -497,13 +642,64 @@
     },
     "gpt-5": {
       "provider": "openai",
-      "status": "active",
+      "status": "deprecated",
+      "review_after": "2026-12-11",
+      "notes": "Default GPT-5, mini, nano, pro and o3 snapshots are scheduled for direct API shutdown on 2026-12-11.",
       "pricing": {
         "input": 1.25,
         "output": 10.0,
         "cached_input": 0.125,
         "cache_write_5m": 1.25
       }
+    },
+    "gpt-5-codex": {
+      "provider": "openai",
+      "status": "retired",
+      "notes": "Direct API shutdown on 2026-07-23.",
+      "pricing": {"input": 1.25, "output": 10.0, "cached_input": 0.125, "cache_write_5m": 1.25}
+    },
+    "gpt-5-1-codex-max": {
+      "provider": "openai",
+      "status": "retired",
+      "notes": "Direct API shutdown on 2026-07-23.",
+      "pricing": {"input": 1.25, "output": 10.0, "cached_input": 0.125, "cache_write_5m": 1.25}
+    },
+    "gpt-5-chat-latest": {
+      "provider": "openai",
+      "status": "retired",
+      "notes": "Direct API shutdown on 2026-07-23; kept separate from the current chat-latest tariff.",
+      "pricing": {"input": 1.25, "output": 10.0, "cached_input": 0.125, "cache_write_5m": 1.25}
+    },
+    "gpt-5-1-chat-latest": {
+      "provider": "openai",
+      "status": "retired",
+      "notes": "Direct API shutdown on 2026-07-23.",
+      "pricing": {"input": 1.25, "output": 10.0, "cached_input": 0.125, "cache_write_5m": 1.25}
+    },
+    "gpt-5-2-chat-latest": {
+      "provider": "openai",
+      "status": "retired",
+      "notes": "Direct API shutdown on 2026-08-10.",
+      "pricing": {"input": 1.75, "output": 14.0, "cached_input": 0.175, "cache_write_5m": 1.75}
+    },
+    "gpt-5-3-chat-latest": {
+      "provider": "openai",
+      "status": "retired",
+      "notes": "Direct API shutdown on 2026-08-10.",
+      "pricing": {"input": 1.75, "output": 14.0, "cached_input": 0.175, "cache_write_5m": 1.75}
+    },
+    "chatgpt-4o-latest": {
+      "provider": "openai",
+      "status": "retired",
+      "notes": "Direct API shutdown on 2026-02-17. No cache discount published; input rate used for any reported cached tokens.",
+      "pricing": {"input": 5.0, "output": 15.0, "cached_input": 5.0, "cache_write_5m": 5.0}
+    },
+    "gpt-4o-2024-05-13": {
+      "provider": "openai",
+      "status": "deprecated",
+      "review_after": "2026-10-23",
+      "notes": "Specific snapshot scheduled for shutdown on 2026-10-23; not the general gpt-4o tariff. No cache discount published.",
+      "pricing": {"input": 5.0, "output": 15.0, "cached_input": 5.0, "cache_write_5m": 5.0}
     },
     "gpt-4-1-mini": {
       "provider": "openai",
@@ -517,7 +713,7 @@
     },
     "gpt-4-1-nano": {
       "provider": "openai",
-      "status": "active",
+      "status": "deprecated",
       "pricing": {
         "input": 0.1,
         "output": 0.4,
@@ -567,13 +763,25 @@
     },
     "codex-mini-latest": {
       "provider": "openai",
-      "status": "deprecated",
+      "status": "retired",
       "pricing": {
         "input": 1.5,
         "output": 6.0,
         "cached_input": 0.375,
         "cache_write_5m": 1.5
       }
+    },
+    "o3-pro": {
+      "provider": "openai",
+      "status": "deprecated",
+      "notes": "Direct API shutdown scheduled for 2026-12-11. No cache discount published.",
+      "pricing": {"input": 20.0, "output": 80.0, "cached_input": 20.0, "cache_write_5m": 20.0}
+    },
+    "o1-pro": {
+      "provider": "openai",
+      "status": "deprecated",
+      "notes": "Direct API shutdown scheduled for 2026-10-23. No cache discount published.",
+      "pricing": {"input": 150.0, "output": 600.0, "cached_input": 150.0, "cache_write_5m": 150.0}
     },
     "o3-mini": {
       "provider": "openai",
@@ -597,7 +805,7 @@
     },
     "o1-mini": {
       "provider": "openai",
-      "status": "deprecated",
+      "status": "retired",
       "pricing": {
         "input": 1.1,
         "output": 4.4,
@@ -614,6 +822,35 @@
         "cached_input": 7.5,
         "cache_write_5m": 15.0
       }
+    },
+    "gemini-3-8-flash": {
+      "provider": "google",
+      "status": "active",
+      "effective_until": "2026-12-31",
+      "review_after": "2026-12-31",
+      "notes": "Promotional standard text rates through 2026-12-31; announced 2027-01-01 rates: input 1.50, output 7.50, cached input 0.15 USD/MTok. No automatic date-based switching.",
+      "pricing": {"input": 0.75, "output": 3.75, "cached_input": 0.075, "cache_write_5m": 0.75}
+    },
+    "gemini-3-7-flash": {
+      "provider": "google",
+      "status": "active",
+      "effective_until": "2026-12-31",
+      "review_after": "2026-12-31",
+      "notes": "Promotional standard text rates through 2026-12-31; announced 2027-01-01 rates: input 1.50, output 7.50, cached input 0.15 USD/MTok.",
+      "pricing": {"input": 0.75, "output": 3.75, "cached_input": 0.075, "cache_write_5m": 0.75}
+    },
+    "gemini-3-6-flash": {
+      "provider": "google",
+      "status": "active",
+      "effective_until": "2026-12-31",
+      "review_after": "2026-12-31",
+      "notes": "Promotional standard text rates through 2026-12-31; announced 2027-01-01 rates: input 1.50, output 7.50, cached input 0.15 USD/MTok.",
+      "pricing": {"input": 0.75, "output": 3.75, "cached_input": 0.075, "cache_write_5m": 0.75}
+    },
+    "gemini-3-5-flash-lite": {
+      "provider": "google",
+      "status": "active",
+      "pricing": {"input": 0.3, "output": 2.5, "cached_input": 0.03, "cache_write_5m": 0.3}
     },
     "gemini-3-5-flash": {
       "provider": "google",
@@ -642,9 +879,6 @@
     "gemini-3-1-flash-lite": {
       "provider": "google",
       "status": "active",
-      "aliases": [
-        "gemini-3.1-flash-lite-preview"
-      ],
       "pricing": {
         "input": 0.25,
         "output": 1.5,
@@ -652,9 +886,16 @@
         "cache_write_5m": 0.25
       }
     },
+    "gemini-3-1-flash-lite-preview": {
+      "provider": "google",
+      "status": "retired",
+      "notes": "Preview retired 2026-05-25; the stable Gemini 3.1 Flash-Lite model remains available.",
+      "pricing": {"input": 0.25, "output": 1.5, "cached_input": 0.025, "cache_write_5m": 0.25}
+    },
     "gemini-3-pro": {
       "provider": "google",
-      "status": "active",
+      "status": "retired",
+      "notes": "Original preview shut down 2026-03-09; requests using its redirected ID may use Gemini 3.1 Pro. Historical rates retained.",
       "aliases": [
         "gemini-3-pro-preview"
       ],
@@ -769,16 +1010,14 @@
         "cache_write_5m": 1.25
       }
     },
-    "grok-code-fast": {
+    "grok-build-0-1": {
       "provider": "xai",
       "status": "active",
-      "litellm_ignore_fields": [
-        "input",
-        "output",
-        "cached_input"
-      ],
+      "notes": "Current destination for Code Fast aliases since the 2026-05-15 retirement; older alias usage may have different historical rates.",
       "aliases": [
-        "grok-build-0-1"
+        "grok-code-fast",
+        "grok-code-fast-1",
+        "grok-code-fast-1-0825"
       ],
       "pricing": {
         "input": 1.0,
@@ -797,8 +1036,13 @@
       ],
       "aliases": [
         "grok-4.20-0309-reasoning",
-        "grok-4.20-0309-non-reasoning"
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-reasoning",
+        "grok-4.20-non-reasoning",
+        "grok-4.20-beta-0309-reasoning",
+        "grok-4.20-beta-0309-non-reasoning"
       ],
+      "notes": "Reasoning/non-reasoning IDs share this tariff. Reviewed LiteLLM legacy aliases can retain older prices; official xAI pricing is authoritative.",
       "pricing": {
         "input": 1.25,
         "output": 2.5,
@@ -806,13 +1050,26 @@
         "cache_write_5m": 1.25
       }
     },
+    "grok-4-20-multi-agent-0309": {
+      "provider": "xai",
+      "status": "active",
+      "aliases": ["grok-4.20-multi-agent", "grok-4.20-multi-agent-latest", "grok-4.20-multi-agent-beta-0309", "grok-4.20-multi-agent-beta-latest"],
+      "notes": "Beta; total billed usage includes leader and sub-agent tokens, not a fixed agent-count multiplier.",
+      "pricing": {"input": 1.25, "output": 2.5, "cached_input": 0.2, "cache_write_5m": 1.25}
+    },
+    "grok-4-6": {
+      "provider": "xai",
+      "status": "active",
+      "pricing": {"input": 2.0, "output": 6.0, "cached_input": 0.5, "cache_write_5m": 2.0}
+    },
     "grok-4-5": {
       "provider": "xai",
       "status": "active",
+      "aliases": ["grok-build-latest"],
       "pricing": {
         "input": 2.0,
         "output": 6.0,
-        "cached_input": 0.5,
+        "cached_input": 0.3,
         "cache_write_5m": 2.0
       }
     },
@@ -828,7 +1085,8 @@
     },
     "grok-4": {
       "provider": "xai",
-      "status": "deprecated",
+      "status": "retired",
+      "notes": "Original grok-4-0709 retired 2026-05-15; redirected requests may use Grok 4.3 rates. Historical rates retained.",
       "pricing": {
         "input": 3.0,
         "output": 15.0,
@@ -838,7 +1096,8 @@
     },
     "grok-3": {
       "provider": "xai",
-      "status": "deprecated",
+      "status": "retired",
+      "notes": "Original model retired 2026-05-15; redirected requests may use Grok 4.3 rates. Historical rates retained.",
       "pricing": {
         "input": 3.0,
         "output": 15.0,
@@ -857,10 +1116,24 @@
         "cache_write_5m": 2.0
       }
     },
+    "composer-2-5-fast": {
+      "provider": "cursor",
+      "status": "active",
+      "aliases": ["composer 2.5 (fast)"],
+      "notes": "Explicit Fast variant of Cursor Composer 2.5; included subscription usage is not modeled.",
+      "pricing": {"input": 3.0, "output": 15.0, "cached_input": 0.5, "cache_write_5m": 3.0}
+    },
+    "composer-2-5": {
+      "provider": "cursor",
+      "status": "active",
+      "aliases": ["composer 2.5"],
+      "pricing": {"input": 0.5, "output": 2.5, "cached_input": 0.2, "cache_write_5m": 0.5}
+    },
     "composer": {
       "provider": "local",
       "status": "fallback",
       "audit": false,
+      "notes": "Legacy unspecified Composer fallback only; zero is not a claim that current Composer usage is free. Explicit Composer 2.5 IDs use Cursor rates.",
       "pricing": {
         "input": 0.0,
         "output": 0.0,
