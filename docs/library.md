@@ -19,19 +19,83 @@ Each snippet card shows:
 - The **language** tag.
 - The **source session** title (with its source icon and repository), which opens
   the turn containing that snippet in one click when its turn is known.
+- The session's last-update date, or creation date when no update is recorded.
 - A **copy** button to grab the snippet to your clipboard.
 - **Save solution** to preview and save an independent, annotated copy.
 
 ## Filtering
 
-- **Filter by content** — free-text match against the snippet body (e.g. find
-  every block mentioning `kubectl` or `JWT`).
-- **Filter by language** — a dropdown of every language found, with counts.
+- **Filter by content** — literal substring match against the snippet body
+  (e.g. find every block mentioning `kubectl` or `JWT`). `%`, `_`, and backslashes
+  are literal characters, not query wildcards. This is not semantic or FTS search.
+- **Filter by language** — an exact language selection with snippet counts.
 - **Commands only** — a toggle that narrows to runnable shell snippets:
   `bash`, `sh`, `shell`, `zsh`, `console`, `powershell`, `ps1`, and similar.
+  It temporarily overrides and disables the language selection; turning it off
+  restores that language filter. Commands are never executed by Mark.
+- **Repository** — an exact project selection. All repositories includes
+  snippets whose session has no repository recorded.
+- **From / Through (UTC)** — inclusive calendar dates on the conversation's last
+  update, falling back to its creation timestamp. These are session dates, not
+  individual turn dates. Undated sessions appear only when no date bound is set.
+
+Combine content, repository, and dates with either language or commands-only.
+These controls belong to **Extracted snippets**, independently of conversation
+search's sidebar filters and the Curated solutions tab.
+
+Dropdown counts cover all visible, browsable snippets, not just matches for the
+current filters. Hidden sessions and disabled adapters are excluded from results,
+totals, and dropdowns. A selected repository/language that disappears is retained
+as **not currently available** so refreshing cannot silently broaden your query.
 
 The **Commands only** view is the quickest way to recover *"that one CLI
 incantation I ran three weeks ago."*
+
+## Browsing all results
+
+**Previous / Next** pages show up to **80 snippets at a time**, with an exact
+matching total and range such as **81–160 of 187**, rather than stopping at
+**80+**. Controls are available above and below multi-page results. Moving pages
+replaces the displayed cards instead of growing an unbounded list. Keyboard page
+activation moves focus to the range above the new results.
+
+Changing any filter or choosing **Clear filters** returns to the first page.
+Opening a source turn and returning, or switching between Library tabs, retains
+the extracted page and filters in the current app instance. A full browser reload
+starts extracted browsing at its defaults; filter/page URLs and persistent search
+history are not part of this increment.
+
+**Refresh** reloads the first page and dropdown choices without changing filters;
+it does not ingest new source content. A failed page clears the old count and
+offers **Retry this page** at the same offset. Invalid date ranges show an inline
+message instead of displaying results for a different scope.
+
+Rows sort by the session's update/creation **instant**, newest first, with a
+unique snippet-ID tiebreaker. Pagination neither skips nor duplicates entries in
+an unchanged archive. Each response's total and rows share one database snapshot;
+separate page requests do not. Ingestion, hiding, deletion, or source enablement
+changes between pages can move results. Refresh to start from the latest state.
+If a requested page has disappeared, the UI moves to the last available page.
+
+## Extracted snippet API
+
+- `GET /api/snippets`: optional `q`, `language`, `commands`, `repo`, `date_from`,
+  `date_to`, `offset`, and `limit`. Dates use `YYYY-MM-DD` and the inclusive UTC
+  semantics above. `commands=true` overrides `language` as before.
+- Responses retain `snippets` and add `total`, `offset`, `limit`, and `has_more`.
+  `offset` defaults to 0 and must be a nonnegative SQLite integer. `limit` defaults
+  to 80 and keeps the existing clamp to 1–300; the effective value is returned.
+  An offset beyond the end returns an empty page and the exact total, with
+  `has_more=false`. Invalid dates, reversed ranges, or invalid offsets return 422.
+- `GET /api/snippets/languages`: visible language/count pairs, excluding blocks
+  that are not browsable. Counts do not apply the active filters.
+- `GET /api/snippets/repositories`: visible repository/count pairs under the same
+  browsable-snippet and visibility rules, alphabetically ordered. Sessions without
+  a repository are included by All repositories but have no dropdown entry.
+
+Existing snippet fields and the Python `snippets()` list interface remain
+compatible. The paged repository interface is `list_snippets()`. No migration,
+reindex, or additional dependency is required.
 
 ## Curated solutions
 
@@ -68,7 +132,7 @@ Switch to **Curated solutions** to search titles, copied content, annotations,
 tags, and prerequisites. Combine free-text search with an exact tag, review
 status, and **Favorites only**. Favorites sort first, followed by the most
 recently updated solutions. Previous/next pages show 25 entries at a time with a
-total count; this is independent of the extracted-snippet result limit.
+total count; this is independent of extracted-snippet filters and pagination.
 
 Use **Open / edit** to update the title, annotations, tags, favorite, review
 status, or prerequisites. Tags are normalized to lowercase, deduplicated, and

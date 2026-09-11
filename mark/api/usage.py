@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -35,15 +36,36 @@ def api_snippet_languages() -> list[dict[str, Any]]:
     return snippets_repo.languages()
 
 
+@router.get("/api/snippets/repositories")
+def api_snippet_repositories() -> list[dict[str, Any]]:
+    return snippets_repo.repositories()
+
+
 @router.get("/api/snippets", response_model=SnippetsResponse)
 def api_snippets(
-    q: str = "", language: str = "", commands: bool = False, limit: int = 80
+    q: str = "",
+    language: str = "",
+    commands: bool = False,
+    limit: int = 80,
+    repo: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    offset: int = Query(default=0, ge=0, le=2**63 - 1),
 ) -> dict[str, Any]:
-    return {
-        "snippets": snippets_repo.snippets(
-            q=q, language=language, commands=commands, limit=limit
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(
+            status_code=422, detail="date_from must not be after date_to"
         )
-    }
+    return snippets_repo.list_snippets(
+        q=q,
+        language=language,
+        commands=commands,
+        limit=limit,
+        repo=repo,
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=date_to.isoformat() if date_to else None,
+        offset=offset,
+    )
 
 
 @router.post("/api/solutions/preview")

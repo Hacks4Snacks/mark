@@ -85,7 +85,8 @@ consistent read-only snapshot.
   topics, plus a "show hidden only" toggle.
 - **Top-bar actions:**
   - **Collections** — auto-updating groups of conversations.
-  - **Library** — every extracted code block and shell command.
+  - **Library** — paged code blocks and commands with project/date filters, plus
+    independently curated answers and snippets.
   - **Usage** — spend, duration and token analytics.
   - **Sources** — source paths, sync history, index coverage, and retry controls.
   - **Ask** — natural-language Q&A (off by default; needs `MARK_ENABLE_ASK=1` and a local LLM).

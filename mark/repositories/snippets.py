@@ -24,25 +24,16 @@ SHELL_LANGS = (
 )
 
 
-def languages() -> list[dict[str, Any]]:
-    """Distinct code-block languages with counts, most common first."""
-    visible, visible_params = visibility.sql_where("s")
-    params: list[Any] = list(visible_params)
-    with db.cursor() as cur:
-        rows = cur.execute(
-            "SELECT cb.language AS language, COUNT(*) AS count "
-            "FROM code_blocks cb JOIN sessions s ON s.id = cb.session_id "
-            "WHERE cb.language IS NOT NULL AND cb.language != '' "
-            f"AND {visible} GROUP BY cb.language ORDER BY count DESC, language",
-            params,
-        ).fetchall()
-    return [{"language": r["language"], "count": r["count"]} for r in rows]
-
-
-def snippets(
-    q: str = "", language: str = "", commands: bool = False, limit: int = 80
-) -> list[dict[str, Any]]:
-    """Code blocks filtered by content/language, newest session first."""
+def _snippet_where(
+    *,
+    q: str = "",
+    language: str = "",
+    commands: bool = False,
+    repo: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> tuple[str, list[Any]]:
+    """One scope for snippets, their totals, and the unfiltered facet counts."""
     where = [
         "cb.content IS NOT NULL",
         "LENGTH(TRIM(cb.content)) > 1",
@@ -61,31 +52,99 @@ def snippets(
         esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         where.append("cb.content LIKE ? ESCAPE '\\'")
         params.append(f"%{esc}%")
+    if repo:
+        where.append("s.repository = ?")
+        params.append(repo)
+    # Match conversation search: inclusive UTC calendar dates on the session's
+    # updated timestamp, falling back to creation when it is absent.
+    timestamp = "julianday(COALESCE(s.updated_at, s.created_at))"
+    if date_from:
+        where.append(f"{timestamp} >= julianday(?)")
+        params.append(date_from)
+    if date_to:
+        # SQL day arithmetic also handles 9999-12-31 without Python overflow.
+        where.append(f"{timestamp} < julianday(?) + 1")
+        params.append(date_to)
+    return " AND ".join(where), params
+
+
+def languages() -> list[dict[str, Any]]:
+    """Visible, browsable code-block languages with global snippet counts."""
+    where, params = _snippet_where()
+    with db.cursor() as cur:
+        rows = cur.execute(
+            "SELECT cb.language AS language, COUNT(*) AS count "
+            "FROM code_blocks cb JOIN sessions s ON s.id = cb.session_id "
+            "WHERE cb.language IS NOT NULL AND cb.language != '' "
+            f"AND {where} GROUP BY cb.language ORDER BY count DESC, language",
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def repositories() -> list[dict[str, Any]]:
+    """Projects containing visible, browsable snippets, with global counts."""
+    where, params = _snippet_where()
+    with db.cursor() as cur:
+        rows = cur.execute(
+            "SELECT s.repository, COUNT(*) AS count "
+            "FROM code_blocks cb JOIN sessions s ON s.id = cb.session_id "
+            "WHERE s.repository IS NOT NULL AND s.repository != '' "
+            f"AND {where} GROUP BY s.repository "
+            "ORDER BY s.repository COLLATE NOCASE, s.repository",
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_snippets(
+    *,
+    q: str = "",
+    language: str = "",
+    commands: bool = False,
+    repo: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    offset: int = 0,
+    limit: int = 80,
+) -> dict[str, Any]:
+    """A bounded page and its exact total from the same SQLite read snapshot.
+
+    Ordering is stable for an unchanged archive. Concurrent ingestion/curation
+    may move entries between requests; this is not a cross-request snapshot.
+    """
+    where, params = _snippet_where(
+        q=q, language=language, commands=commands,
+        repo=repo, date_from=date_from, date_to=date_to,
+    )
+    limit = max(1, min(limit, 300))  # Preserve the existing list API's clamp.
+    offset = max(0, min(offset, 2**63 - 1))
+    scope = "FROM code_blocks cb JOIN sessions s ON s.id = cb.session_id WHERE " + where
     sql = (
         "SELECT cb.id, cb.session_id, cb.turn_index, cb.language, cb.content, "
-        "  s.title AS session_title, s.source, s.repository, s.updated_at "
-        "FROM code_blocks cb JOIN sessions s ON s.id = cb.session_id "
-        "WHERE "
-        + " AND ".join(where)
-        + " ORDER BY s.updated_at DESC, cb.id DESC LIMIT ?"
+        "  s.title AS session_title, s.source, s.repository, s.updated_at, s.created_at "
+        + scope
+        + " ORDER BY julianday(COALESCE(s.updated_at, s.created_at)) DESC, cb.id DESC "
+        "LIMIT ? OFFSET ?"
     )
-    params.append(max(1, min(limit, 300)))
-    with db.cursor() as cur:
-        rows = cur.execute(sql, params).fetchall()
-    return [
-        {
-            "id": r["id"],
-            "session_id": r["session_id"],
-            "session_title": r["session_title"],
-            "source": r["source"],
-            "repository": r["repository"],
-            "language": r["language"],
-            "content": r["content"],
-            "turn_index": r["turn_index"],
-            "updated_at": r["updated_at"],
-        }
-        for r in rows
-    ]
+    with db.transaction() as conn:
+        conn.execute("BEGIN")
+        total = conn.execute("SELECT COUNT(*) " + scope, params).fetchone()[0]
+        rows = conn.execute(sql, [*params, limit, offset]).fetchall()
+    return {
+        "snippets": [dict(row) for row in rows],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(rows) < total,
+    }
+
+
+def snippets(
+    q: str = "", language: str = "", commands: bool = False, limit: int = 80
+) -> list[dict[str, Any]]:
+    """Compatibility list interface; use list_snippets for paging and totals."""
+    return list_snippets(q=q, language=language, commands=commands, limit=limit)["snippets"]
 
 
 # Curated copies are user-owned, not ingestion-owned code_blocks. Never retain

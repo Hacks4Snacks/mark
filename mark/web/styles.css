@@ -607,6 +607,16 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .lib-controls select { background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; color: var(--text); font-size: 13px; cursor: pointer; }
 .lib-controls select:disabled { opacity: .5; cursor: not-allowed; }
 .lib-controls .toggle { font-size: 13px; white-space: nowrap; }
+.lib-controls select { max-width: 100%; }
+.lib-scope-controls { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; }
+.lib-scope-controls label { display: grid; gap: 5px; min-width: 0; font-size: 12px; color: var(--muted); flex: 1 1 150px; }
+.lib-scope-controls .lib-repo { flex: 2 1 200px; }
+.lib-scope-controls select, .lib-scope-controls input { width: 100%; min-width: 0; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; font-size: 13px; }
+.lib-filter-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.lib-filter-hint { font-size: 12px; line-height: 1.5; color: var(--muted); margin: 10px 0; }
+.lib-paging { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; margin: 6px 0; font-size: 12px; color: var(--muted); scroll-margin-top: 128px; }
+.lib-paging [data-snippet-range] { text-align: center; }
+#libraryView .list-head { flex-wrap: wrap; }
 .lib-results { display: flex; flex-direction: column; gap: 14px; }
 .snip-card { border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); overflow: hidden; }
 .snip-head { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); }
@@ -615,6 +625,7 @@ select { width: 100%; background: var(--surface-2); border: 1px solid var(--bord
 .snip-open:hover { color: var(--text); }
 .snip-copy { flex: none; border: none; background: var(--chip); color: var(--muted); border-radius: 6px; padding: 4px 9px; cursor: pointer; font-size: 13px; transition: all var(--speed); }
 .snip-copy:hover { background: var(--accent); color: var(--accent-ink); }
+.snip-date { margin: 0; padding: 5px 12px; font-size: 11px; color: var(--faint); }
 .snip-code { margin: 0; padding: 12px 14px; max-height: 320px; overflow: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; background: var(--surface); color: var(--text); }
 .snip-code code { white-space: pre; }
 .lib-loading { padding: 30px; text-align: center; }

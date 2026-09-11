@@ -290,6 +290,10 @@ class SearchResponse(BaseModel):
 
 class SnippetsResponse(BaseModel):
     snippets: list[dict[str, Any]]
+    total: int
+    offset: int
+    limit: int
+    has_more: bool
 
 
 class UsageResponse(BaseModel):

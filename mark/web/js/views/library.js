@@ -8,10 +8,12 @@ import { $, $$, debounce, esc, fmtDate, sessionHash, srcMeta, toast, withTransit
 import { icon } from "../icons.js";
 import { openSession, teardownReading } from "./detail.js";
 
-export const libState = { q: "", language: "", commands: false };
-let snippetData = [];
+export const libState = { q: "", language: "", commands: false, repo: "", dateFrom: "", dateTo: "", offset: 0 };
+const SNIPPET_PAGE_SIZE = 80;
+let snippetPage = null;
 let libraryGeneration = 0;
 let snippetRequest = 0;
+let snippetFacetRequest = 0;
 let solutionRequest = 0;
 const solutionState = { q: "", tag: "", status: "", favorite: false, offset: 0 };
 const STATUS_LABELS = { needs_review: "Needs review", verified: "Verified", outdated: "Outdated" };
@@ -20,12 +22,14 @@ const jsonRequest = (method, body) => ({ method, headers: { "Content-Type": "app
 export async function showLibrary(opts = {}) {
   const generation = ++libraryGeneration;
   snippetRequest += 1;
+  snippetFacetRequest += 1;
   solutionRequest += 1;
   const mode = opts.mode || state.libraryMode || "extracted";
   const leaving = state.view !== "library";
   state.view = "library";
   state.libraryMode = mode;
   state.currentId = null;
+  $("#libCount").textContent = "";
   teardownReading();
   const apply = () => {
     if (generation !== libraryGeneration || state.view !== "library") return;
@@ -45,45 +49,117 @@ export async function showLibrary(opts = {}) {
   const hash = mode === "curated" ? "#/library/curated" : "#/library";
   if (!opts.fromHash && location.hash !== hash) history.pushState(null, "", hash);
   if (mode === "curated") { loadCuratedSolutions(); return; }
-  if (!$("#libLang").dataset.loaded) await loadSnippetLanguages();
-  if (generation === libraryGeneration && state.view === "library") loadSnippets();
+  syncSnippetControls();
+  // Returning from a source turn or the curated tab keeps this browsing position.
+  // Facet refreshes never block the page or reset a selected filter.
+  await Promise.all([loadSnippetFacets(), loadSnippets(false)]);
 }
 
-async function loadSnippetLanguages() {
-  try {
-    const langs = await api("/api/snippets/languages");
-    const sel = $("#libLang");
-    sel.innerHTML = `<option value="">All languages</option>` +
-      langs.map((l) => `<option value="${esc(l.language)}">${esc(l.language)} (${l.count})</option>`).join("");
-    sel.dataset.loaded = "1";
-  } catch (_) { /* non-fatal */ }
+function extractedLibraryActive() {
+  return state.view === "library" && state.libraryMode === "extracted";
 }
 
-export async function loadSnippets() {
+function syncSnippetControls() {
+  for (const [selector, key] of [["#libSearch", "q"], ["#libLang", "language"], ["#libRepo", "repo"], ["#libDateFrom", "dateFrom"], ["#libDateTo", "dateTo"]]) {
+    $(selector).value = libState[key];
+  }
+  $("#libCommands").checked = libState.commands;
+  $("#libLang").disabled = libState.commands;
+}
+
+async function loadSnippetFacets() {
+  const request = ++snippetFacetRequest;
+  const generation = libraryGeneration;
+  const current = () => request === snippetFacetRequest && generation === libraryGeneration && extractedLibraryActive();
+  const failures = await Promise.all([
+    ["#libLang", "language", "languages", "All languages", "language"],
+    ["#libRepo", "repository", "repositories", "All repositories", "repo"],
+  ].map(async ([selector, field, path, label, key]) => {
+    try {
+      const rows = await api("/api/snippets/" + path);
+      if (!current()) return false;
+      const selected = libState[key];
+      const sel = $(selector);
+      sel.innerHTML = `<option value="">${label}</option>` + rows.map(row =>
+        `<option value="${esc(row[field])}">${esc(row[field])} (${row.count.toLocaleString()})</option>`).join("")
+        + (selected && !rows.some(row => row[field] === selected)
+          ? `<option value="${esc(selected)}">${esc(selected)} (not currently available)</option>` : "");
+      sel.value = selected;
+      return false;
+    } catch (_) { return true; }
+  }));
+  if (current()) $("#libFacetError").hidden = !failures.some(Boolean);
+}
+
+function snippetPaging(message = "Loading snippets…") {
+  const page = snippetPage;
+  const range = page ? (page.total ? `${(page.offset + 1).toLocaleString()}–${(page.offset + page.snippets.length).toLocaleString()} of ${page.total.toLocaleString()}` : "0 of 0") : message;
+  $$("[data-snippet-range]").forEach(el => { el.textContent = range; });
+  $$("[data-snippet-page]").forEach(button => {
+    button.disabled = !page || (button.dataset.snippetPage === "previous" ? page.offset === 0 : !page.has_more);
+  });
+  $("#libPagingBottom").hidden = !page || !page.snippets.length || page.total <= page.limit;
+}
+
+function invalidateSnippets() {
+  // A newer Library intent also supersedes a still-loading source turn.
+  teardownReading();
   const request = ++snippetRequest;
+  snippetPage = null;
+  $("#libCount").textContent = "";
+  $("#libError").hidden = true;
+  $("#libRetry").hidden = true;
+  $("#libResults").setAttribute("aria-busy", "true");
+  $("#libResults").innerHTML = `<div class="lib-loading muted">Loading snippets…</div>`;
+  snippetPaging();
+  return request;
+}
+
+export async function loadSnippets(reset = true, focusPage = false, focused = document.activeElement) {
+  if (!extractedLibraryActive()) return;
+  if (reset) libState.offset = 0;
+  const request = invalidateSnippets();
+  const generation = libraryGeneration;
+  const current = () => request === snippetRequest && generation === libraryGeneration && extractedLibraryActive();
   const host = $("#libResults");
-  const params = new URLSearchParams();
+  if (!$("#libDateFrom").validity.valid || !$("#libDateTo").validity.valid ||
+      (libState.dateFrom && libState.dateTo && libState.dateFrom > libState.dateTo)) {
+    host.innerHTML = "";
+    host.setAttribute("aria-busy", "false");
+    $("#libError").textContent = "Enter valid dates with From on or before Through.";
+    $("#libError").hidden = false;
+    snippetPaging("Adjust the date range to continue");
+    return;
+  }
+  const params = new URLSearchParams({ limit: SNIPPET_PAGE_SIZE, offset: libState.offset });
+  const query = libState.q;
   if (libState.q) params.set("q", libState.q);
   if (libState.commands) params.set("commands", "true");
   else if (libState.language) params.set("language", libState.language);
-  host.innerHTML = `<div class="lib-loading muted">Loading...</div>`;
+  if (libState.repo) params.set("repo", libState.repo);
+  if (libState.dateFrom) params.set("date_from", libState.dateFrom);
+  if (libState.dateTo) params.set("date_to", libState.dateTo);
   try {
-    const data = await api("/api/snippets?" + params);
-    if (request !== snippetRequest || state.view !== "library" || state.libraryMode !== "extracted") return;
-    snippetData = data.snippets || [];
-    $("#libCount").textContent = snippetData.length
-      ? `${snippetData.length}${snippetData.length >= 80 ? "+" : ""} snippet${snippetData.length === 1 ? "" : "s"}`
-      : "";
+    const page = await api("/api/snippets?" + params);
+    if (!current()) return;
+    if (!page.snippets.length && page.total && page.offset) {
+      // A sync/hide/delete between page requests can remove the last page.
+      libState.offset = Math.floor((page.total - 1) / page.limit) * page.limit;
+      return loadSnippets(false, focusPage, focused);
+    }
+    libState.offset = page.total ? page.offset : 0;
+    snippetPage = { ...page, offset: libState.offset };
+    const snippetData = page.snippets;
+    $("#libCount").textContent = `${page.total.toLocaleString()} snippet${page.total === 1 ? "" : "s"}`;
+    snippetPaging();
     if (!snippetData.length) {
       host.innerHTML = `<div class="empty"><div class="big">${icon("code", { size: 40 })}</div>No snippets match that filter.</div>`;
-      return;
-    }
-    host.innerHTML = snippetData.map(snippetCardHTML).join("");
+    } else host.innerHTML = snippetData.map((snippet, index) => snippetCardHTML(snippet, index, query)).join("");
     $$("#libResults .snip-open").forEach((a) => a.addEventListener("click", (event) => {
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
       openSession(a.dataset.id, {
-        turnIndex: a.dataset.turn === "" ? null : Number(a.dataset.turn), q: libState.q,
+        turnIndex: a.dataset.turn === "" ? null : Number(a.dataset.turn), q: query,
       });
     }));
     $$("#libResults .snip-copy").forEach((b) => b.addEventListener("click", async () => {
@@ -94,22 +170,34 @@ export async function loadSnippets() {
       const snippet = snippetData[Number(button.dataset.idx)];
       openSolutionDialog({ source: { kind: "snippet", session_id: snippet.session_id, snippet_id: snippet.id } });
     }));
+    if (focusPage && (document.activeElement === focused || document.activeElement === document.body)) {
+      $("#libPageStatus").focus({ preventScroll: true });
+      $("#libPaging").scrollIntoView({ block: "start" });
+    }
   } catch (e) {
-    if (request !== snippetRequest || state.view !== "library" || state.libraryMode !== "extracted") return;
-    host.innerHTML = `<div class="empty"><div class="big">${icon("alert", { size: 40 })}</div>${esc(e.message)}</div>`;
+    if (!current()) return;
+    host.innerHTML = "";
+    $("#libError").textContent = e.message;
+    $("#libError").hidden = false;
+    $("#libRetry").hidden = false;
+    snippetPaging("Snippet count unavailable");
+  } finally {
+    if (current()) host.setAttribute("aria-busy", "false");
   }
 }
 
-function snippetCardHTML(s, i) {
+function snippetCardHTML(s, i, query) {
   const lang = s.language || "text";
   const repo = s.repository ? ` · ${esc(s.repository)}` : "";
+  const timestamp = s.updated_at || s.created_at;
   return `<div class="snip-card">
     <div class="snip-head">
       <span class="snip-lang">${esc(lang)}</span>
-      <a class="snip-open" data-id="${esc(s.session_id)}" data-turn="${s.turn_index ?? ""}" href="${esc(sessionHash(s.session_id, { turnIndex: s.turn_index, q: libState.q }))}" title="Open matching turn">${srcMeta(s.source).icon} ${esc(s.session_title || "Untitled")}${repo}</a>
-      <button class="snip-copy" data-idx="${i}" title="Copy snippet">${icon("copy", { size: 14 })}</button>
+      <a class="snip-open" data-id="${esc(s.session_id)}" data-turn="${s.turn_index ?? ""}" href="${esc(sessionHash(s.session_id, { turnIndex: s.turn_index, q: query }))}" title="Open matching turn">${srcMeta(s.source).icon} ${esc(s.session_title || "Untitled")}${repo}</a>
+      <button class="snip-copy" data-idx="${i}" type="button" aria-label="Copy snippet" title="Copy snippet">${icon("copy", { size: 14 })}</button>
       <button class="btn btn-ghost snip-save" data-idx="${i}" type="button">${icon("plus", { size: 14 })} Save solution</button>
     </div>
+    <p class="snip-date" title="${esc(timestamp || "No session timestamp recorded")}">${timestamp ? `Session ${s.updated_at ? "updated" : "created"} ${fmtDate(timestamp)}` : "Session date unknown"}</p>
     <pre class="snip-code"><code>${esc(s.content)}</code></pre>
   </div>`;
 }
@@ -341,11 +429,35 @@ export function setupLibrary() {
       tabs[index].click();
     });
   });
-  $("#libSearch").addEventListener("input", debounce(() => { libState.q = $("#libSearch").value.trim(); loadSnippets(); }, 200));
-  $("#libLang").addEventListener("change", () => { libState.language = $("#libLang").value; loadSnippets(); });
+  const searchSoon = debounce((generation, request) => {
+    if (generation === libraryGeneration && request === snippetRequest && extractedLibraryActive()) loadSnippets();
+  }, 200);
+  $("#libSearch").addEventListener("input", () => {
+    libState.q = $("#libSearch").value.trim();
+    libState.offset = 0;
+    // Invalidate immediately, not after the debounce: an older page must not
+    // repaint while the input already displays a different query.
+    searchSoon(libraryGeneration, invalidateSnippets());
+  });
+  for (const [selector, key] of [["#libLang", "language"], ["#libRepo", "repo"], ["#libDateFrom", "dateFrom"], ["#libDateTo", "dateTo"]]) {
+    $(selector).addEventListener("change", () => { libState[key] = $(selector).value; loadSnippets(); });
+  }
   $("#libCommands").addEventListener("change", () => {
     libState.commands = $("#libCommands").checked;
     $("#libLang").disabled = libState.commands;
+    loadSnippets();
+  });
+  $$("[data-snippet-page]").forEach(button => button.addEventListener("click", () => {
+    if (!snippetPage || button.disabled) return;
+    const delta = button.dataset.snippetPage === "previous" ? -1 : 1;
+    libState.offset = Math.max(0, snippetPage.offset + delta * snippetPage.limit);
+    loadSnippets(false, true);
+  }));
+  $("#libRetry").addEventListener("click", () => loadSnippets(false));
+  $("#libRefresh").addEventListener("click", () => { loadSnippetFacets(); loadSnippets(); });
+  $("#libClear").addEventListener("click", () => {
+    Object.assign(libState, { q: "", language: "", commands: false, repo: "", dateFrom: "", dateTo: "", offset: 0 });
+    syncSnippetControls();
     loadSnippets();
   });
   for (const [selector, key] of [["#solutionSearch", "q"], ["#solutionTagFilter", "tag"]]) {

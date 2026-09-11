@@ -1588,10 +1588,435 @@ def test_read_endpoints_ok(client):
         "/api/usage",
         "/api/snippets",
         "/api/snippets/languages",
+        "/api/snippets/repositories",
         "/api/collections",
         "/api/ask/status",
     ]:
         assert client.get(path).status_code == 200, path
+
+
+@pytest.mark.parametrize("count", [0, 1, 80, 81, 187])
+def test_snippet_pages_report_exact_totals_and_reach_every_result(
+    client, make_session, persist_session, count
+):
+    from mark.repositories import snippets as snippets_repo
+
+    persist_session(
+        make_session(
+            code_blocks=[
+                {"language": "python", "content": f"print({i})"} for i in range(count)
+            ]
+        )
+    )
+    ids = []
+    for offset in range(0, max(count, 1), 80):
+        response = client.get("/api/snippets", params={"offset": offset})
+        assert response.status_code == 200
+        page = response.json()
+        assert page["total"] == count
+        assert page["offset"] == offset and page["limit"] == 80
+        assert len(page["snippets"]) == min(80, max(0, count - offset))
+        assert page["has_more"] is (offset + 80 < count)
+        assert client.get("/api/snippets", params={"offset": offset}).json() == page
+        ids.extend(row["id"] for row in page["snippets"])
+    assert len(set(ids)) == count
+    assert ids == sorted(ids, reverse=True)
+    assert [row["id"] for row in snippets_repo.snippets()] == ids[:80]
+    beyond = client.get("/api/snippets", params={"offset": count + 80}).json()
+    assert beyond["snippets"] == [] and beyond["has_more"] is False
+    assert beyond["total"] == count
+
+
+def test_snippet_count_and_rows_use_one_read_snapshot(
+    client, make_session, persist_session, monkeypatch
+):
+    from contextlib import contextmanager
+
+    from mark import db
+    from mark.repositories import sessions as sessions_repo
+
+    persist_session(
+        make_session(code_blocks=[{"language": "sh", "content": "echo safe"}])
+    )
+    original_transaction = db.transaction
+
+    class ConcurrentHide:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def execute(self, sql, params=()):
+            cursor = self.connection.execute(sql, params)
+            if sql.startswith("SELECT COUNT(*) FROM code_blocks"):
+                sessions_repo.set_hidden("s1", True)
+            return cursor
+
+    @contextmanager
+    def concurrent_transaction():
+        with original_transaction() as connection:
+            yield ConcurrentHide(connection)
+
+    monkeypatch.setattr(db, "transaction", concurrent_transaction)
+    page = client.get("/api/snippets").json()
+    assert page["total"] == len(page["snippets"]) == 1
+    assert page["has_more"] is False
+    # The next request sees the write; it cannot split count and rows above.
+    assert client.get("/api/snippets").json()["total"] == 0
+
+
+def test_snippet_order_uses_utc_instants_created_fallback_and_id_tiebreaker(
+    client, make_session, persist_session
+):
+    for sid, updated, created in (
+        ("older", "2026-01-01T23:59:59Z", "2025-01-01T00:00:00Z"),
+        ("equal-utc", "2026-01-02T00:00:00Z", "2025-01-01T00:00:00Z"),
+        ("equal-offset", "2026-01-01T19:00:00-05:00", "2025-01-01T00:00:00Z"),
+        ("created-only", None, "2026-01-03T00:00:00Z"),
+        ("undated", None, None),
+    ):
+        session = make_session(
+            sid=sid, code_blocks=[{"language": "sh", "content": f"echo {sid}"}]
+        )
+        session.update(updated_at=updated, created_at=created)
+        persist_session(session)
+    actual = [
+        client.get("/api/snippets", params={"limit": 1, "offset": offset}).json()[
+            "snippets"
+        ][0]["session_id"]
+        for offset in range(5)
+    ]
+    assert actual == ["created-only", "equal-offset", "equal-utc", "older", "undated"]
+
+
+def test_snippet_filters_combine_with_inclusive_utc_dates_and_literal_text(
+    client, make_session, persist_session
+):
+    def add(
+        sid, timestamp, repo="project/é", language="bash", text="echo 100%_ready\\v2"
+    ):
+        session = make_session(
+            sid=sid,
+            repository=repo,
+            code_blocks=[{"language": language, "content": text}],
+        )
+        session["updated_at"] = timestamp
+        persist_session(session)
+
+    add("start", "2026-01-02T00:00:00Z")
+    add("end", "2026-01-02T23:59:59.999Z", language="PowerShell")
+    add("offset-inside", "2026-01-03T00:30:00+01:00")
+    add("before", "2026-01-01T23:59:59Z")
+    add("after", "2026-01-03T00:00:00Z")
+    add("other-repo", "2026-01-02T12:00:00Z", repo="other")
+    add("other-language", "2026-01-02T12:00:00Z", language="python")
+    add("other-text", "2026-01-02T12:00:00Z", text="echo 100XXreadyXv2")
+    filters = {
+        "q": "%_ready\\v2",
+        "repo": "project/é",
+        "date_from": "2026-01-02",
+        "date_to": "2026-01-02",
+    }
+    page = client.get("/api/snippets", params={**filters, "language": "bash"}).json()
+    assert page["total"] == 2
+    assert {row["session_id"] for row in page["snippets"]} == {"start", "offset-inside"}
+    # Preserve the existing contract: commands wins over a language selection.
+    page = client.get(
+        "/api/snippets", params={**filters, "commands": True, "language": "python"}
+    ).json()
+    assert page["total"] == 3 and page["has_more"] is False
+    assert {row["session_id"] for row in page["snippets"]} == {
+        "start",
+        "end",
+        "offset-inside",
+    }
+    assert (
+        client.get("/api/snippets", params={**filters, "repo": "missing"}).json()[
+            "total"
+        ]
+        == 0
+    )
+    assert (
+        client.get("/api/snippets", params={"date_from": "2026-01-03"}).json()["total"]
+        == 1
+    )
+    assert (
+        client.get("/api/snippets", params={"date_to": "2026-01-01"}).json()["total"]
+        == 1
+    )
+    assert (
+        client.get("/api/snippets", params={"date_to": "9999-12-31"}).json()["total"]
+        == 8
+    )
+
+
+def test_snippet_pages_and_facets_share_visibility_and_nonempty_scope(
+    client, make_session, persist_session, monkeypatch
+):
+    from mark import db
+    from mark.repositories import sessions as sessions_repo
+
+    for sid, repo, language, source in (
+        ("visible", "visible-repo", "python", "vscode"),
+        ("hidden", "hidden-repo", "rust", "vscode"),
+        ("disabled", "disabled-repo", "go", "cline"),
+        ("custom-disabled", "custom-repo", "yaml", "custom-fork"),
+    ):
+        session = make_session(
+            sid=sid,
+            repository=repo,
+            source=source,
+            code_blocks=[
+                {"language": language, "content": f"snippet {i}"} for i in range(85)
+            ],
+        )
+        if sid == "custom-disabled":
+            session["source_adapter"] = "cline"
+        persist_session(session)
+    sessions_repo.set_hidden("hidden", True)
+    monkeypatch.setenv("MARK_SOURCE_CLINE_ENABLED", "0")
+    persist_session(make_session(sid="empty", repository="no-snippets"))
+    with db.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO code_blocks(session_id, turn_index, language, content) VALUES (?,?,?,?)",
+            [("empty", 0, "empty-language", value) for value in (None, "", " ", "x")],
+        )
+    for offset, length in ((0, 80), (80, 5)):
+        page = client.get("/api/snippets", params={"offset": offset}).json()
+        assert page["total"] == 85 and len(page["snippets"]) == length
+        assert {row["session_id"] for row in page["snippets"]} == {"visible"}
+    assert client.get("/api/snippets/repositories").json() == [
+        {"repository": "visible-repo", "count": 85}
+    ]
+    assert client.get("/api/snippets/languages").json() == [
+        {"language": "python", "count": 85}
+    ]
+    assert client.get("/api/snippets?repo=hidden-repo").json()["total"] == 0
+    sessions_repo.set_hidden("hidden", False)
+    monkeypatch.setenv("MARK_SOURCE_CLINE_ENABLED", "1")
+    assert client.get("/api/snippets").json()["total"] == 340
+    assert len(client.get("/api/snippets/repositories").json()) == 4
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"offset": -1},
+        {"offset": 2**63},
+        {"offset": "invalid"},
+        {"date_from": "not-a-date"},
+        {"date_to": "2026-02-30"},
+        {"date_from": "2026-02-01", "date_to": "2026-01-01"},
+    ],
+)
+def test_snippet_paging_and_date_input_validation(client, params):
+    assert client.get("/api/snippets", params=params).status_code == 422
+
+
+@pytest.mark.parametrize("requested, effective", [(0, 1), (-1, 1), (301, 300)])
+def test_snippet_page_reports_effective_legacy_limit(client, requested, effective):
+    response = client.get("/api/snippets", params={"limit": requested})
+    assert response.status_code == 200
+    assert response.json()["limit"] == effective
+
+
+def test_snippet_frontend_paging_filter_resets_and_async_navigation():
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for frontend Library regression tests")
+    script = r"""
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createContext, SourceTextModule, SyntheticModule } from "node:vm";
+const elements = new Map(), reads = [], timers = [];
+const document = {body: {}, activeElement: null};
+function element(selector) {
+    if (!elements.has(selector)) elements.set(selector, {
+        dataset: {}, value: "", checked: false, disabled: false, hidden: false,
+        innerHTML: "", textContent: "", validity: {valid: true}, attributes: {},
+        listeners: {}, classList: {toggle() {}}, scrolls: 0,
+        addEventListener(name, fn) {this.listeners[name] = fn;},
+        setAttribute(name, value) {this.attributes[name] = value;},
+        focus() {document.activeElement = this;},
+        scrollIntoView() {this.scrolls += 1;},
+    });
+    return elements.get(selector);
+}
+const buttons = ["#libPrevious", "#libNext", "#bottomPrevious", "#bottomNext"].map(element);
+buttons.forEach((button, i) => {button.dataset.snippetPage = i % 2 ? "next" : "previous";});
+const ranges = [element("#libPageStatus"), element("#bottomRange")];
+const all = selector => {
+    if (selector === "[data-snippet-page]") return buttons;
+    if (selector === "[data-snippet-range]") return ranges;
+    const html = element("#libResults").innerHTML;
+    if (selector === "#libResults .snip-open" && html.includes("snip-card")) {
+        const link = element("#firstOpen");
+        link.dataset = {id: html.match(/data-id="([^"]+)"/)[1], turn: "2"};
+        return [link];
+    }
+    if (selector === "#libResults .snip-copy" && html.includes("snip-card")) {
+        element("#firstCopy").dataset.idx = "0";
+        return [element("#firstCopy")];
+    }
+    return [];
+};
+const flush = async () => {for (let i = 0; i < 10; i += 1) await Promise.resolve();};
+const runTimers = () => {timers.splice(0).forEach(fn => fn());};
+const state = {view: "library", libraryMode: "extracted", currentId: null};
+let detailGeneration = 0, finishDetail, copied, holdFacets = false;
+const facetReads = [];
+const api = (url, options) => {
+    if (url.startsWith("/api/snippets?")) return new Promise((resolve, reject) => {
+        reads.push({url, params: new URLSearchParams(url.split("?")[1]), resolve, reject});
+    });
+    if (url.startsWith("/api/snippets/")) {
+        if (holdFacets) return new Promise(resolve => facetReads.push({url, resolve}));
+        return Promise.resolve(url.endsWith("languages") ? [{language: "bash", count: 187}] : [{repository: "project/é", count: 187}]);
+    }
+    if (url.startsWith("/api/solutions?")) return Promise.resolve({solutions: [], total: 0, offset: 0, has_more: false});
+    throw new Error("Unexpected request: " + url);
+};
+const modules = {
+    "../api.js": {api},
+    "../state.js": {state, showOnly() {}, setLayoutWide() {}},
+    "../utils.js": {$: element, $$: all, debounce: fn => (...args) => {timers.push(() => fn(...args));},
+        esc: value => value ?? "", fmtDate: () => "Jan 2", srcMeta: () => ({icon: "", label: "VS Code"}),
+        sessionHash: (id, options) => `#/session/${id}?turn=3&q=${options.q}`, toast() {}, withTransition: fn => fn()},
+    "../icons.js": {icon: () => ""},
+    "./detail.js": {teardownReading() {detailGeneration += 1;},
+        openSession() {const generation = ++detailGeneration; finishDetail = () => {if (generation === detailGeneration) state.view = "detail";};}},
+};
+const context = createContext({URLSearchParams, document, window: {addEventListener() {}},
+    location: {hash: "#/library"}, history: {pushState() {}},
+    navigator: {clipboard: {async writeText(text) {copied = text;}}}});
+const library = new SourceTextModule(readFileSync("mark/web/js/views/library.js", "utf8"), {context});
+await library.link(path => new SyntheticModule(Object.keys(modules[path]), function () {
+    for (const [name, value] of Object.entries(modules[path])) this.setExport(name, value);
+}, {context}));
+await library.evaluate();
+const {libState, loadSnippets, showLibrary, setupLibrary} = library.namespace;
+setupLibrary();
+const last = () => reads.at(-1);
+const page = (offset = 0, total = 187) => ({offset, total, limit: 80, has_more: offset + 80 < total,
+    snippets: Array.from({length: Math.max(0, Math.min(80, total - offset))}, (_, index) => ({
+        id: total - offset - index, session_id: `origin-${total - offset - index}`, turn_index: 2,
+        language: "bash", content: `printf ${total - offset - index}`, session_title: "Test", source: "vscode",
+        repository: "project/é", updated_at: "2026-01-02T00:00:00Z",
+    }))});
+const done = async data => {last().resolve(data); await flush();};
+const change = (selector, value) => {element(selector).value = value; element(selector).listeners.change();};
+const click = selector => element(selector).listeners.click({preventDefault() {}});
+
+const first = loadSnippets();
+assert.equal(last().params.get("offset"), "0");
+assert.equal(last().params.get("limit"), "80");
+await done(page()); await first;
+assert.equal(element("#libCount").textContent, "187 snippets");
+assert.equal(ranges[0].textContent, "1\u201380 of 187");
+assert.equal(buttons[0].disabled, true); assert.equal(buttons[1].disabled, false);
+
+click("#firstOpen");
+element("#libNext").focus(); click("#libNext");
+const count = reads.length;
+click("#libNext");
+assert.equal(reads.length, count, "Disable both pagers while a page is pending");
+assert.equal(last().params.get("offset"), "80");
+finishDetail();
+assert.equal(state.view, "library", "Newer page intent cancels a pending source navigation");
+await done(page(80));
+assert.equal(ranges[0].textContent, "81\u2013160 of 187");
+assert.equal(document.activeElement, element("#libPageStatus"));
+await element("#firstCopy").listeners.click();
+assert.equal(copied, "printf 107", "Copy uses the current page, not the first page cache");
+element("#libNext").focus(); click("#libNext"); await done(page(160));
+assert.equal(ranges[0].textContent, "161\u2013187 of 187");
+assert.equal(buttons[1].disabled, true);
+click("#libPrevious"); await done(page(80));
+assert.equal(libState.offset, 80);
+
+for (const [selector, value, parameter] of [
+    ["#libRepo", "project/é", "repo"], ["#libLang", "python", "language"],
+    ["#libDateFrom", "2026-01-01", "date_from"], ["#libDateTo", "2026-01-03", "date_to"],
+]) {
+    libState.offset = 80;
+    change(selector, value);
+    assert.equal(last().params.get("offset"), "0", selector + " resets pagination");
+    assert.equal(last().params.get(parameter), value);
+    await done(page(0, 5));
+}
+element("#libCommands").checked = true; element("#libCommands").listeners.change();
+assert.equal(last().params.get("commands"), "true");
+assert.equal(last().params.has("language"), false);
+assert.equal(last().params.get("repo"), "project/é");
+assert.equal(last().params.get("date_to"), "2026-01-03");
+assert.equal(element("#libLang").disabled, true); await done(page());
+
+const older = loadSnippets(), oldRead = last();
+element("#libSearch").value = "new query"; element("#libSearch").listeners.input();
+oldRead.resolve(page()); await older;
+assert.equal(element("#libCount").textContent, "", "Old page cannot paint during the input debounce");
+assert.ok(!element("#libResults").innerHTML.includes("snip-card"));
+runTimers(); assert.equal(last().params.get("q"), "new query"); await done(page(0, 1));
+element("#libSearch").value = "latest"; element("#libSearch").listeners.input();
+change("#libRepo", "different");
+const newCount = reads.length; runTimers();
+assert.equal(reads.length, newCount, "Another filter supersedes queued text work");
+await done(page(0, 0)); assert.equal(ranges[0].textContent, "0 of 0");
+
+click("#libClear"); await done(page());
+libState.offset = 80;
+const failure = loadSnippets(false); last().reject(new Error("Fixture unavailable")); await failure;
+assert.equal(element("#libError").hidden, false); assert.equal(element("#libRetry").hidden, false);
+assert.equal(element("#libCount").textContent, "");
+assert.equal(ranges[0].textContent, "Snippet count unavailable");
+click("#libRetry"); assert.equal(last().params.get("offset"), "80"); await done(page(80));
+assert.equal(element("#libError").hidden, true);
+
+// Last-page correction must not recapture focus after the user moved to a filter.
+libState.offset = 160; element("#libNext").focus();
+const shrinking = loadSnippets(false, true);
+element("#libSearch").focus(); await done(page(160, 90));
+assert.equal(last().params.get("offset"), "80");
+await done(page(80, 90)); await shrinking;
+assert.equal(document.activeElement, element("#libSearch"));
+assert.equal(ranges[0].textContent, "81\u201390 of 90");
+
+const stale = loadSnippets(false), staleRead = last();
+await showLibrary({mode: "curated"}); await flush();
+staleRead.resolve(page()); await stale;
+assert.equal(element("#libCount").textContent, "0 saved solutions");
+holdFacets = true;
+const returning = showLibrary({mode: "extracted"});
+assert.equal(last().params.get("offset"), "80", "Extracted page survives curated/source navigation");
+libState.repo = "no-longer-visible";
+facetReads.forEach(read => read.resolve([]));
+await done(page(80)); await returning;
+assert.equal(element("#libRepo").value, "no-longer-visible");
+assert.ok(element("#libRepo").innerHTML.includes("not currently available"));
+holdFacets = false;
+
+change("#libDateFrom", "2026-02-03"); await done(page());
+const beforeInvalid = reads.length;
+change("#libDateTo", "2026-02-01");
+assert.equal(reads.length, beforeInvalid);
+assert.equal(element("#libError").hidden, false);
+assert.equal(buttons[1].disabled, true);
+click("#libClear");
+assert.equal(element("#libDateFrom").value, ""); assert.equal(element("#libRepo").value, "");
+assert.equal(libState.commands, false); await done(page());
+libState.offset = 80; click("#libRefresh");
+assert.equal(last().params.get("offset"), "0"); await done(page());
+assert.equal(element("#libResults").attributes["aria-busy"], "false");
+"""
+    result = subprocess.run(
+        [node, "--experimental-vm-modules", "--input-type=module", "-e", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_status_and_reindex_response_contract(client, monkeypatch):

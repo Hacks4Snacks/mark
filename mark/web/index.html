@@ -165,11 +165,34 @@
         </div>
         <div id="libExtractedPanel" role="tabpanel" aria-labelledby="libExtractedTab">
           <div class="lib-controls">
-            <input id="libSearch" type="search" aria-label="Filter extracted snippets" placeholder="Filter by content..." autocomplete="off" spellcheck="false" />
+            <input id="libSearch" type="search" aria-label="Filter extracted snippets" placeholder="Filter by content..." maxlength="2000" autocomplete="off" spellcheck="false" />
             <select id="libLang" aria-label="Filter by language"><option value="">All languages</option></select>
             <label class="toggle lib-cmd"><input type="checkbox" id="libCommands" /> <span>Commands only</span></label>
           </div>
-          <div id="libResults" class="lib-results"></div>
+          <div class="lib-scope-controls">
+            <label class="lib-repo">Repository<select id="libRepo" aria-describedby="libFilterHint"><option value="">All repositories</option></select></label>
+            <label>From (UTC)<input type="date" id="libDateFrom" min="0001-01-01" max="9999-12-31" aria-describedby="libFilterHint" /></label>
+            <label>Through (UTC)<input type="date" id="libDateTo" min="0001-01-01" max="9999-12-31" aria-describedby="libFilterHint" /></label>
+            <div class="lib-filter-actions">
+              <button id="libClear" class="btn btn-ghost" type="button">Clear filters</button>
+              <button id="libRefresh" class="btn btn-ghost" type="button">Refresh</button>
+            </div>
+          </div>
+          <p class="lib-filter-hint" id="libFilterHint">Dates include both days, using the conversation's last update (or creation) in UTC. Dropdown counts cover all visible snippets.</p>
+          <p class="lib-filter-hint" id="libFacetError" role="status" hidden>Some filter choices could not be refreshed and may be stale. Use Refresh to retry.</p>
+          <nav id="libPaging" class="lib-paging" aria-label="Snippet pages">
+            <button id="libPrevious" class="btn btn-ghost" type="button" data-snippet-page="previous" aria-controls="libResults" disabled>Previous</button>
+            <span id="libPageStatus" data-snippet-range role="status" tabindex="-1"></span>
+            <button id="libNext" class="btn btn-ghost" type="button" data-snippet-page="next" aria-controls="libResults" disabled>Next</button>
+          </nav>
+          <p id="libError" class="solution-error" role="alert" hidden></p>
+          <button id="libRetry" class="btn" type="button" hidden>Retry this page</button>
+          <div id="libResults" class="lib-results" aria-busy="false"></div>
+          <nav id="libPagingBottom" class="lib-paging" aria-label="Snippet pages, bottom" hidden>
+            <button class="btn btn-ghost" type="button" data-snippet-page="previous" aria-controls="libResults" disabled>Previous</button>
+            <span data-snippet-range></span>
+            <button class="btn btn-ghost" type="button" data-snippet-page="next" aria-controls="libResults" disabled>Next</button>
+          </nav>
         </div>
         <div id="libCuratedPanel" role="tabpanel" aria-labelledby="libCuratedTab" hidden>
           <p class="curation-hint">Your saved answers and snippets. These independent copies keep your notes and review status even if the original conversation changes, is hidden, or is deleted.</p>
