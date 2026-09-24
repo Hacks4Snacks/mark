@@ -133,6 +133,8 @@ def test_compute_cost_uses_model_specific_cache_write_price():
     "model, prices, write",
     [
         ("openai/gpt-6-astra", (10.0, 50.0, 1.0), 12.5),
+        ("openai/gpt-6-sol", (2.0, 10.0, 0.2), 2.5),
+        ("gpt-6-luna", (0.1, 0.5, 0.01), 0.125),
         ("gpt-5.6", (4.0, 20.0, 0.4), 5.0),
         ("gpt-5.6-terra", (2.0, 12.0, 0.2), 2.5),
         ("gpt-5.6-luna", (0.2, 1.2, 0.02), 0.25),
@@ -143,6 +145,8 @@ def test_compute_cost_uses_model_specific_cache_write_price():
         ("claude-fable-5.1", (10.0, 50.0, 0.25), 12.5),
         ("anthropic.claude-mythos-5-1", (10.0, 50.0, 0.25), 12.5),
         ("claude-fable-5", (10.0, 50.0, 1.0), 12.5),
+        ("claude-opus-5.5", (4.0, 20.0, 0.2), 5.0),
+        ("anthropic/claude-opus-5-5", (4.0, 20.0, 0.2), 5.0),
         ("claude-opus-5", (5.0, 25.0, 0.5), 6.25),
         ("claude-sonnet-5", (2.0, 10.0, 0.2), 2.5),
         ("gemini-3.8-flash", (0.75, 3.75, 0.075), 0.75),
@@ -150,6 +154,7 @@ def test_compute_cost_uses_model_specific_cache_write_price():
         ("gemini-3.6-flash", (0.75, 3.75, 0.075), 0.75),
         ("gemini-3.5-flash-lite", (0.3, 2.5, 0.03), 0.3),
         ("gemini-3.5-flash", (1.5, 9.0, 0.15), 1.5),
+        ("xai/grok-4.7", (2.0, 6.0, 0.5), 2.0),
         ("grok-4.6", (2.0, 6.0, 0.5), 2.0),
         ("grok-4.5", (2.0, 6.0, 0.3), 2.0),
         ("grok-build-latest", (2.0, 6.0, 0.3), 2.0),
@@ -177,6 +182,7 @@ def test_refreshed_model_prices_and_specific_aliases(
 
 
 def test_refreshed_cache_rates_flow_through_cost_calculation():
+    assert config.cache_write_price_for("claude-opus-5.5", one_hour=True) == 8.0
     # Real counters, not an inferred discount multiplier: the 5.1 cache rate
     # is one quarter of Fable 5's rate, with the same write tariffs.
     assert (

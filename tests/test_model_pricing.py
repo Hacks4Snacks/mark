@@ -62,14 +62,17 @@ def test_registry_freshness_warns_then_fails():
 
 def test_refreshed_registry_is_valid_and_tracks_scheduled_reviews():
     registry = load_registry()
-    assert registry["verified_at"] == "2026-09-10"
+    assert registry["revision"] == "2026-09-24.1"
+    assert registry["verified_at"] == "2026-09-24"
     assert (
         validate_registry(
-            registry, today=date(2026, 9, 10), enforce_freshness=True
+            registry, today=date(2026, 9, 24), enforce_freshness=True
         ).errors
         == ()
     )
     models = registry["models"]
+    for key in ("gpt-6-sol", "gpt-6-luna", "claude-opus-5-5"):
+        assert models[key]["effective_from"] == "2026-09-22"
     assert "review_after" not in models["claude-sonnet-5"]
     assert "effective_until" not in models["claude-sonnet-5"]
     assert models["gpt-5-6-sol"]["review_after"] == "2026-11-21"
@@ -86,8 +89,20 @@ def test_refreshed_registry_is_valid_and_tracks_scheduled_reviews():
 
 def test_lifecycle_distinguishes_retired_variants_from_active_models():
     models = load_registry()["models"]
-    for key in ("gpt-5-1", "gpt-5-2", "gpt-5-2-pro", "gemini-3-1-flash-lite"):
+    for key in (
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "claude-opus-5-5",
+        "grok-4-7",
+        "gpt-5-1",
+        "gpt-5-2",
+        "gpt-5-2-pro",
+        "gemini-3-1-flash-lite",
+    ):
         assert models[key]["status"] == "active"
+    for key in ("gemini-2-5-pro", "gemini-2-5-flash", "gemini-2-5-flash-lite"):
+        assert models[key]["status"] == "active"
+        assert "limited to prior users" in models[key]["notes"]
     for key in (
         "claude-opus-4-1",
         "claude-opus-4",
