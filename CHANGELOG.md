@@ -9,6 +9,13 @@ From v0.2.0 onward, entries are generated automatically by
 [release-please](https://github.com/googleapis/release-please) from Conventional
 Commits.
 
+## [0.6.0](https://github.com/Hacks4Snacks/mark/compare/v0.5.0...v0.6.0) (2026-09-24)
+
+
+### Features
+
+* Quotable Search Strings ([#34](https://github.com/Hacks4Snacks/mark/issues/34)) ([363944c](https://github.com/Hacks4Snacks/mark/commit/363944c6076560d6d85260af740db9550f3b0d8d))
+
 ## [0.5.0](https://github.com/Hacks4Snacks/mark/compare/v0.4.0...v0.5.0) (2026-07-21)
 
 
