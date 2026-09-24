@@ -162,7 +162,8 @@ Install the optional upgrades for best quality:
 pip install -r requirements-optional.txt
 ```
 
-The status card in the sidebar shows which engine is active.
+Open **Sources** for the active/building backend, index coverage, per-source sync
+results, and retry controls. See [Sources & syncing](docs/sources.md#inspecting-sources-in-the-app).
 
 ## Configuration
 

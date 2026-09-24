@@ -13,6 +13,7 @@ from . import config, db, embeddings, ingest, visibility
 
 _RRF_K = 60
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+_QUOTED_RE = re.compile(r'"([^"]+)"')
 
 # Cached embedding matrix: rebuilt whenever the persisted semantic generation changes.
 _vec_lock = threading.Lock()
@@ -147,11 +148,30 @@ def _timestamp_value(value: str | None) -> float:
         return float("-inf")
 
 
+def _query_terms(q: str) -> tuple[list[tuple[str, ...]], list[str]]:
+    quoted = [
+        phrase
+        for match in _QUOTED_RE.finditer(q.lower())
+        if (phrase := tuple(_TOKEN_RE.findall(match.group(1))))
+    ]
+    unquoted = _QUOTED_RE.sub(" ", q.lower())
+    tokens = [token for token in _TOKEN_RE.findall(unquoted) if len(token) > 1]
+    return quoted, tokens
+
+
+def has_quoted_phrase(q: str) -> bool:
+    quoted, _tokens = _query_terms(q)
+    return bool(quoted)
+
+
 def _fts_query(q: str, *, column: str | None = None) -> str | None:
-    tokens = [t for t in _TOKEN_RE.findall(q.lower()) if len(t) > 1]
-    if not tokens:
+    quoted, tokens = _query_terms(q)
+    clauses = [f'"{" ".join(phrase)}"' for phrase in quoted]
+    if tokens:
+        clauses.append("(" + " OR ".join(f'"{token}"*' for token in tokens) + ")")
+    if not clauses:
         return None
-    expression = " OR ".join(f'"{t}"*' for t in tokens)
+    expression = " AND ".join(clauses)
     return f"{column} : ({expression})" if column else expression
 
 
@@ -161,9 +181,10 @@ def _keyword_search(
     scope: _SessionScope,
     *,
     content_only: bool = False,
+    one_per_session: bool = False,
 ) -> list[dict[str, Any]]:
     match = _fts_query(query, column="content" if content_only else None)
-    if not match:
+    if not match or limit <= 0:
         return []
     with (
         db.cursor() as cur,
@@ -178,19 +199,35 @@ def _keyword_search(
             "FROM search_index "
             "JOIN sessions s ON s.id = search_index.session_id "
             f"WHERE search_index MATCH ? AND {where} "
-            "ORDER BY score LIMIT ?"
+            "ORDER BY score"
         )
-        rows = cur.execute(sql, [match, *scope_params, limit]).fetchall()
-    # bm25 returns more-negative = better; rank ascending.
-    return [
-        {
-            "chunk_id": r["chunk_id"],
-            "session_id": r["session_id"],
-            "turn_index": r["turn_index"],
-            "snippet": r["snip"],
-        }
-        for r in rows
-    ]
+        params: list[Any] = [match, *scope_params]
+        if not one_per_session:
+            sql += " LIMIT ?"
+            params.append(limit)
+        results: list[dict[str, Any]] = []
+        seen_sessions: set[str] = set()
+        rows = cur.connection.execute(sql, params)
+        try:
+            for row in rows:
+                session_id = row["session_id"]
+                if one_per_session and session_id in seen_sessions:
+                    continue
+                seen_sessions.add(session_id)
+                results.append(
+                    {
+                        "chunk_id": row["chunk_id"],
+                        "session_id": session_id,
+                        "turn_index": row["turn_index"],
+                        "snippet": row["snip"],
+                    }
+                )
+                if len(results) >= limit:
+                    break
+        finally:
+            rows.close()
+    # bm25 returns more-negative = better; rows are ranked ascending.
+    return results
 
 
 def scoped_session_ids(
@@ -274,8 +311,17 @@ def ranked_session_ids(
         date_to=date_to,
         only_ids=only_ids,
     )
-    keyword_ranked = _keyword_session_ranking(query, scope) if mode == "hybrid" else []
-    semantic_ranked = _semantic_session_ranking(query, _scoped_session_ids(scope))
+    exact_phrase = has_quoted_phrase(query)
+    keyword_ranked = (
+        _keyword_session_ranking(query, scope)
+        if exact_phrase or mode == "hybrid"
+        else []
+    )
+    semantic_ranked = (
+        []
+        if exact_phrase
+        else _semantic_session_ranking(query, _scoped_session_ids(scope))
+    )
     scores: dict[str, float] = {}
     for ranked in (keyword_ranked, semantic_ranked):
         for rank, session_id in enumerate(ranked):
@@ -500,14 +546,20 @@ def search(
         only_ids=only_ids,
         only_hidden=only_hidden,
     )
+    exact_phrase = has_quoted_phrase(query)
     kw = (
-        _keyword_search(query, limit * 6, scope)
-        if mode in ("hybrid", "keyword")
+        _keyword_search(
+            query,
+            limit if exact_phrase else limit * 6,
+            scope,
+            one_per_session=exact_phrase,
+        )
+        if exact_phrase or mode in ("hybrid", "keyword")
         else []
     )
     sem = (
         _semantic_search(query, limit * 6, _scoped_session_ids(scope))
-        if mode in ("hybrid", "semantic")
+        if not exact_phrase and mode in ("hybrid", "semantic")
         else []
     )
 
@@ -527,7 +579,7 @@ def search(
 
     sids = [sid for sid, _ in ordered]
     sessions = _load_sessions(sids, only_hidden=only_hidden)
-    chunk_text = _load_chunk_text([cid for _, (_, cid) in ordered])
+    chunks = _load_chunks([cid for _, (_, cid) in ordered])
 
     results = []
     max_score = ordered[0][1][0] or 1.0
@@ -539,11 +591,20 @@ def search(
         snippet = (
             _render_fts_snippet(item["snippet"])
             if item.get("snippet")
-            else _make_snippet(chunk_text.get(cid, ""), query)
+            else _make_snippet(chunks.get(cid, {}).get("content", ""), query)
         )
         s = dict(s)
         s["score"] = round(score / max_score, 4)
         s["snippet"] = snippet
+        chunk = chunks.get(cid, {})
+        # Turn indices, unlike regenerated chunk IDs, are useful deep-link targets.
+        s["match"] = {
+            "turn_index": (
+                chunk.get("turn_index") if chunk.get("source_type") == "turn" else None
+            ),
+            "source_type": chunk.get("source_type"),
+            "query": query,
+        }
         results.append(s)
     return _sort_results(results, sort)
 
@@ -580,6 +641,7 @@ def search_passages(
         date_to=date_to,
         only_ids=only_ids,
     )
+    exact_phrase = has_quoted_phrase(query)
     kw = (
         _keyword_search(
             query,
@@ -587,12 +649,12 @@ def search_passages(
             scope,
             content_only=True,
         )
-        if mode in ("hybrid", "keyword")
+        if exact_phrase or mode in ("hybrid", "keyword")
         else []
     )
     sem = (
         _semantic_search(query, limit * candidate_factor, _scoped_session_ids(scope))
-        if mode in ("hybrid", "semantic")
+        if not exact_phrase and mode in ("hybrid", "semantic")
         else []
     )
     recent: list[dict[str, Any]] = []
@@ -611,7 +673,7 @@ def search_passages(
                 recent_scope,
                 content_only=True,
             )
-            if mode in ("hybrid", "keyword")
+            if exact_phrase or mode in ("hybrid", "keyword")
             else []
         )
         recent_sem = (
@@ -620,7 +682,7 @@ def search_passages(
                 limit * candidate_factor,
                 _scoped_session_ids(recent_scope),
             )
-            if mode in ("hybrid", "semantic")
+            if not exact_phrase and mode in ("hybrid", "semantic")
             else []
         )
         recent_scores, recent_meta = _fuse((recent_kw, recent_sem))
@@ -958,6 +1020,113 @@ def get_session_turns(
             limit=limit,
             defer_above=defer_above,
         )
+
+
+def session_matches(
+    session_id: str,
+    query: str,
+    *,
+    offset: int = 0,
+    limit: int = 100,
+    turn_index: int | None = None,
+) -> dict[str, Any]:
+    """Page matching turn indices, searching all indexed messages, not metadata.
+
+    Like exact-ID detail reads, this also works for a user-hidden conversation.
+    Reasoning remains display-only and is not added to the search index.
+    """
+    result: dict[str, Any] = {
+        "query": query,
+        "turn_indices": [],
+        "total": 0,
+        "offset": offset,
+        "limit": limit,
+        "has_more": False,
+        "target_position": 0,
+    }
+    match = _fts_query(query, column="content")
+    if not match:
+        return result
+    # FTS's legacy turn_index is NULL for transcripts. Chunks are authoritative.
+    where = (
+        "FROM search_index JOIN chunks c ON c.id = search_index.chunk_id "
+        "AND c.session_id = search_index.session_id "
+        "WHERE search_index MATCH ? AND c.session_id = ? "
+        "AND c.source_type = 'turn' AND c.turn_index IS NOT NULL"
+    )
+    with db.cursor() as cur:
+        total = cur.execute(
+            f"SELECT COUNT(DISTINCT c.turn_index) {where}", (match, session_id)
+        ).fetchone()[0]
+        if turn_index is not None and total:
+            before = cur.execute(
+                f"SELECT COUNT(DISTINCT c.turn_index) {where} AND c.turn_index < ?",
+                (match, session_id, turn_index),
+            ).fetchone()[0]
+            offset = (min(before, total - 1) // limit) * limit
+            result["target_position"] = before
+        rows = cur.execute(
+            f"SELECT DISTINCT c.turn_index {where} "
+            "ORDER BY c.turn_index LIMIT ? OFFSET ?",
+            (match, session_id, limit, offset),
+        ).fetchall()
+    result.update(
+        turn_indices=[row["turn_index"] for row in rows],
+        total=total,
+        offset=offset,
+        has_more=offset + len(rows) < total,
+    )
+    return result
+
+
+def get_session_turn_preview(
+    session_id: str, turn_index: int, query: str = ""
+) -> dict[str, Any] | None:
+    """Bounded excerpts around a matching chunk, without loading a giant turn.
+
+    Each role contributes at most 4,000 characters. The existing full-turn read
+    remains available when the reader explicitly chooses to expand the preview.
+    """
+    hint = ""
+    match_offset = 0
+    with db.cursor() as cur:
+        match = _fts_query(query, column="content")
+        if match:
+            chunk = cur.execute(
+                "SELECT c.content, highlight(search_index, 0, '\x02', '\x03') "
+                "AS highlighted FROM search_index "
+                "JOIN chunks c ON c.id = search_index.chunk_id "
+                "AND c.session_id = search_index.session_id "
+                "WHERE search_index MATCH ? "
+                "AND c.session_id = ? AND c.turn_index = ? AND c.source_type = 'turn' "
+                "ORDER BY bm25(search_index) LIMIT 1",
+                (match, session_id, turn_index),
+            ).fetchone()
+            if chunk:
+                hint = re.sub(r"^(?:User|Assistant):\s*", "", chunk["content"])
+                prefix_length = len(chunk["content"]) - len(hint)
+                match_offset = max(0, chunk["highlighted"].find("\x02") - prefix_length)
+        fields = ("user_message", "assistant_response", "thinking")
+        excerpts = ", ".join(
+            f"CASE WHEN length({field}) <= 4000 THEN {field} ELSE "
+            f"substr({field}, max(1, instr({field}, ?) + "
+            f"CASE WHEN instr({field}, ?) > 0 THEN ? ELSE 0 END - 120), 4000) "
+            f"END AS {field}"
+            for field in fields
+        )
+        lengths = " + ".join(
+            f"length(CAST(COALESCE({field}, '') AS BLOB))" for field in fields
+        )
+        truncated = " OR ".join(
+            f"length(COALESCE({field}, '')) > 4000" for field in fields
+        )
+        row = cur.execute(
+            f"SELECT turn_index, tools, timestamp, {excerpts}, "
+            f"{lengths} AS content_chars, ({truncated}) AS preview "
+            "FROM turns WHERE session_id = ? AND turn_index = ?",
+            (*((hint, hint, match_offset) * len(fields)), session_id, turn_index),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def get_session_turn(session_id: str, turn_index: int) -> dict[str, Any] | None:

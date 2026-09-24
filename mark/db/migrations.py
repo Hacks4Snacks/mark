@@ -5,6 +5,7 @@ import sqlite3
 from collections.abc import Callable
 
 from .. import config
+from .schema import CURATED_SOLUTIONS_SCHEMA
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -210,6 +211,28 @@ def _add_source_adapter_column(conn: sqlite3.Connection) -> None:
                 )
 
 
+def _add_document_source_path_column(conn: sqlite3.Connection) -> None:
+    """Identify retained agent files independently of their display basename."""
+    tables = {
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if "documents" not in tables:
+        return
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
+    if "source_path" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN source_path TEXT")
+
+
+def _add_curated_solutions(conn: sqlite3.Connection) -> None:
+    """Add durable user-owned copies without coupling them to source deletion."""
+    conn.execute(CURATED_SOLUTIONS_SCHEMA)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_solutions_updated "
+        "ON curated_solutions(favorite DESC, updated_at DESC, id)"
+    )
+
+
 # Ordered list of migrations. Append new ones; never reorder or delete.
 # The 1-based index of a migration is its schema version.
 MIGRATIONS: list[Migration] = [
@@ -224,6 +247,8 @@ MIGRATIONS: list[Migration] = [
     _add_embedding_fingerprint_column,
     _add_tag_scope_index,
     _add_source_adapter_column,
+    _add_document_source_path_column,
+    _add_curated_solutions,
 ]
 
 CURRENT_VERSION = len(MIGRATIONS)

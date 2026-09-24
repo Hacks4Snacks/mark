@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+import stat
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,8 @@ from .base import (
     ts_diff_seconds,
     uri_to_path,
 )
+
+_INGEST_VERSION = 2
 
 
 def _read_session_metrics(session_id: str, state_dir: Path) -> dict[str, Any] | None:
@@ -110,6 +114,7 @@ def _hash_cli_session(
     updated_at: str | None,
     turns: list[dict[str, Any]],
     files_modified: list[str] | None = None,
+    artifact_signature: str = "",
 ) -> str:
     h = hashlib.sha256()
     h.update(f"attachment-capture-v{attachment_store.CAPTURE_VERSION}\0".encode())
@@ -123,10 +128,18 @@ def _hash_cli_session(
     for path in files_modified or []:
         h.update(b"\0shutdown-write\0")
         h.update(path.encode("utf-8", "ignore"))
+    if artifact_signature:
+        h.update(b"\0session-artifacts\0")
+        h.update(artifact_signature.encode("utf-8", "ignore"))
     return h.hexdigest()
 
 
-def _cli_session_signature(sid: str, updated_at: str | None, state_dir: Path) -> str:
+def _cli_session_signature(
+    sid: str,
+    updated_at: str | None,
+    state_dir: Path,
+    artifact_signature: str | None = None,
+) -> str:
     """A cheap per-session change signature.
 
     Combines the store's ``updated_at`` with the size/mtime of the authoritative
@@ -140,10 +153,19 @@ def _cli_session_signature(sid: str, updated_at: str | None, state_dir: Path) ->
         ev_part = f"{st.st_mtime_ns}:{st.st_size}"
     except OSError:
         ev_part = "0:0"
-    return f"{updated_at or ''}|{ev_part}"
+    artifact_part = (
+        _session_artifact_signature(sid, state_dir)
+        if artifact_signature is None
+        else artifact_signature
+    )
+    return f"v{_INGEST_VERSION}|{updated_at or ''}|{ev_part}|{artifact_part}"
 
 
-def _live_session_signatures(src: Path, state_dir: Path) -> dict[str, str] | None:
+def _live_session_signatures(
+    src: Path,
+    state_dir: Path,
+    artifact_states: dict[str, tuple[list[str], str, Path]] | None = None,
+) -> dict[str, str] | None:
     """Per-session signatures read straight from the (possibly live) store.
 
     Reads only session ids + ``updated_at`` over a read-only connection (no
@@ -161,8 +183,15 @@ def _live_session_signatures(src: Path, state_dir: Path) -> dict[str, str] | Non
         return None
     finally:
         ro.close()
+    if artifact_states is None:
+        artifact_states = _session_artifact_states(state_dir)
     return {
-        r["id"]: _cli_session_signature(r["id"], r["updated_at"], state_dir)
+        r["id"]: _cli_session_signature(
+            r["id"],
+            r["updated_at"],
+            state_dir,
+            artifact_states.get(r["id"], ([], "", None))[1],
+        )
         for r in rows
     }
 
@@ -209,6 +238,7 @@ def _cli_turns(ro: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
 
 # Tool names whose arguments carry the path of a file the agent writes/creates.
 _FILE_WRITE_TOOLS = {
+    "create",
     "create_file",
     "create_directory",
     "write",
@@ -235,6 +265,189 @@ def _tool_file_path(name: str | None, args: Any) -> str | None:
             paths.append(uri_to_path(val.strip()) or val.strip())
     unique = list(dict.fromkeys(paths))
     return unique[0] if len(unique) == 1 else None
+
+
+def _artifact_root_from_state_root(
+    session_id: str, state_root: Path
+) -> Path | None:
+    sid = Path(session_id)
+    if (
+        not session_id
+        or sid.is_absolute()
+        or len(sid.parts) != 1
+        or sid.parts[0] in (".", "..")
+    ):
+        return None
+    session_root = state_root / session_id
+    root = session_root / "files"
+    try:
+        if not stat.S_ISDIR(os.lstat(session_root).st_mode) or not stat.S_ISDIR(
+            os.lstat(root).st_mode
+        ):
+            return None
+    except OSError:
+        return None
+    return root
+
+
+def _session_artifact_root(session_id: str, state_dir: Path) -> Path | None:
+    try:
+        state_root = state_dir.expanduser().resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return _artifact_root_from_state_root(session_id, state_root)
+
+
+def _scan_artifact_root(root: Path) -> tuple[list[str], str]:
+    records: list[tuple[Path, Path, os.stat_result]] = []
+    pending = [(root, Path())]
+    while pending:
+        directory, relative_dir = pending.pop()
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda entry: entry.name)
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                file_stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            relative = relative_dir / entry.name
+            candidate = Path(entry.path)
+            if stat.S_ISDIR(file_stat.st_mode):
+                pending.append((candidate, relative))
+            elif stat.S_ISREG(file_stat.st_mode):
+                records.append((relative, candidate, file_stat))
+    records.sort(key=lambda record: record[0].as_posix())
+    if not records:
+        return [], ""
+
+    digest = hashlib.sha256()
+    for relative, _candidate, file_stat in records:
+        digest.update(relative.as_posix().encode("utf-8", "ignore"))
+        digest.update(
+            f":{file_stat.st_size}:{file_stat.st_mtime_ns}:"
+            f"{file_stat.st_ctime_ns}\0".encode()
+        )
+    files = [str(candidate) for _relative, candidate, _stat in records]
+    return files, f"artifacts:{len(records)}:{digest.hexdigest()}"
+
+
+def _session_artifact_states(
+    state_dir: Path,
+) -> dict[str, tuple[list[str], str, Path]]:
+    try:
+        state_root = state_dir.expanduser().resolve(strict=True)
+        with os.scandir(state_root) as iterator:
+            session_names = sorted(entry.name for entry in iterator)
+    except (OSError, RuntimeError, ValueError):
+        return {}
+    states: dict[str, tuple[list[str], str, Path]] = {}
+    for session_id in session_names:
+        root = _artifact_root_from_state_root(session_id, state_root)
+        if root is None:
+            continue
+        files, signature = _scan_artifact_root(root)
+        if files:
+            states[session_id] = (files, signature, root)
+    return states
+
+
+def _session_artifact_state(
+    session_id: str, state_dir: Path
+) -> tuple[list[str], str]:
+    root = _session_artifact_root(session_id, state_dir)
+    return _scan_artifact_root(root) if root is not None else ([], "")
+
+
+def _session_artifact_files(session_id: str, state_dir: Path) -> list[str]:
+    return _session_artifact_state(session_id, state_dir)[0]
+
+
+def _session_artifact_signature(session_id: str, state_dir: Path) -> str:
+    return _session_artifact_state(session_id, state_dir)[1]
+
+
+def _attachment_source_path(path: str, root: str | Path) -> str:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path(root).expanduser() / candidate
+    return os.path.abspath(candidate)
+
+
+def _merge_retained_attachments(
+    current: list[dict[str, Any]], prior: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    captured_kinds = ("managed", "inline")
+    current_by_path: dict[str, list[dict[str, Any]]] = {}
+    current_by_name: dict[str, list[dict[str, Any]]] = {}
+    prior_by_path: dict[str, list[dict[str, Any]]] = {}
+    legacy_by_name: Counter[str] = Counter()
+    for att in current:
+        source_path = att.get("source_path")
+        filename = att.get("filename")
+        if isinstance(source_path, str) and source_path:
+            current_by_path.setdefault(source_path, []).append(att)
+        if isinstance(filename, str):
+            current_by_name.setdefault(filename, []).append(att)
+    for att in prior:
+        source_path = att.get("source_path")
+        filename = att.get("filename")
+        if isinstance(source_path, str) and source_path:
+            prior_by_path.setdefault(source_path, []).append(att)
+        elif isinstance(filename, str):
+            legacy_by_name[filename] += 1
+
+    merged: list[dict[str, Any]] = []
+    for att in current:
+        source_path = att.get("source_path")
+        prior_at_path = (
+            prior_by_path.get(source_path, [])
+            if isinstance(source_path, str)
+            else []
+        )
+        if att.get("storage_kind") == "metadata" and any(
+            old.get("storage_kind") in captured_kinds for old in prior_at_path
+        ):
+            continue
+        merged.append(att)
+
+    for att in prior:
+        source_path = att.get("source_path")
+        filename = att.get("filename")
+        if isinstance(source_path, str) and source_path:
+            replacements = current_by_path.get(source_path, [])
+            if any(
+                replacement.get("storage_kind") in captured_kinds
+                for replacement in replacements
+            ):
+                continue
+            if replacements and att.get("storage_kind") not in captured_kinds:
+                continue
+            merged.append(att)
+            continue
+        candidates = (
+            current_by_name.get(filename, [])
+            if isinstance(filename, str)
+            else []
+        )
+        if any(
+            candidate.get("sha256")
+            and candidate.get("sha256") == att.get("sha256")
+            and candidate.get("size_bytes") == att.get("size_bytes")
+            for candidate in candidates
+        ):
+            continue
+        if (
+            isinstance(filename, str)
+            and legacy_by_name[filename] == 1
+            and len(candidates) == 1
+            and candidates[0].get("storage_kind") in captured_kinds
+        ):
+            continue
+        merged.append(att)
+    return merged
 
 
 def _join_segments(segments: list[list[str]]) -> str:
@@ -357,8 +570,7 @@ def _events_to_turns(
                     # read as a conversation instead of just its first prose and
                     # its last.
                     call_id = data.get("toolCallId")
-                    valid_call_id = isinstance(call_id, str) and bool(call_id.strip())
-                    if valid_call_id:
+                    if isinstance(call_id, str) and call_id.strip():
                         entry = write_ledger.setdefault(
                             call_id,
                             {
@@ -384,8 +596,7 @@ def _events_to_turns(
                     cur_turn["segments"].append(["tool", tool_trace(nm, args)])
                 elif et == "tool.execution_complete":
                     call_id = data.get("toolCallId")
-                    valid_call_id = isinstance(call_id, str) and bool(call_id.strip())
-                    if valid_call_id:
+                    if isinstance(call_id, str) and call_id.strip():
                         entry = write_ledger.setdefault(
                             call_id,
                             {
@@ -454,7 +665,7 @@ class CopilotCliSource(WatchedSource):
         if not cfg.roots:
             return ""
         store = cfg.roots[0]
-        parts: list[str] = []
+        parts = [f"version:{_INGEST_VERSION}"]
         for suffix in ("", "-wal", "-shm"):
             p = Path(f"{store}{suffix}")
             try:
@@ -478,6 +689,14 @@ class CopilotCliSource(WatchedSource):
             event_hash.update(event_path.parent.name.encode("utf-8", "ignore"))
             event_hash.update(f":{st.st_mtime_ns}:{st.st_size}\0".encode())
         parts.append(f"events:{event_count}:{event_hash.hexdigest()}")
+        artifact_states = _session_artifact_states(state_dir)
+        artifact_hash = hashlib.sha256()
+        for session_id, (_files, signature, _root) in sorted(
+            artifact_states.items()
+        ):
+            artifact_hash.update(session_id.encode("utf-8", "ignore"))
+            artifact_hash.update(f":{signature}\0".encode())
+        parts.append(f"artifacts:{len(artifact_states)}:{artifact_hash.hexdigest()}")
         return "|".join(parts)
 
     def ingest(
@@ -499,12 +718,13 @@ class CopilotCliSource(WatchedSource):
         state_dir = Path(
             cfg.options.get("state_dir") or config.SESSION_STATE_DIR
         ).expanduser()
+        artifact_states = _session_artifact_states(state_dir)
 
         sigs = load_file_signatures(cur, prefix="cli:")
         # Cheap pre-check on the live store (read-only, no backup): if no session's
         # signature changed since the last successful ingest, there is nothing to
         # do — so skip the expensive whole-store SQLite backup entirely.
-        live_sigs = _live_session_signatures(src, state_dir)
+        live_sigs = _live_session_signatures(src, state_dir, artifact_states)
         if (
             live_sigs is not None
             and not rebuild
@@ -534,7 +754,12 @@ class CopilotCliSource(WatchedSource):
             seen = 0
             for s in sessions:
                 sid = s["id"]
-                sig = _cli_session_signature(sid, s["updated_at"], state_dir)
+                artifact_files, artifact_signature, artifact_root = (
+                    artifact_states.get(sid, ([], "", None))
+                )
+                sig = _cli_session_signature(
+                    sid, s["updated_at"], state_dir, artifact_signature
+                )
                 # Skip the events.jsonl re-parse + re-hash for an already-indexed
                 # session whose cheap signature is unchanged.
                 if (
@@ -552,7 +777,11 @@ class CopilotCliSource(WatchedSource):
                     files_modified = []
                 if not turns:
                     continue
-                content_hash = _hash_cli_session(s["updated_at"], turns, files_modified)
+                files_modified.extend(artifact_files)
+                files_modified = list(dict.fromkeys(files_modified))
+                content_hash = _hash_cli_session(
+                    s["updated_at"], turns, files_modified, artifact_signature
+                )
                 prior = existing.get(sid)
                 if prior is not None and prior == content_hash and not rebuild:
                     record_file_signature(cur, f"cli:{sid}", sig)
@@ -573,15 +802,51 @@ class CopilotCliSource(WatchedSource):
                 agent_files = list(dict.fromkeys(p for p in agent_files if p))
                 extra_files = list(files_by.get(sid, []))
                 extra_files.extend((p, "agent", None) for p in files_modified)
+                prior_files = cur.execute(
+                    "SELECT file_path, tool_name, turn_index FROM session_files "
+                    "WHERE session_id = ?",
+                    (sid,),
+                ).fetchall()
+                extra_files.extend(
+                    (row["file_path"], row["tool_name"], row["turn_index"])
+                    for row in prior_files
+                )
+                prior_attachments = [
+                    dict(row)
+                    for row in cur.execute(
+                        "SELECT filename, source_path, stored_path, mime, size_bytes, "
+                        "content, storage_kind, sha256, capture_version FROM documents "
+                        "WHERE session_id = ? AND kind = 'attachment'",
+                        (sid,),
+                    )
+                ]
                 attachments: list[dict[str, Any]] = []
+                artifact_file_set = set(artifact_files)
                 for fp in agent_files:
+                    source_path: str | None = None
                     att = attachment_store.snapshot_file(
                         fp,
                         workspace=s["cwd"],
                         session_id=sid,
                     )
                     if att:
+                        source_path = _attachment_source_path(fp, s["cwd"])
+                    if att is None and artifact_root is not None:
+                        artifact_path = _attachment_source_path(fp, artifact_root)
+                        if artifact_path in artifact_file_set:
+                            att = attachment_store.snapshot_file(
+                                fp,
+                                workspace=str(artifact_root),
+                                session_id=sid,
+                            )
+                            if att:
+                                source_path = artifact_path
+                    if att and source_path:
+                        att["source_path"] = source_path
                         attachments.append(att)
+                attachments = _merge_retained_attachments(
+                    attachments, prior_attachments
+                )
                 session = {
                     "id": sid,
                     "source": "cli",

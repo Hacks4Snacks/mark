@@ -5,7 +5,7 @@
 
 import { api } from "../api.js";
 import { showOnly, setLayoutWide, state } from "../state.js";
-import { $, $$, esc, srcMeta, toast, withTransition } from "../utils.js";
+import { $, $$, esc, sessionHash, srcMeta, toast, withTransition } from "../utils.js";
 import { icon } from "../icons.js";
 import { openSession, teardownReading } from "./detail.js";
 
@@ -320,6 +320,8 @@ export function renderAskSourcesInto(box, sources, retrieval = null) {
         ${(s.passages || []).map((p) => `<div class="ask-src-passage">
           <span class="muted">${evidenceLabel(p)}${p.timestamp ? ` · ${esc(String(p.timestamp).slice(0, 10))}` : ""}${sourceMetrics(s)}</span>
           <p>${esc(p.prompt_excerpt || p.excerpt || "")}</p>
+          ${Number.isSafeInteger(p.turn_index) && p.source_type !== "document"
+            ? `<a class="btn btn-ghost ask-evidence-open" data-id="${esc(s.id)}" data-turn="${p.turn_index}" href="${esc(sessionHash(s.id, { turnIndex: p.turn_index, q: retrieval?.query || "" }))}">Open turn ${p.turn_index + 1}</a>` : ""}
         </div>`).join("")}
         <button type="button" class="btn btn-ghost ask-src-open" data-id="${esc(s.id)}">Open conversation</button>
       </div>
@@ -328,4 +330,9 @@ export function renderAskSourcesInto(box, sources, retrieval = null) {
   $$(".ask-src-open", box).forEach((button) =>
     button.addEventListener("click", () => openSession(button.dataset.id))
   );
+  $$(".ask-evidence-open", box).forEach((link) => link.addEventListener("click", (event) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    openSession(link.dataset.id, { turnIndex: Number(link.dataset.turn), q: retrieval?.query || "" });
+  }));
 }

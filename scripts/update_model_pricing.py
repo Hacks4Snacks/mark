@@ -64,6 +64,7 @@ MEDIA_OUTPUT_FIELDS = {
     "output_cost_per_video_token",
 }
 XAI_MODEL_MARKER = '{"$typeName":"auth_mgmt.LanguageModel"'
+XAI_PUBLIC_MODELS_MARKER = "globalThis.__XAI_PUBLIC_MODELS__="
 XAI_PRICING_FIELDS = {
     "batchDiscountPercent",
     "cachedPromptTokenPrice",
@@ -142,7 +143,75 @@ def _normalise_source_text(text: str) -> str:
     return " ".join(html.unescape(text).split())
 
 
+def _xai_public_pricing_records(section: str, source_name: str) -> str:
+    """Read the public JSON assignment as data, never execute provider scripts.
+
+    Media-only/empty clusters are valid. Identical language records are repeated
+    across regions: deduplicate those while retaining any differing tariffs.
+    """
+    try:
+        payload = section.split(XAI_PUBLIC_MODELS_MARKER, 1)[1].strip()
+        data, end = json.JSONDecoder().raw_decode(payload)
+        if payload[end:].strip() not in ("", ";"):
+            raise ValueError("unexpected content after public model JSON")
+        if not isinstance(data, dict) or not isinstance(
+            data.get("clusterConfigs"), list
+        ):
+            raise ValueError("missing clusterConfigs list")
+        records: set[str] = set()
+        for cluster in data["clusterConfigs"]:
+            if not isinstance(cluster, dict):
+                raise ValueError("invalid cluster")
+            models = cluster.get("languageModels", [])
+            if not isinstance(models, list):
+                raise ValueError("invalid languageModels list")
+            for model in models:
+                if (
+                    not isinstance(model, dict)
+                    or not isinstance(model.get("name"), str)
+                    or not model["name"]
+                ):
+                    raise ValueError("unnamed language model")
+                if (
+                    not {
+                        "promptTextTokenPrice",
+                        "completionTextTokenPrice",
+                        "cachedPromptTokenPrice",
+                    }
+                    <= model.keys()
+                ):
+                    raise ValueError(f"incomplete prices for {model['name']!r}")
+                record: dict[str, Any] = {"name": model["name"]}
+                for key in sorted(XAI_PRICING_FIELDS & model.keys()):
+                    value = model[key]
+                    if isinstance(value, bool) or not isinstance(
+                        value, (str, int, float)
+                    ):
+                        raise ValueError(f"invalid {key} for {model['name']!r}")
+                    number = float(value)
+                    if not 0 <= number < float("inf"):
+                        raise ValueError(f"invalid {key} for {model['name']!r}")
+                    record[key] = str(value)
+                aliases = model.get("aliases", [])
+                if not isinstance(aliases, list) or not all(
+                    isinstance(alias, str) and alias for alias in aliases
+                ):
+                    raise ValueError(f"invalid aliases for {model['name']!r}")
+                record["aliases"] = sorted(set(aliases))
+                records.add(json.dumps(record, sort_keys=True, separators=(",", ":")))
+        if not records:
+            raise ValueError("no language models")
+        return "[" + ",".join(sorted(records)) + "]"
+    except (ValueError, IndexError, OverflowError) as exc:
+        raise RuntimeError(
+            f"{source_name} pricing source has invalid public model data: {exc}"
+        ) from exc
+
+
 def _xai_pricing_records(section: str, source_name: str) -> str:
+    if XAI_PUBLIC_MODELS_MARKER in section:
+        return _xai_public_pricing_records(section, source_name)
+    # Retain support for the older RSC payload and its offline audit fixtures.
     decoded = section.replace('\\"', '"')
     records: list[dict[str, str]] = []
     for chunk in decoded.split(XAI_MODEL_MARKER)[1:]:
@@ -183,7 +252,12 @@ def _source_section(
     source_format = provider["audit_format"]
     if source_format == "visible":
         text = _visible_text(text)
-    elif source_format == "embedded":
+    elif (
+        source_format == "embedded"
+        and provider["audit_start"] != XAI_PUBLIC_MODELS_MARKER
+    ):
+        # HTML entities are not decoded inside raw script contents. Preserve
+        # the JSON assignment exactly rather than repairing malformed prices.
         text = html.unescape(text)
 
     start_marker = provider["audit_start"]

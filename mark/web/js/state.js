@@ -37,6 +37,7 @@ export const VIEW_IDS = [
   "#collectionView",
   "#libraryView",
   "#usageView",
+  "#sourcesView",
   "#askView",
 ];
 

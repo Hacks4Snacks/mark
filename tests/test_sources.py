@@ -767,7 +767,7 @@ def test_copilot_cli_records_only_successful_write_paths(tmp_path):
             "type": "tool.execution_start",
             "data": {
                 "toolCallId": "succeeded",
-                "toolName": "edit_file",
+                "toolName": "create",
                 "arguments": {"filePath": succeeded},
             },
         },
@@ -1039,6 +1039,16 @@ def test_copilot_cli_fingerprint_changes_with_event_log(tmp_path):
 
     assert before != after
 
+    artifact = state_dir / "sess1" / "files" / "report.json"
+    artifact.parent.mkdir()
+    artifact.write_text('{"version": 1}\n')
+    after_artifact = source.fingerprint(cfg)
+    artifact.write_text('{"version": 2}\n')
+    after_artifact_change = source.fingerprint(cfg)
+
+    assert after != after_artifact
+    assert after_artifact != after_artifact_change
+
 
 def test_copilot_cli_reingests_delayed_completion(tmp_path):
     from mark import config, db
@@ -1126,6 +1136,359 @@ def test_copilot_cli_reingests_delayed_completion(tmp_path):
     assert second["updated"] == 1
     assert attachment["storage_kind"] == "managed"
     assert attachment["sha256"]
+
+
+def test_copilot_cli_ingest_snapshots_session_artifacts(tmp_path):
+    from mark import attachments, config, db
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    state_dir = tmp_path / "session-state"
+    session_dir = state_dir / "sess1"
+    artifact = session_dir / "files" / "report.py"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("print('retained')\n")
+    generated = session_dir / "files" / "report.json"
+    generated.write_text('{"retained": true}\n')
+    outside = tmp_path / "outside.txt"
+    outside.write_text("not retained\n")
+    (session_dir / "files" / "outside-link.txt").symlink_to(outside)
+
+    store = tmp_path / "session-store.db"
+    con = sqlite3.connect(store)
+    con.execute(
+        "CREATE TABLE sessions (id TEXT, cwd TEXT, repository TEXT, summary TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    con.execute(
+        "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+        (
+            "sess1",
+            str(workspace),
+            None,
+            None,
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+        ),
+    )
+    con.commit()
+    con.close()
+
+    events = [
+        {"type": "user.message", "data": {"content": "create a report"}},
+        {
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "create",
+                "toolName": "create",
+                "arguments": {"path": str(artifact), "file_text": "ignored"},
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "data": {"toolCallId": "create", "success": True},
+        },
+    ]
+    (session_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+    )
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(state_dir)},
+    )
+
+    with db.connect() as conn:
+        result = CopilotCliSource().ingest(conn.cursor(), {}, cfg, rebuild=False)
+        conn.commit()
+        event_stat = (session_dir / "events.jsonl").stat()
+        legacy_signature = (
+            f"2026-01-02T00:00:00Z|{event_stat.st_mtime_ns}:{event_stat.st_size}"
+        )
+        conn.execute("DELETE FROM documents WHERE session_id = 'sess1'")
+        conn.execute(
+            "UPDATE sessions SET content_hash = 'legacy-content-hash' "
+            "WHERE id = 'sess1'"
+        )
+        conn.execute(
+            "UPDATE source_file_stat SET signature = ? WHERE path = 'cli:sess1'",
+            (legacy_signature,),
+        )
+        conn.commit()
+
+        backfill = CopilotCliSource().ingest(
+            conn.cursor(), {"sess1": "legacy-content-hash"}, cfg, rebuild=False
+        )
+        conn.commit()
+        prior_hash = conn.execute(
+            "SELECT content_hash FROM sessions WHERE id = 'sess1'"
+        ).fetchone()[0]
+        generated.write_text('{"retained": "late update"}\n')
+        late_update = CopilotCliSource().ingest(
+            conn.cursor(), {"sess1": prior_hash}, cfg, rebuild=False
+        )
+        conn.commit()
+        retained_bytes = generated.read_bytes()
+        updated_hash = conn.execute(
+            "SELECT content_hash FROM sessions WHERE id = 'sess1'"
+        ).fetchone()[0]
+        generated.unlink()
+        after_removal = CopilotCliSource().ingest(
+            conn.cursor(), {"sess1": updated_hash}, cfg, rebuild=False
+        )
+        conn.commit()
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT filename, stored_path, content, storage_kind, sha256, "
+                "size_bytes, capture_version FROM documents "
+                "WHERE session_id = 'sess1' AND kind = 'attachment'"
+            )
+        ]
+        files = {
+            row["file_path"]
+            for row in conn.execute(
+                "SELECT file_path FROM session_files WHERE session_id = 'sess1'"
+            )
+        }
+
+    assert result["added"] == 1
+    assert backfill["updated"] == 1
+    assert late_update["updated"] == 1
+    assert after_removal["updated"] == 1
+    assert {row["filename"] for row in rows} == {"report.py", "report.json"}
+    assert all(row["storage_kind"] == "managed" for row in rows)
+    assert all(row["sha256"] for row in rows)
+    assert files == {str(artifact), str(generated)}
+    generated_row = next(row for row in rows if row["filename"] == "report.json")
+    assert attachments.attachment_bytes(generated_row) == retained_bytes
+
+
+def test_copilot_cli_rejects_symlinked_session_artifact_root(tmp_path):
+    from mark.sources.copilot_cli import _session_artifact_files
+
+    state_dir = tmp_path / "session-state"
+    session_dir = state_dir / "sess1"
+    session_dir.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("not retained\n")
+    (session_dir / "files").symlink_to(outside, target_is_directory=True)
+
+    assert _session_artifact_files("sess1", state_dir) == []
+
+
+def test_copilot_cli_snapshots_artifacts_without_event_log(tmp_path):
+    from mark import attachments, config, db
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    state_dir = tmp_path / "session-state"
+    artifact = state_dir / "sess1" / "files" / "generated.sh"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("#!/bin/sh\necho retained\n")
+
+    store = tmp_path / "session-store.db"
+    con = sqlite3.connect(store)
+    con.execute(
+        "CREATE TABLE sessions (id TEXT, cwd TEXT, repository TEXT, summary TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    con.execute(
+        "CREATE TABLE turns (session_id TEXT, turn_index INTEGER, "
+        "user_message TEXT, assistant_response TEXT, timestamp TEXT)"
+    )
+    con.execute(
+        "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+        (
+            "sess1",
+            str(workspace),
+            None,
+            None,
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+        ),
+    )
+    con.execute(
+        "INSERT INTO turns VALUES (?,?,?,?,?)",
+        ("sess1", 0, "generate script", "done", "2026-01-01T00:00:00Z"),
+    )
+    con.commit()
+    con.close()
+
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(state_dir)},
+    )
+    with db.connect() as conn:
+        result = CopilotCliSource().ingest(conn.cursor(), {}, cfg, rebuild=False)
+        conn.commit()
+        row = dict(
+            conn.execute(
+                "SELECT filename, stored_path, content, storage_kind, sha256, "
+                "size_bytes, capture_version FROM documents "
+                "WHERE session_id = 'sess1' AND kind = 'attachment'"
+            ).fetchone()
+        )
+        files = {
+            item["file_path"]
+            for item in conn.execute(
+                "SELECT file_path FROM session_files WHERE session_id = 'sess1'"
+            )
+        }
+
+    assert result["added"] == 1
+    assert row["filename"] == "generated.sh"
+    assert attachments.attachment_bytes(row) == artifact.read_bytes()
+    assert files == {str(artifact)}
+
+
+def test_copilot_cli_retains_same_basename_artifacts_by_source_path(tmp_path):
+    from mark import attachments, config, db
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    state_dir = tmp_path / "session-state"
+    first = state_dir / "sess1" / "files" / "one" / "result.json"
+    second = state_dir / "sess1" / "files" / "two" / "result.json"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    first.write_text('{"source": "one"}\n')
+    second.write_text('{"source": "two"}\n')
+    first_bytes = first.read_bytes()
+
+    store = tmp_path / "session-store.db"
+    con = sqlite3.connect(store)
+    con.execute(
+        "CREATE TABLE sessions (id TEXT, cwd TEXT, repository TEXT, summary TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    con.execute(
+        "CREATE TABLE turns (session_id TEXT, turn_index INTEGER, "
+        "user_message TEXT, assistant_response TEXT, timestamp TEXT)"
+    )
+    con.execute(
+        "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+        (
+            "sess1",
+            str(workspace),
+            None,
+            None,
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+        ),
+    )
+    con.execute(
+        "INSERT INTO turns VALUES (?,?,?,?,?)",
+        ("sess1", 0, "generate results", "done", "2026-01-01T00:00:00Z"),
+    )
+    con.commit()
+    con.close()
+
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(state_dir)},
+    )
+    source = CopilotCliSource()
+    with db.connect() as conn:
+        source.ingest(conn.cursor(), {}, cfg, rebuild=False)
+        conn.commit()
+        initial_hash = conn.execute(
+            "SELECT content_hash FROM sessions WHERE id = 'sess1'"
+        ).fetchone()[0]
+        second.write_text('{"source": "two", "updated": true}\n')
+        source.ingest(conn.cursor(), {"sess1": initial_hash}, cfg, rebuild=False)
+        conn.commit()
+        updated_hash = conn.execute(
+            "SELECT content_hash FROM sessions WHERE id = 'sess1'"
+        ).fetchone()[0]
+        second_bytes = second.read_bytes()
+        first.unlink()
+        source.ingest(conn.cursor(), {"sess1": updated_hash}, cfg, rebuild=False)
+        conn.commit()
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT filename, source_path, stored_path, content, storage_kind, "
+                "sha256, size_bytes, capture_version FROM documents "
+                "WHERE session_id = 'sess1' AND kind = 'attachment'"
+            )
+        ]
+
+    assert len(rows) == 2
+    retained = {row["source_path"]: attachments.attachment_bytes(row) for row in rows}
+    assert retained == {str(first): first_bytes, str(second): second_bytes}
+
+
+def test_copilot_cli_empty_artifact_dir_does_not_rewrite_legacy_session(tmp_path):
+    from mark import config, db
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    state_dir = tmp_path / "session-state"
+    (state_dir / "sess1" / "files").mkdir(parents=True)
+    store = tmp_path / "session-store.db"
+    con = sqlite3.connect(store)
+    con.execute(
+        "CREATE TABLE sessions (id TEXT, cwd TEXT, repository TEXT, summary TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    con.execute(
+        "CREATE TABLE turns (session_id TEXT, turn_index INTEGER, "
+        "user_message TEXT, assistant_response TEXT, timestamp TEXT)"
+    )
+    con.execute(
+        "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+        (
+            "sess1",
+            str(workspace),
+            None,
+            None,
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+        ),
+    )
+    con.execute(
+        "INSERT INTO turns VALUES (?,?,?,?,?)",
+        ("sess1", 0, "hello", "answer", "2026-01-01T00:00:00Z"),
+    )
+    con.commit()
+    con.close()
+
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(state_dir)},
+    )
+    source = CopilotCliSource()
+    with db.connect() as conn:
+        first = source.ingest(conn.cursor(), {}, cfg, rebuild=False)
+        conn.commit()
+        content_hash = conn.execute(
+            "SELECT content_hash FROM sessions WHERE id = 'sess1'"
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE source_file_stat SET signature = ? WHERE path = 'cli:sess1'",
+            ("2026-01-02T00:00:00Z|0:0",),
+        )
+        conn.commit()
+        migrated = source.ingest(
+            conn.cursor(), {"sess1": content_hash}, cfg, rebuild=False
+        )
+        conn.commit()
+        final_hash = conn.execute(
+            "SELECT content_hash FROM sessions WHERE id = 'sess1'"
+        ).fetchone()[0]
+
+    assert first["added"] == 1
+    assert migrated == {"added": 0, "updated": 0, "skipped": 1}
+    assert final_hash == content_hash
 
 
 def test_copilot_cli_ingest_snapshots_only_workspace_files(tmp_path):

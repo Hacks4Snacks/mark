@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from mark import config
 from mark.sources import base
 
@@ -124,7 +126,101 @@ def test_compute_cost_uses_model_specific_cache_write_price():
         == 10.0
     )
     assert config.price_for("gpt-5.5-pro") == (30.0, 180.0, 30.0)
-    assert config.cache_write_price_for("gpt-5.6-sol") == 6.25
+    assert config.cache_write_price_for("gpt-5.6-sol") == 5.0
+
+
+@pytest.mark.parametrize(
+    "model, prices, write",
+    [
+        ("openai/gpt-6-astra", (10.0, 50.0, 1.0), 12.5),
+        ("openai/gpt-6-sol", (2.0, 10.0, 0.2), 2.5),
+        ("gpt-6-luna", (0.1, 0.5, 0.01), 0.125),
+        ("gpt-5.6", (4.0, 20.0, 0.4), 5.0),
+        ("gpt-5.6-terra", (2.0, 12.0, 0.2), 2.5),
+        ("gpt-5.6-luna", (0.2, 1.2, 0.02), 0.25),
+        ("gpt-daybreak-blue-latest", (4.0, 20.0, 0.4), 5.0),
+        ("gpt-daybreak-red-latest", (12.5, 75.0, 1.25), 15.625),
+        ("gpt-5.5-cyber", (12.5, 75.0, 1.25), 12.5),
+        ("chat-latest", (5.0, 30.0, 0.5), 5.0),
+        ("claude-fable-5.1", (10.0, 50.0, 0.25), 12.5),
+        ("anthropic.claude-mythos-5-1", (10.0, 50.0, 0.25), 12.5),
+        ("claude-fable-5", (10.0, 50.0, 1.0), 12.5),
+        ("claude-opus-5.5", (4.0, 20.0, 0.2), 5.0),
+        ("anthropic/claude-opus-5-5", (4.0, 20.0, 0.2), 5.0),
+        ("claude-opus-5", (5.0, 25.0, 0.5), 6.25),
+        ("claude-sonnet-5", (2.0, 10.0, 0.2), 2.5),
+        ("gemini-3.8-flash", (0.75, 3.75, 0.075), 0.75),
+        ("gemini-3.7-flash", (0.75, 3.75, 0.075), 0.75),
+        ("gemini-3.6-flash", (0.75, 3.75, 0.075), 0.75),
+        ("gemini-3.5-flash-lite", (0.3, 2.5, 0.03), 0.3),
+        ("gemini-3.5-flash", (1.5, 9.0, 0.15), 1.5),
+        ("xai/grok-4.7", (2.0, 6.0, 0.5), 2.0),
+        ("grok-4.6", (2.0, 6.0, 0.5), 2.0),
+        ("grok-4.5", (2.0, 6.0, 0.3), 2.0),
+        ("grok-build-latest", (2.0, 6.0, 0.3), 2.0),
+        ("grok-build-0.1", (1.0, 2.0, 0.2), 1.0),
+        ("grok-code-fast-1-0825", (1.0, 2.0, 0.2), 1.0),
+        ("grok-4.20-non-reasoning-latest", (1.25, 2.5, 0.2), 1.25),
+        ("grok-4.20-multi-agent-latest", (1.25, 2.5, 0.2), 1.25),
+        ("gpt-5.3-chat-latest", (1.75, 14.0, 0.175), 1.75),
+        ("gpt-5-chat-latest", (1.25, 10.0, 0.125), 1.25),
+        ("chatgpt-4o-latest", (5.0, 15.0, 5.0), 5.0),
+        ("gpt-4o-2024-05-13", (5.0, 15.0, 5.0), 5.0),
+        ("o1-pro-2025-03-19", (150.0, 600.0, 150.0), 150.0),
+        ("o3-pro", (20.0, 80.0, 20.0), 20.0),
+        ("claude-4-sonnet-20250514", (3.0, 15.0, 0.3), 3.75),
+        ("composer-2.5", (0.5, 2.5, 0.2), 0.5),
+        ("composer-2.5-fast", (3.0, 15.0, 0.5), 3.0),
+        ("Composer 2.5 (Fast)", (3.0, 15.0, 0.5), 3.0),
+    ],
+)
+def test_refreshed_model_prices_and_specific_aliases(
+    model: str, prices: tuple[float, float, float], write: float
+):
+    assert config.price_for(model) == prices
+    assert config.cache_write_price_for(model) == write
+
+
+def test_refreshed_cache_rates_flow_through_cost_calculation():
+    assert config.cache_write_price_for("claude-opus-5.5", one_hour=True) == 8.0
+    # Real counters, not an inferred discount multiplier: the 5.1 cache rate
+    # is one quarter of Fable 5's rate, with the same write tariffs.
+    assert (
+        base.compute_cost(
+            "claude-fable-5-1",
+            0,
+            0,
+            cache_read=1_000_000,
+            input_includes_cache=False,
+        )
+        == 0.25
+    )
+    assert (
+        base.compute_cost(
+            "claude-fable-5-1",
+            0,
+            0,
+            cache_write_1h=1_000_000,
+            input_includes_cache=False,
+        )
+        == 20.0
+    )
+    # Inclusive input: 100 fresh, 700 read, 200 written; 50 output.
+    assert (
+        base.compute_cost("gpt-6-astra", 1000, 50, cache_read=700, cache_write=200)
+        == 0.0067
+    )
+
+
+def test_custom_overrides_still_win_for_new_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    path = tmp_path / "current-prices.json"
+    path.write_text('{"gpt-6-astra": [1, 2, 0.1, 3], "_default": [0, 0, 0]}')
+    monkeypatch.setenv("MARK_PRICING_FILE", str(path))
+    assert config.price_for("openai/gpt-6-astra") == (1.0, 2.0, 0.1)
+    assert config.cache_write_price_for("gpt-6-astra") == 3.0
+    assert config.price_for("claude-fable-5-1") == (0.0, 0.0, 0.0)
 
 
 def test_estimate_metrics_counts_tokens_and_marks_estimated():

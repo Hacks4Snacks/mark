@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
-from . import config, ingest
+from . import config, db, ingest, persist
 
 _state = threading.Condition()
 _lifecycle_lock = threading.Lock()
@@ -111,6 +111,7 @@ def status_snapshot() -> dict[str, Any]:
     """Thread-safe copy of the current indexing status."""
     with _state:
         snapshot = dict(_status)
+        snapshot["stopping"] = _stopping
         snapshot["sync_worker_alive"] = bool(
             _sync_worker is not None and _sync_worker.is_alive()
         )
@@ -204,6 +205,17 @@ def _worker_loop() -> None:
             if post_snapshot is not None:
                 for key, value in post_snapshot.errors.items():
                     errors.setdefault(key, f"post-pass fingerprint: {value}")
+                if post_snapshot.errors:
+                    with db.cursor() as cur:
+                        for key, value in post_snapshot.errors.items():
+                            persist.record_source_health(
+                                cur,
+                                key,
+                                {
+                                    "status": "error",
+                                    "error": f"Post-scan check: {value}",
+                                },
+                            )
             result = dict(result)
             result["errors"] = errors
             fingerprint_matches = bool(

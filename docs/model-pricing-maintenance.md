@@ -1,6 +1,6 @@
 # Maintaining model pricing
 
-Mark ships a versioned model catalog in `mark/model_pricing.json`. Runtime cost
+Mark ships a versioned model catalog in [the pricing registry](../mark/model_pricing.json). Runtime cost
 calculation is fully local and deterministic; Mark never downloads model or
 pricing data while starting, indexing, or serving requests.
 
@@ -41,9 +41,77 @@ Use `effective_from`, `effective_until`, and `review_after` for temporary or
 scheduled prices. A due `review_after` date fails CI even when the overall
 registry is otherwise fresh.
 
+These dates are maintenance metadata, not automatic rate selection by session
+timestamp. Keep a `notes` field for approval requirements, redirects, historical
+tariffs, and announced replacement prices. Do not infer retirement from model age
+or the word "legacy"; check the provider's direct-API lifecycle notices.
+
 `audit: false` excludes fallback or intentionally unsupported entries from
 tracked LiteLLM comparisons. `litellm_ignore_fields` records a reviewed,
 field-specific disagreement where the official provider remains authoritative.
+
+For xAI, the current `embedded` audit reads the raw
+`globalThis.__XAI_PUBLIC_MODELS__` JSON assignment without executing JavaScript
+or decoding HTML entities inside the script. It hashes language-model prices,
+context thresholds, and aliases, ignores non-pricing metadata and media-only
+clusters, and deduplicates identical regional records. The older RSC format is
+still supported for existing snapshots. Malformed or incomplete data fails closed.
+Cursor's audit covers its own **Cursor Models** pricing section, not subscription
+plans or a competing authority for third-party model rates.
+
+## Latest completed review: 2026-09-24
+
+Revision **2026-09-24.1** contains **106 canonical entries** (previously 102),
+including historical releases and local fallback keys. Four models were added
+with their official direct Standard, short-context rates in USD per million tokens:
+
+| Model | Input | Output | Cached input | Cache write |
+| --- | --- | --- | --- | --- |
+| GPT-6 Sol | $2.00 | $10.00 | $0.20 | $2.50 |
+| GPT-6 Luna | $0.10 | $0.50 | $0.01 | $0.125 |
+| Claude Opus 5.5 | $4.00 | $20.00 | $0.20 | $5.00 (5m), $8.00 (1h) |
+| Grok 4.7 | $2.00 | $6.00 | $0.50 | No separate tariff; input rate |
+
+GPT-6 Sol, GPT-6 Luna, and Claude Opus 5.5 were released September 22.
+OpenAI cache writes have a 30-minute TTL; `cache_write_5m` remains Mark's
+compatibility field name. Grok rates apply below 200k prompt tokens. Long-context,
+Fast, Batch, regional, and subscription charges are not selected automatically.
+Older model IDs retain their own prices rather than inheriting a successor's rate.
+
+The remaining provider review confirmed:
+
+- Gemini 3.6, 3.7, and 3.8 Flash still cost $0.75 input, $3.75 output, and
+   $0.075 cached input through December 31. Gemini 2.5 Pro, Flash, and Flash-Lite
+   remain active but are now explicitly documented as limited to prior users.
+- Composer 2.5 and Fast prices are unchanged. Cursor-specific Grok prices do not
+   override direct xAI rates; `grok-build-latest` still maps to Grok 4.5.
+- Existing Anthropic/OpenAI prices, historical entries, and scheduled reviews
+   are unchanged. All five official-source snapshots were reviewed and refreshed,
+   with required markers added for the new models.
+
+Evidence for the manual review:
+
+| Provider | Pricing authority | Model identity / lifecycle evidence |
+| --- | --- | --- |
+| OpenAI | [Standard pricing](https://developers.openai.com/api/docs/pricing.md) | [September 22 release](https://developers.openai.com/api/docs/changelog.md), [deprecations](https://developers.openai.com/api/docs/deprecations.md) |
+| Anthropic | [Model pricing](https://platform.claude.com/docs/en/about-claude/pricing.md) | [Opus 5.5](https://platform.claude.com/docs/en/models/opus-5-5/overview.md), [model IDs](https://platform.claude.com/docs/en/about-claude/models/overview.md), [deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations.md) |
+| Google | [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) | [Models and access restrictions](https://ai.google.dev/gemini-api/docs/models), [deprecations](https://ai.google.dev/gemini-api/docs/deprecations) |
+| xAI | [Models and pricing](https://docs.x.ai/developers/models) | [Grok 4.7](https://docs.x.ai/developers/models/grok-4.7), [Grok 4.5 aliases](https://docs.x.ai/developers/models/grok-4.5) |
+| Cursor | [Models and pricing](https://cursor.com/docs/models) | Composer 2.5 and explicit Fast rows rechecked; no third-party hosting-rate overrides |
+
+Upcoming mandatory reviews: **October 23** for scheduled OpenAI retirements,
+**November 21** for Sol's promotion, **December 11** for GPT-5/o3 retirements, and
+**December 31** for the Gemini Flash promotion. The normal 30/60-day freshness
+policy remains unchanged. "At least through" is recorded as a review date, not a
+guessed `effective_until`.
+
+Verification: **555 isolated tests passed**, including **91 focused pricing and
+configuration tests**; Ruff and editor checks passed. The live audit found no
+official-source drift or tracked price conflicts. Missing LiteLLM Composer
+entries, omitted cache fields, historical/experimental candidates, and unresolved
+rolling Gemini aliases remain informational, not guessed prices or suppressed
+errors. Specialized research and multimodal catalogs remain outside this refresh.
+No stored sessions were repriced and no live deployment was rebuilt.
 
 ## Local commands
 

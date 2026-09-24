@@ -85,7 +85,7 @@ unaffected.
 
 You only configure a source when you want to **change** something. Precedence is:
 
-```
+```text
 built-in default  <  ~/.mark/sources.toml  <  MARK_* environment variables
 ```
 
@@ -146,12 +146,12 @@ Mark keeps your archive current on its own:
   something actually changed (a session ends, updates, or appears).
 - **Manually**, click the **⟳** button to force a re-scan immediately.
 
-| Variable               | Default | Purpose                                                        |
-|------------------------|---------|----------------------------------------------------------------|
-| `MARK_AUTO_SYNC`       | `1`     | `0` keeps the startup scan but disables polling and auto-retry |
-| `MARK_SYNC_INTERVAL`   | `20`    | Seconds between change checks (minimum 5)                     |
-| `MARK_SYNC_RETRY_BASE` | `5`     | Initial automatic retry delay in seconds                      |
-| `MARK_SYNC_RETRY_MAX`  | `300`   | Maximum automatic retry delay in seconds                      |
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MARK_AUTO_SYNC` | `1` | `0` keeps the startup scan but disables polling and auto-retry |
+| `MARK_SYNC_INTERVAL` | `20` | Seconds between change checks (minimum 5) |
+| `MARK_SYNC_RETRY_BASE` | `5` | Initial automatic retry delay in seconds |
+| `MARK_SYNC_RETRY_MAX` | `300` | Maximum automatic retry delay in seconds |
 
 Source databases are read **read-only**; for live stores (like the Copilot CLI
 DB) Mark reads a consistent snapshot. Your original history is never modified.
@@ -164,7 +164,108 @@ DB) Mark reads a consistent snapshot. Your original history is never modified.
 
 ## Inspecting sources in the app
 
-The sidebar status card shows the active embedding engine and last sync. The
-`/api/sources` endpoint (used by the UI) reports each source's effective config:
-whether it's enabled, its resolved roots, whether those paths exist, and how many
-sessions are indexed from it.
+Open **Sources** in the top bar, choose **Sources & index health** in the command
+palette, or follow `#/sources`. The view combines the ingestion coordinator,
+search-index coverage, and per-adapter diagnostics. Opening or refreshing it does
+not import content, start model downloads, or perform inference.
+
+### Source states and history
+
+Each adapter shows its resolved root paths, access state, indexed-session count,
+latest outcome, last completed scan, and last check. States distinguish:
+
+- **Scanned:** a successful scan was recorded for the current paths/options.
+- **Detected / not yet scanned:** roots are accessible, but no successful scan of
+  this configuration has been recorded yet.
+- **Missing roots / Partial roots:** none or only some of the configured roots
+  are currently accessible at their expected locations.
+- **Disabled:** scanning is disabled; already indexed sessions are retained.
+- **Error:** configuration, path access, an adapter attempt, or its post-scan
+  fingerprint check failed. The error and suggested next action remain visible.
+- **Import only:** the source is a user-supplied export, not a watched store.
+  Recognized import success/failure is retained too; retry it by supplying an
+  export with **Add**, not by running a watched-source scan.
+
+Paths are those visible to the **running Mark process**. In Docker, compare them
+with the container-side mount paths, not just their host locations. Counts include
+hidden sessions and disabled-source sessions and use stable adapter ownership
+where available, even for custom Cline-family labels.
+
+History is stored in the existing local metadata table and survives restarting
+Mark. An unchanged source fingerprint updates the last check, not the last
+successful scan time. Configuration changes are identified so earlier results are
+not presented as proof that new paths were scanned. The last recorded error is
+kept in an expandable section after recovery; it is separate from the current
+error state. Before a source has been checked, timestamps are **Not recorded**—no
+historical success is inferred from existing rows. The first pass after this
+upgrade may revisit adapters to establish that history.
+
+Diagnostics reflect adapter outcomes and root access, not a completeness audit:
+an adapter may skip unsupported or malformed individual records. A Scanned state
+does not guarantee every upstream conversation was captured. Normal query filters,
+hidden sessions, and unsupported export formats can also explain missing results.
+
+### Search-index coverage
+
+The view distinguishes the configured preferred model from the backend/model
+identity persisted with the active or building index. It also shows:
+
+- Keyword-indexed chunks versus stored chunks.
+- Compatible vectors versus **eligible** chunks under the configured per-session
+  sampling cap, plus how many eligible chunks still need vectors.
+- Chunks excluded intentionally by that cap, total stored vector rows, and the
+  semantic generation.
+- Empty-archive, pending-verification, error, built-in-fallback, and active
+  semantic-index states.
+
+Coverage is based on one SQLite read snapshot and reuses the writer's eligibility
+policy. A vector counts only when its fingerprint, model, dimensions, and byte
+length match the selected identity. Unknown identity is shown as **Unknown**, not
+0% complete. A fully populated stored index is not marked active until it is
+verified and compatible with this process's already loaded backend. An index
+published by a different process/model may require verification or repair here.
+
+**100% of eligible chunks is not 100% of all transcript chunks**, and neither is a
+relevance/quality score. Keyword indexing is not subject to the semantic sampling
+cap. Coverage spans the entire conversation archive, including hidden and disabled
+sources; curated solution copies are separate.
+
+**Built-in fallback** explicitly means the lightweight hashing vectorizer is in
+use, not a transformer. Installing the optional semantic dependency and restarting
+Mark may improve recall. The health view does not diagnose every earlier model-load
+fallback reason, and retrying does not install packages or switch the cached backend.
+
+### Retry and refresh
+
+- **Refresh diagnostics** reads current source/index state only. Detailed coverage
+  refreshes about every ten seconds while the health view is open, using the app's
+  existing heartbeat; normal status polling does not run the coverage queries.
+- **Re-scan / retry** queues an incremental pass over enabled watched sources.
+- **Retry semantic indexing** uses the same queue with semantic-repair intent.
+  It is not a separate worker or a destructive full rebuild.
+
+Both retry actions show whether work was accepted or already covered, plus
+queued/running/completed states, errors, worker availability, retry attempts, and
+the next automatic retry when scheduled. Automatic retry remains governed by
+`MARK_AUTO_SYNC` and the existing backoff settings. If diagnostics cannot be read,
+the view marks displayed values as potentially stale instead of implying success.
+
+A keyword coverage gap may require investigating and rebuilding unchanged source
+content; an ordinary incremental retry is not guaranteed to repair it. The health
+view does not automatically trigger a full rebuild, change source settings, or
+delete data.
+
+### Health API
+
+- `GET /api/sources` retains its existing list shape and adds `health`,
+  `root_status`, `history`, `configuration_changed`, `error`, and `action` fields.
+- `GET /api/health` returns `checked_at`, `coordinator`, `sources`, and `index`.
+  Index details include `coverage`, `configured_model`, and `per_session_cap`.
+- `GET /api/status` remains the cheap coordinator/semantic-status heartbeat and
+  adds `stopping` so retry controls can reflect shutdown.
+- `POST /api/reindex?repair_semantic=true` requests semantic verification/repair
+  through the existing coordinator. The `admission` response remains authoritative.
+
+Only bounded outcome metadata, timestamps, and counts are retained for diagnostics;
+source option contents are represented by a fingerprint rather than copied into
+history. No database schema migration or reindex is required for this feature.

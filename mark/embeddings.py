@@ -4,11 +4,13 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from itertools import pairwise
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -245,6 +247,12 @@ def get_embedder() -> Embedder:
     return _embedder
 
 
+def loaded_fingerprint() -> str | None:
+    """Describe the already-loaded backend without triggering model discovery."""
+    embedder = _embedder
+    return embedder.fingerprint if embedder is not None else None
+
+
 def embed_texts(texts: Sequence[str]) -> np.ndarray:
     return get_embedder().embed(texts)
 
@@ -298,6 +306,52 @@ def embedding_candidates_cte() -> str:
         "  )"
         ") "
     )
+
+
+def index_coverage(cur: sqlite3.Cursor, fingerprint: str | None) -> dict[str, Any]:
+    """Count index coverage in the caller's snapshot without loading any model.
+
+    Compatible vectors are counted against the same capped candidate selection
+    used by the writer, not against every keyword chunk. NULL means the target
+    identity is unknown, not zero-percent semantic readiness.
+    """
+    try:
+        identity = json.loads(fingerprint or "null")
+    except (TypeError, ValueError):
+        identity = None
+    valid = (
+        isinstance(identity, dict)
+        and isinstance(identity.get("model"), str)
+        and isinstance(identity.get("backend"), str)
+        and type(identity.get("dim")) is int
+        and 0 < identity["dim"] <= 65_536
+    )
+    model = identity["model"] if valid else ""
+    dim = identity["dim"] if valid else 0
+    row = cur.execute(
+        embedding_candidates_cte()
+        + "SELECT COUNT(*) AS eligible_chunks, COUNT(e.chunk_id) AS embedded_chunks, "
+        "(SELECT COUNT(*) FROM chunks) AS total_chunks, "
+        "(SELECT COUNT(DISTINCT c.id) FROM chunks c JOIN search_index f "
+        " ON f.chunk_id = c.id AND f.session_id = c.session_id) AS keyword_chunks, "
+        "(SELECT COUNT(*) FROM embeddings) AS stored_vectors "
+        "FROM embedding_candidates candidate LEFT JOIN embeddings e "
+        "ON e.chunk_id = candidate.id AND e.fingerprint = ? AND e.model = ? "
+        "AND e.dim = ? AND length(e.vector) = ?",
+        (config.MAX_EMBED_CHUNKS_PER_SESSION, fingerprint, model, dim, dim * 4),
+    ).fetchone()
+    data = dict(row)
+    data["identity"] = (
+        {key: identity.get(key) for key in ("backend", "kind", "model", "dim")}
+        if valid
+        else None
+    )
+    data["embedded_chunks"] = data["embedded_chunks"] if valid else None
+    data["pending_chunks"] = (
+        data["eligible_chunks"] - data["embedded_chunks"] if valid else None
+    )
+    data["excluded_by_cap"] = data["total_chunks"] - data["eligible_chunks"]
+    return data
 
 
 def set_index_fingerprint(cur, embedder: Embedder) -> None:

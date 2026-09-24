@@ -141,6 +141,28 @@ def test_search_passages_keyword_mode_does_not_call_semantic_search(
     assert [passage["session_id"] for passage in passages] == ["keyword"]
 
 
+def test_quoted_search_passages_require_exact_phrase_in_semantic_mode(
+    persist_session, monkeypatch
+):
+    persist_session(
+        _session("exact", [("capture the repository evidence now", "noted")])
+    )
+    persist_session(
+        _session("separated", [("repository logs provide evidence", "noted")])
+    )
+    monkeypatch.setattr(
+        search,
+        "_semantic_search",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("quoted passage search must not call semantic search")
+        ),
+    )
+
+    passages = search.search_passages('"repository evidence"', mode="semantic")
+
+    assert {passage["session_id"] for passage in passages} == {"exact"}
+
+
 def test_plan_resolves_repository_case_insensitively():
     plan = ask.plan_query(
         "What was fixed in AFOI-NC-Security?",

@@ -7,6 +7,7 @@ export async function api(path, opts) {
   if (!res.ok) {
     let detail = res.statusText;
     try { detail = (await res.json()).detail || detail; } catch (_) {}
+    if (Array.isArray(detail)) detail = detail.map((item) => item.msg || String(item)).join("; ");
     throw new Error(detail);
   }
   return res.status === 204 ? null : res.json();

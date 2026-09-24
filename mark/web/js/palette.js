@@ -23,6 +23,7 @@ const COMMANDS = [
   { id: "nav-collections", icon: "layers", label: "Collections", hint: "Saved, auto-updating groups", kind: "Go to", run: () => showCollections() },
   { id: "nav-library", icon: "code", label: "Snippet & command library", kind: "Go to", run: () => showLibrary() },
   { id: "nav-usage", icon: "pie", label: "Usage & spend", kind: "Go to", run: () => showUsage() },
+  { id: "nav-sources", icon: "activity", label: "Sources & index health", hint: "Sync diagnostics and retry", kind: "Go to", run: () => $("#sourcesBtn")?.click() },
   { id: "nav-ask", icon: "sparkles", label: "Ask your history", hint: "Local LLM", kind: "Go to", run: () => showAsk() },
   { id: "act-add", icon: "plus", label: "Add a note or file", kind: "Action", run: () => $("#addBtn")?.click() },
   { id: "act-rescan", icon: "sync", label: "Re-scan history now", kind: "Action", run: () => $("#reindexBtn")?.click() },
@@ -152,6 +153,7 @@ async function render(q) {
         type: "session", group: "Conversations",
         id: r.id, title: r.title, source: r.source,
         updated_at: r.updated_at, created_at: r.created_at,
+        match: r.match,
       }));
       // conversations on top when the user is clearly searching
       items = [...sessions, ...buildStatic(q)];
@@ -165,7 +167,7 @@ function choose(idx) {
   const it = items[idx];
   if (!it) return;
   closePalette();
-  if (it.type === "session") openSession(it.id);
+  if (it.type === "session") openSession(it.id, { turnIndex: it.match?.turn_index, q: it.match?.query || "" });
   else if (typeof it.run === "function") it.run();
 }
 

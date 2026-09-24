@@ -5,8 +5,11 @@
 
 import { api } from "./api.js";
 import { state } from "./state.js";
-import { loadFacets, loadStats, syncFilterUI } from "./sidebar.js";
-import { $, $$, debounce, srcMeta, toast } from "./utils.js";
+import {
+  loadFacets, loadStats, syncFilterUI, setupSourceHealth, showSources,
+  observeSourceHealth, sourceHealthUnavailable,
+} from "./sidebar.js";
+import { $, $$, srcMeta, toast } from "./utils.js";
 import { icon } from "./icons.js";
 import { routeFromHash } from "./router.js";
 import {
@@ -16,7 +19,7 @@ import { openSession } from "./views/detail.js";
 import {
   hideCollMenu, openCollectionDialog, saveCollection, saveCollectionFromFilters, showCollections,
 } from "./views/collections.js";
-import { libState, loadSnippets, showLibrary } from "./views/library.js";
+import { setupLibrary, showLibrary } from "./views/library.js";
 import { loadUsage, showUsage } from "./views/usage.js";
 import { showAsk, submitAsk } from "./views/ask.js";
 import { closePalette, isPaletteOpen, openPalette, setupPalette } from "./palette.js";
@@ -35,6 +38,7 @@ let manualSyncPending = false;
 let shownIndexError = null;
 let shownMonitorError = null;
 let statusReady = false;
+let reindexInFlight = null;
 
 // Show the topbar Ask button only when the feature is enabled. It starts hidden
 // in the markup so a disabled feature never flashes before the first status poll.
@@ -45,6 +49,7 @@ function applyAskVisibility() {
 
 async function observeStatus(st) {
   const running = !!(st.running || st.queued);
+  observeSourceHealth(st);
   if (st.resume_cmd) state.resumeCmd = st.resume_cmd;
   state.askEnabled = !!st.ask_enabled;
   applyAskVisibility();
@@ -104,9 +109,48 @@ async function pollStatus() {
     if (request !== statusRequest) return;
     const running = await observeStatus(st);
     if (request === statusRequest) scheduleStatusPoll(running);
-  } catch (_) {
-    if (request === statusRequest) scheduleStatusPoll(false);
+  } catch (error) {
+    if (request === statusRequest) {
+      sourceHealthUnavailable(error.message);
+      scheduleStatusPoll(false);
+    }
   }
+}
+
+// All manual actions share admission and status-request ordering. In particular,
+// a pre-retry GET cannot repaint idle after a health-page POST admitted work.
+async function requestReindex(repairSemantic = false) {
+  if (reindexInFlight) {
+    await reindexInFlight;
+    // A semantic repair request must not be swallowed by an in-flight normal scan.
+    return requestReindex(repairSemantic);
+  }
+  if (!statusReady) throw new Error("Wait for Mark's first status response before retrying.");
+  clearTimeout(statusTimer);
+  const request = ++statusRequest;
+  manualSyncPending = true;
+  reindexInFlight = (async () => {
+    try {
+      const st = await api("/api/reindex" + (repairSemantic ? "?repair_semantic=true" : ""), { method: "POST" });
+      if (request !== statusRequest) return st;
+      if (st.admission === "accepted") toast("Re-scan queued");
+      else if (st.admission === "covered") toast(st.running || st.queued ? "Re-scan already in progress" : "Re-scan already completed");
+      else {
+        manualSyncPending = false;
+        toast("Re-scan unavailable while Mark is stopping", true);
+      }
+      const running = await observeStatus(st);
+      if (request === statusRequest) scheduleStatusPoll(running);
+      return st;
+    } catch (error) {
+      if (request === statusRequest) {
+        manualSyncPending = false;
+        scheduleStatusPoll(false);
+      }
+      throw error;
+    } finally { reindexInFlight = null; }
+  })();
+  return reindexInFlight;
 }
 
 // gentle: only re-run the result list when the user is idle at the top of the
@@ -259,32 +303,8 @@ function setup() {
   });
 
   $("#reindexBtn").addEventListener("click", async () => {
-    if (!statusReady) return;
-    clearTimeout(statusTimer);
-    const request = ++statusRequest; // invalidate any GET already in flight
-    manualSyncPending = true;
-    try {
-      const st = await api("/api/reindex", { method: "POST" });
-      if (request !== statusRequest) return;
-      if (st.admission === "accepted") {
-        toast("Re-scan queued");
-      } else if (st.admission === "covered") {
-        toast(st.running || st.queued
-          ? "Re-scan already in progress"
-          : "Re-scan already completed");
-      } else {
-        manualSyncPending = false;
-        toast("Re-scan unavailable while Mark is stopping", true);
-      }
-      const running = await observeStatus(st);
-      if (request === statusRequest) scheduleStatusPoll(running);
-    }
-    catch (e) {
-      if (request !== statusRequest) return;
-      manualSyncPending = false;
-      toast(e.message, true);
-      scheduleStatusPoll(false);
-    }
+    try { await requestReindex(); }
+    catch (error) { toast(error.message, true); }
   });
 
   $("#collectionsBtn").addEventListener("click", () => showCollections());
@@ -304,17 +324,11 @@ function setup() {
   });
 
   $("#libraryBtn").addEventListener("click", () => showLibrary());
-  $("#libSearch").addEventListener("input", debounce(() => {
-    libState.q = $("#libSearch").value.trim(); loadSnippets();
-  }, 200));
-  $("#libLang").addEventListener("change", () => { libState.language = $("#libLang").value; loadSnippets(); });
-  $("#libCommands").addEventListener("change", () => {
-    libState.commands = $("#libCommands").checked;
-    $("#libLang").disabled = libState.commands;
-    loadSnippets();
-  });
+  setupLibrary();
 
   $("#usageBtn").addEventListener("click", () => showUsage());
+  $("#sourcesBtn").addEventListener("click", () => showSources());
+  setupSourceHealth(requestReindex);
 
   $("#askBtn").addEventListener("click", () => showAsk());
   $("#askForm").addEventListener("submit", (e) => { e.preventDefault(); submitAsk(); });
@@ -325,6 +339,7 @@ function setup() {
   document.addEventListener("keydown", (e) => {
     const tag = document.activeElement?.tagName;
     const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    if (document.querySelector("dialog[open]")) return; // native dialog owns Escape/focus
     // Cmd/Ctrl-K opens the command palette from anywhere.
     if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
       e.preventDefault();

@@ -53,6 +53,7 @@
       <button id="collectionsBtn" class="btn" title="Browse your collections" aria-label="Collections"><span class="bi" data-icon="layers"></span> Collections</button>
       <button id="libraryBtn" class="btn" title="Browse the snippet &amp; command library" aria-label="Snippet library"><span class="bi" data-icon="code"></span> Library</button>
       <button id="usageBtn" class="btn" title="Usage &amp; spend analytics" aria-label="Usage dashboard"><span class="bi" data-icon="pie"></span> Usage</button>
+      <button id="sourcesBtn" class="btn" title="Sources &amp; index health" aria-label="Sources and index health"><span class="bi" data-icon="activity"></span> Sources</button>
       <button id="askBtn" class="btn" title="Ask your history with a local LLM" aria-label="Ask your history" hidden><span class="bi" data-icon="sparkles"></span> Ask</button>
       <button id="addBtn" class="btn btn-primary" title="Add a note or file" aria-label="Add a note or file"><span class="bi" data-icon="plus"></span> Add</button>
       <button id="reindexBtn" class="btn icon-only" title="Re-scan now · auto-syncs new sessions automatically" aria-label="Re-scan history now" disabled><span class="bi" data-icon="sync"></span></button>
@@ -155,15 +156,59 @@
       <!-- LIBRARY VIEW -->
       <div id="libraryView" hidden>
         <div class="list-head">
-          <h2>Snippet &amp; command library</h2>
+          <h2>Snippet &amp; solution library</h2>
           <span id="libCount" class="muted"></span>
         </div>
-        <div class="lib-controls">
-          <input id="libSearch" type="search" placeholder="Filter by content..." autocomplete="off" spellcheck="false" />
-          <select id="libLang" aria-label="Filter by language"><option value="">All languages</option></select>
-          <label class="toggle lib-cmd"><input type="checkbox" id="libCommands" /> <span>Commands only</span></label>
+        <div class="segmented library-mode" id="libModeToggle" role="tablist" aria-label="Library content">
+          <button type="button" role="tab" id="libExtractedTab" data-libmode="extracted" aria-controls="libExtractedPanel" aria-selected="true" class="active">Extracted snippets</button>
+          <button type="button" role="tab" id="libCuratedTab" data-libmode="curated" aria-controls="libCuratedPanel" aria-selected="false" tabindex="-1">Curated solutions</button>
         </div>
-        <div id="libResults" class="lib-results"></div>
+        <div id="libExtractedPanel" role="tabpanel" aria-labelledby="libExtractedTab">
+          <div class="lib-controls">
+            <input id="libSearch" type="search" aria-label="Filter extracted snippets" placeholder="Filter by content..." maxlength="2000" autocomplete="off" spellcheck="false" />
+            <select id="libLang" aria-label="Filter by language"><option value="">All languages</option></select>
+            <label class="toggle lib-cmd"><input type="checkbox" id="libCommands" /> <span>Commands only</span></label>
+          </div>
+          <div class="lib-scope-controls">
+            <label class="lib-repo">Repository<select id="libRepo" aria-describedby="libFilterHint"><option value="">All repositories</option></select></label>
+            <label>From (UTC)<input type="date" id="libDateFrom" min="0001-01-01" max="9999-12-31" aria-describedby="libFilterHint" /></label>
+            <label>Through (UTC)<input type="date" id="libDateTo" min="0001-01-01" max="9999-12-31" aria-describedby="libFilterHint" /></label>
+            <div class="lib-filter-actions">
+              <button id="libClear" class="btn btn-ghost" type="button">Clear filters</button>
+              <button id="libRefresh" class="btn btn-ghost" type="button">Refresh</button>
+            </div>
+          </div>
+          <p class="lib-filter-hint" id="libFilterHint">Dates include both days, using the conversation's last update (or creation) in UTC. Dropdown counts cover all visible snippets.</p>
+          <p class="lib-filter-hint" id="libFacetError" role="status" hidden>Some filter choices could not be refreshed and may be stale. Use Refresh to retry.</p>
+          <nav id="libPaging" class="lib-paging" aria-label="Snippet pages">
+            <button id="libPrevious" class="btn btn-ghost" type="button" data-snippet-page="previous" aria-controls="libResults" disabled>Previous</button>
+            <span id="libPageStatus" data-snippet-range role="status" tabindex="-1"></span>
+            <button id="libNext" class="btn btn-ghost" type="button" data-snippet-page="next" aria-controls="libResults" disabled>Next</button>
+          </nav>
+          <p id="libError" class="solution-error" role="alert" hidden></p>
+          <button id="libRetry" class="btn" type="button" hidden>Retry this page</button>
+          <div id="libResults" class="lib-results" aria-busy="false"></div>
+          <nav id="libPagingBottom" class="lib-paging" aria-label="Snippet pages, bottom" hidden>
+            <button class="btn btn-ghost" type="button" data-snippet-page="previous" aria-controls="libResults" disabled>Previous</button>
+            <span data-snippet-range></span>
+            <button class="btn btn-ghost" type="button" data-snippet-page="next" aria-controls="libResults" disabled>Next</button>
+          </nav>
+        </div>
+        <div id="libCuratedPanel" role="tabpanel" aria-labelledby="libCuratedTab" hidden>
+          <p class="curation-hint">Your saved answers and snippets. These independent copies keep your notes and review status even if the original conversation changes, is hidden, or is deleted.</p>
+          <div class="solution-controls">
+            <input id="solutionSearch" type="search" aria-label="Search curated solutions" placeholder="Search titles, content, notes, or prerequisites..." maxlength="2000" autocomplete="off" />
+            <input id="solutionTagFilter" type="search" aria-label="Filter curated solutions by tag" placeholder="Exact tag" maxlength="40" autocomplete="off" />
+            <select id="solutionStatusFilter" aria-label="Filter by review status">
+              <option value="">All review statuses</option>
+              <option value="needs_review">Needs review</option>
+              <option value="verified">Verified</option>
+              <option value="outdated">Outdated</option>
+            </select>
+            <label class="toggle"><input type="checkbox" id="solutionFavoritesOnly" /> <span>Favorites only</span></label>
+          </div>
+          <div id="solutionResults" class="lib-results"></div>
+        </div>
       </div>
 
       <!-- USAGE VIEW -->
@@ -172,6 +217,35 @@
           <h2><span class="usage-head-icon bi" data-icon="pie" data-icon-size="20"></span> Usage &amp; spend</h2>
         </div>
         <div id="usageBody"></div>
+      </div>
+
+      <!-- SOURCES AND INDEX HEALTH -->
+      <div id="sourcesView" hidden>
+        <div class="health-head">
+          <div><h2>Sources &amp; index health</h2><p class="muted">Diagnose missing conversations and search readiness without opening logs.</p></div>
+          <button id="healthRefresh" class="btn" type="button">Refresh diagnostics</button>
+        </div>
+        <p id="healthReadError" class="health-error" role="alert" hidden></p>
+        <p id="healthChecked" class="muted">Loading diagnostics...</p>
+        <section class="health-panel" aria-labelledby="healthSyncTitle">
+          <div class="health-panel-head"><h3 id="healthSyncTitle">Ingestion coordinator</h3><span id="healthRunState" class="health-badge" role="status">Checking</span></div>
+          <p id="healthRunMessage" aria-live="polite"></p>
+          <div id="healthCoordinatorDetails"></div>
+          <div class="health-actions">
+            <button id="healthRetry" class="btn btn-primary" type="button" disabled>Re-scan / retry</button>
+            <button id="healthRepair" class="btn" type="button" disabled>Retry semantic indexing</button>
+          </div>
+          <p id="healthActionFeedback" role="status"></p>
+          <p class="health-help">Both actions use the existing single-worker queue. They scan enabled watched sources; imports must be supplied again using Add. Retrying does not reinstall or switch embedding backends.</p>
+        </section>
+        <section class="health-panel" aria-labelledby="healthIndexTitle">
+          <h3 id="healthIndexTitle">Search index</h3><div id="healthIndex"><p class="muted">Loading index coverage...</p></div>
+        </section>
+        <section aria-labelledby="healthSourceTitle">
+          <h3 id="healthSourceTitle">Source adapters</h3>
+          <p class="health-help">Paths are shown as seen by the running Mark process (inside the container when using Docker). Counts include hidden and disabled-source sessions. Health is a diagnostic snapshot, not proof that every upstream conversation was captured.</p>
+          <div id="healthSources" class="health-source-grid"></div>
+        </section>
       </div>
 
       <!-- ASK VIEW -->
@@ -304,6 +378,54 @@
       <div class="dialog-foot">
         <button type="button" class="btn" id="collCancel">Cancel</button>
         <button type="button" class="btn btn-primary" id="collSave">Save collection</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="solutionDialog" class="dialog solution-dialog" aria-labelledby="solutionDialogTitle">
+    <form id="solutionForm">
+      <div class="dialog-head">
+        <strong id="solutionDialogTitle">Save solution</strong>
+        <button type="button" class="btn btn-ghost icon-only" id="solutionClose" aria-label="Close solution editor"><span class="bi" data-icon="x"></span></button>
+      </div>
+      <p id="solutionOwnership" class="curation-hint">Save an independent copy of the full answer or snippet. Source changes, hiding, and deletion will not remove it. Manage saved copies here in Curated solutions.</p>
+      <p id="solutionError" class="solution-error" role="alert" hidden></p>
+      <p id="solutionLoading" class="muted" role="status" hidden>Loading source...</p>
+      <fieldset id="solutionFields">
+        <label for="solutionTitle">Title</label>
+        <input id="solutionTitle" required maxlength="160" autocomplete="off" />
+        <div class="solution-editor-row">
+          <div><label for="solutionStatus">Review status</label>
+            <select id="solutionStatus">
+              <option value="needs_review">Needs review</option>
+              <option value="verified">Verified</option>
+              <option value="outdated">Outdated</option>
+            </select>
+          </div>
+          <label class="toggle solution-favorite-label"><input type="checkbox" id="solutionFavorite" /> <span>Favorite</span></label>
+        </div>
+        <label for="solutionTags">Tags <span class="muted">(comma-separated; up to 20)</span></label>
+        <input id="solutionTags" maxlength="820" placeholder="auth, go, runbook" autocomplete="off" />
+        <label for="solutionPrerequisites">Environment / version prerequisites</label>
+        <textarea id="solutionPrerequisites" rows="2" maxlength="4000" placeholder="Required versions, environment, permissions, or safety checks"></textarea>
+        <label for="solutionNotes">Annotations</label>
+        <textarea id="solutionNotes" rows="4" maxlength="10000" placeholder="Why this works, verification notes, caveats, or a replacement for outdated advice"></textarea>
+      </fieldset>
+      <div class="solution-provenance">
+        <strong>Source provenance</strong>
+        <p id="solutionOrigin"></p>
+        <p id="solutionSourceStatus" role="status"></p>
+        <a id="solutionSourceLink" class="btn btn-ghost" hidden>Open source turn</a>
+      </div>
+      <details id="solutionContentPanel" class="solution-content-panel">
+        <summary id="solutionContentLabel">Saved content (read-only)</summary>
+        <div id="solutionContent"></div>
+      </details>
+      <div class="dialog-foot solution-dialog-foot">
+        <button type="button" class="btn btn-ghost detail-delete" id="solutionDelete" hidden>Delete saved copy</button>
+        <button type="button" class="btn" id="solutionCopy">Copy content</button>
+        <button type="button" class="btn" id="solutionCancel">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="solutionSave">Save solution</button>
       </div>
     </form>
   </dialog>

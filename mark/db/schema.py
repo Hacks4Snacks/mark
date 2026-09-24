@@ -1,5 +1,33 @@
 from __future__ import annotations
 
+# User-owned snapshots deliberately have no source foreign key: re-ingestion
+# replaces turns/code blocks, and deleting a source must not erase saved work.
+CURATED_SOLUTIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS curated_solutions (
+    id                TEXT PRIMARY KEY,
+    title             TEXT NOT NULL,
+    notes             TEXT NOT NULL DEFAULT '',
+    tags              TEXT NOT NULL DEFAULT '[]',
+    favorite          INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0, 1)),
+    status            TEXT NOT NULL DEFAULT 'needs_review'
+                      CHECK (status IN ('needs_review', 'verified', 'outdated')),
+    prerequisites     TEXT NOT NULL DEFAULT '',
+    content           TEXT NOT NULL,
+    language          TEXT,
+    source_kind       TEXT NOT NULL CHECK (source_kind IN ('answer', 'snippet')),
+    source_session_id TEXT NOT NULL,
+    source_turn_index INTEGER,
+    source_title      TEXT NOT NULL,
+    source            TEXT NOT NULL,
+    repository        TEXT,
+    source_timestamp  TEXT,
+    source_sha256     TEXT NOT NULL UNIQUE,
+    revision          INTEGER NOT NULL DEFAULT 1,
+    created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+)
+"""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id            TEXT PRIMARY KEY,
@@ -48,6 +76,7 @@ CREATE TABLE IF NOT EXISTS documents (
     session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     kind         TEXT NOT NULL DEFAULT 'note',
     filename     TEXT,
+    source_path  TEXT,
     stored_path  TEXT,
     mime         TEXT,
     size_bytes   INTEGER,
@@ -173,4 +202,4 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
     turn_index  UNINDEXED,
     tokenize = 'porter unicode61'
 );
-"""
+""" + CURATED_SOLUTIONS_SCHEMA + ";"

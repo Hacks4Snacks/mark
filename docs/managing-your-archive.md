@@ -26,8 +26,8 @@ installed:
 pip install 'markive[pdf]'
 ```
 
-| Variable                | Default  | Purpose               |
-|-------------------------|----------|-----------------------|
+| Variable | Default | Purpose |
+| --- | --- | --- |
 | `MARK_MAX_UPLOAD_BYTES` | `25 MiB` | Largest file accepted |
 | `MARK_MAX_EXTRACTED_TEXT_CHARS` | `5000000` | Maximum extracted text retained |
 | `MARK_MAX_PDF_PAGES` | `1000` | Maximum pages inspected per PDF |
@@ -66,17 +66,35 @@ irrelevant sessions.
 
 Hiding is fully reversible and changes no underlying data.
 
+Explicitly saved **Curated solutions** are independent copies: they remain visible
+when you hide a session or disable its source. The curated view labels the source
+as hidden/disabled. Manage those copies separately in the
+[Library](library.md#curated-solutions).
+
 ## Delete a session
 
 Deleting is **permanent**. Mark removes the session and writes a *tombstone* so a
 later re-scan of the original source can't silently restore it. Reach for **hide**
 unless you truly want the data gone.
 
+Saved solutions and their annotations survive source deletion and show a
+missing-source indicator. When removing sensitive material, delete its saved
+copies in **Library → Curated solutions** as well. Deleting a saved copy never
+deletes the original source conversation.
+
 ## Attachments (agent-created files)
 
 When an agent created or edited a file during a session, Mark records it and — up
 to a size cap — snapshots its content so you can view and **download** it later,
 even if the original file has since changed or been removed.
+
+The **Files** list records paths reported by the agent or discovered in its
+session artifact directory; it is provenance only.
+The **Attachments** list contains the immutable snapshots retained by Mark. For
+Copilot CLI sessions, Mark captures every non-symlink regular file in
+`~/.copilot/session-state/<session-id>/files`, including outputs produced
+indirectly by scripts or shell commands. Successful writes inside the session's
+repository workspace are captured as well.
 
 | Variable                    | Default   | Purpose                                                              |
 |-----------------------------|-----------|----------------------------------------------------------------------|
@@ -106,11 +124,11 @@ the loaded and total counts and keeps the remaining metadata reachable through
 
 ## What lives where
 
-| Path                   | Contents                                                              |
-|------------------------|-----------------------------------------------------------------------|
-| `~/.mark/mark.db`      | The index: sessions, turns, files, tags, cost, embeddings, tombstones |
-| `~/.mark/uploads/`     | Files you uploaded                                                    |
-| `~/.mark/sources.toml` | Optional source overrides                                             |
+| Path | Contents |
+| --- | --- |
+| `~/.mark/mark.db` | Sessions, turns, files, tags, cost, embeddings, tombstones, and curated solutions |
+| `~/.mark/uploads/` | Files you uploaded |
+| `~/.mark/sources.toml` | Optional source overrides |
 
 Everything is local. To start fresh, stop Mark and delete `~/.mark/` (or the
 directory set by `MARK_DATA_DIR`).

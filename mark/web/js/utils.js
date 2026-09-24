@@ -96,13 +96,115 @@ export function fmtBytes(n) {
 
 export const normTitle = (t) => (t || "Untitled").toLowerCase().replace(/\s+/g, " ").trim();
 
+// URLs use human-facing (one-based) turn numbers; API and source data use zero.
+export function sessionHash(id, { turnIndex = null, q = "" } = {}) {
+  const params = new URLSearchParams();
+  if (Number.isSafeInteger(turnIndex) && turnIndex >= 0 && turnIndex < Number.MAX_SAFE_INTEGER) {
+    params.set("turn", String(turnIndex + 1));
+  }
+  if (q.trim()) params.set("q", q.trim().slice(0, 2000));
+  return "#/session/" + encodeURIComponent(id) + (params.size ? "?" + params : "");
+}
+
+export function parseSessionHash(hash) {
+  const match = hash.match(/^#\/session\/([^?]+)(?:\?(.*))?$/);
+  if (!match) return null;
+  let id;
+  try { id = decodeURIComponent(match[1]); }
+  catch (_) { return null; }
+  const params = new URLSearchParams(match[2] || "");
+  const rawTurn = params.get("turn");
+  const number = rawTurn == null ? null : Number(rawTurn);
+  const valid = rawTurn != null && /^\d+$/.test(rawTurn) && Number.isSafeInteger(number) && number > 0;
+  return {
+    id, turnIndex: valid ? number - 1 : null,
+    q: (params.get("q") || "").trim().slice(0, 2000),
+    invalidTarget: rawTurn != null && !valid,
+  };
+}
+
+export function evidencePattern(query) {
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const tokens = (value) => value.match(/[\p{L}\p{N}_]+/gu) || [];
+  const quoted = [...query.matchAll(/"([^"]+)"/g)]
+    .map((match) => tokens(match[1]).map(escape).join("[^\\p{L}\\p{N}_]+"))
+    .filter(Boolean).map((phrase) => phrase + "(?![\\p{L}\\p{N}_])");
+  const words = tokens(query.replace(/"[^"]+"/g, " ")).filter((word) => word.length > 1);
+  const parts = [...quoted, ...words.map((word) => escape(word) + "[\\p{L}\\p{N}_]*")];
+  return parts.length ? new RegExp("(?<![\\p{L}\\p{N}_])(?:" + parts.join("|") + ")", "giu") : null;
+}
+
+export function adjacentMatchPosition(page, index, delta) {
+  if (!page?.total) return -1;
+  return index < 0 ? (page.target_position || 0) + (delta < 0 ? -1 : 0)
+    : page.offset + index + delta;
+}
+
+// Highlight text nodes, never HTML strings. A phrase may cross emphasis or
+// syntax-highlighting spans without damaging the surrounding rendered markup.
+export function highlightEvidence(root, query) {
+  $$('mark[data-evidence]', root).forEach((mark) => {
+    const parent = mark.parentNode;
+    mark.replaceWith(document.createTextNode(mark.textContent));
+    parent.normalize();
+  });
+  const pattern = evidencePattern(query);
+  if (!pattern) return null;
+  let first = null;
+  let remaining = 1000; // bound DOM growth even after explicitly loading a huge turn
+  const blocks = root.matches(".md") ? [root] : $$(".md", root);
+  for (const block of blocks) {
+    if (block.closest(".thinking")) continue; // display-only, not indexed
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let text = "";
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      nodes.push({ node, start: text.length, end: text.length + node.length });
+      text += node.data;
+    }
+    const matches = [];
+    pattern.lastIndex = 0;
+    let match;
+    while (remaining > 0 && (match = pattern.exec(text))) {
+      matches.push([match.index, match.index + match[0].length]);
+      remaining -= 1;
+    }
+    let cursor = 0;
+    for (const { node, start, end } of nodes) {
+      while (cursor < matches.length && matches[cursor][1] <= start) cursor += 1;
+      let index = cursor;
+      let consumed = 0;
+      const fragment = document.createDocumentFragment();
+      while (index < matches.length && matches[index][0] < end) {
+        const left = Math.max(start, matches[index][0]) - start;
+        const right = Math.min(end, matches[index][1]) - start;
+        fragment.append(document.createTextNode(node.data.slice(consumed, left)));
+        const mark = document.createElement("mark");
+        mark.dataset.evidence = "1";
+        mark.textContent = node.data.slice(left, right);
+        fragment.append(mark);
+        first ||= mark;
+        consumed = right;
+        index += 1;
+      }
+      if (consumed) {
+        fragment.append(document.createTextNode(node.data.slice(consumed)));
+        node.replaceWith(fragment);
+      }
+    }
+  }
+  return first;
+}
+
 const prefersReducedMotion = () =>
   window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // Run a DOM mutation inside a View Transition when supported (graceful fallback).
 export function withTransition(fn) {
-  if (document.startViewTransition && !prefersReducedMotion()) {
-    document.startViewTransition(fn);
+  if (document.startViewTransition && document.visibilityState === "visible" && !prefersReducedMotion()) {
+    // Switching tabs can skip the animation after the DOM update has begun.
+    document.startViewTransition(fn).ready.catch(() => {});
   } else {
     fn();
   }

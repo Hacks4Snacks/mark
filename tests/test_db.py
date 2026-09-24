@@ -29,7 +29,32 @@ def test_init_db_is_idempotent():
         "chunks",
         "embeddings",
         "collections",
+        "curated_solutions",
     } <= tables
+
+
+def test_curated_solutions_migration_preserves_archive(tmp_path):
+    path = tmp_path / "before-curation.db"
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY)")
+        conn.execute("INSERT INTO sessions VALUES ('preserve-me')")
+        index = migrations.MIGRATIONS.index(migrations._add_curated_solutions)
+        conn.execute(f"PRAGMA user_version = {index}")
+        migrations.run_migrations(conn)
+        migrations.run_migrations(conn)
+        assert conn.execute("SELECT id FROM sessions").fetchone()[0] == "preserve-me"
+        assert conn.execute("SELECT COUNT(*) FROM curated_solutions").fetchone()[0] == 0
+        assert (
+            conn.execute("PRAGMA foreign_key_list(curated_solutions)").fetchall() == []
+        )
+        assert "idx_solutions_updated" in {
+            row["name"] for row in conn.execute("PRAGMA index_list(curated_solutions)")
+        }
+        assert (
+            conn.execute("PRAGMA user_version").fetchone()[0]
+            == migrations.CURRENT_VERSION
+        )
 
 
 def test_tags_has_manual_column():
@@ -41,7 +66,7 @@ def test_tags_has_manual_column():
 def test_attachment_provenance_columns_exist():
     with db.connect() as conn:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
-    assert {"storage_kind", "sha256", "capture_version"} <= cols
+    assert {"source_path", "storage_kind", "sha256", "capture_version"} <= cols
 
 
 def test_embedding_generation_meta_exists():
@@ -218,6 +243,10 @@ def test_attachment_provenance_migration_quarantines_legacy_cli(tmp_path):
 
         migrations.run_migrations(con)
         con.commit()
+
+        assert "source_path" in {
+            row["name"] for row in con.execute("PRAGMA table_info(documents)")
+        }
 
         assert (
             con.execute(
