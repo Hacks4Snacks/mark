@@ -133,6 +133,8 @@ def test_compute_cost_uses_model_specific_cache_write_price():
     "model, prices, write",
     [
         ("openai/gpt-6-astra", (10.0, 50.0, 1.0), 12.5),
+        ("openai/gpt-6.1-sol", (2.0, 10.0, 0.1), 2.5),
+        ("gpt-6-1-sol", (2.0, 10.0, 0.1), 2.5),
         ("openai/gpt-6-sol", (2.0, 10.0, 0.2), 2.5),
         ("gpt-6-luna", (0.1, 0.5, 0.01), 0.125),
         ("gpt-5.6", (4.0, 20.0, 0.4), 5.0),
@@ -149,6 +151,12 @@ def test_compute_cost_uses_model_specific_cache_write_price():
         ("anthropic/claude-opus-5-5", (4.0, 20.0, 0.2), 5.0),
         ("claude-opus-5", (5.0, 25.0, 0.5), 6.25),
         ("claude-sonnet-5", (2.0, 10.0, 0.2), 2.5),
+        ("claude-sonnet-5.5", (2.0, 10.0, 0.1), 2.5),
+        ("anthropic/claude-sonnet-5-5", (2.0, 10.0, 0.1), 2.5),
+        ("claude-haiku-5.5", (0.1, 0.5, 0.01), 0.125),
+        ("anthropic/claude-haiku-5-5", (0.1, 0.5, 0.01), 0.125),
+        ("gemini-4-argon", (2.0, 10.0, 0.1), 2.0),
+        ("models/gemini-4-argon", (2.0, 10.0, 0.1), 2.0),
         ("gemini-3.8-flash", (0.75, 3.75, 0.075), 0.75),
         ("gemini-3.7-flash", (0.75, 3.75, 0.075), 0.75),
         ("gemini-3.6-flash", (0.75, 3.75, 0.075), 0.75),
@@ -183,6 +191,29 @@ def test_refreshed_model_prices_and_specific_aliases(
 
 def test_refreshed_cache_rates_flow_through_cost_calculation():
     assert config.cache_write_price_for("claude-opus-5.5", one_hour=True) == 8.0
+    assert config.cache_write_price_for("claude-sonnet-5.5", one_hour=True) == 4.0
+    assert config.cache_write_price_for("claude-haiku-5.5", one_hour=True) == 0.2
+    assert (
+        base.compute_cost(
+            "claude-haiku-5.5",
+            1_000_000,
+            1_000_000,
+            cache_read=1_000_000,
+            cache_write=1_000_000,
+            input_includes_cache=False,
+        )
+        == 0.735
+    )
+    assert (
+        base.compute_cost(
+            "claude-sonnet-5.5",
+            0,
+            0,
+            cache_read=1_000_000,
+            input_includes_cache=False,
+        )
+        == 0.1
+    )
     # Real counters, not an inferred discount multiplier: the 5.1 cache rate
     # is one quarter of Fable 5's rate, with the same write tariffs.
     assert (
@@ -212,14 +243,17 @@ def test_refreshed_cache_rates_flow_through_cost_calculation():
     )
 
 
+@pytest.mark.parametrize(
+    "model", ["gpt-6-astra", "gpt-6.1-sol", "claude-haiku-5.5", "gemini-4-argon"]
+)
 def test_custom_overrides_still_win_for_new_models(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model: str
 ):
     path = tmp_path / "current-prices.json"
-    path.write_text('{"gpt-6-astra": [1, 2, 0.1, 3], "_default": [0, 0, 0]}')
+    path.write_text(f'{{"{model}": [1, 2, 0.1, 3], "_default": [0, 0, 0]}}')
     monkeypatch.setenv("MARK_PRICING_FILE", str(path))
-    assert config.price_for("openai/gpt-6-astra") == (1.0, 2.0, 0.1)
-    assert config.cache_write_price_for("gpt-6-astra") == 3.0
+    assert config.price_for(f"provider/{model}") == (1.0, 2.0, 0.1)
+    assert config.cache_write_price_for(model) == 3.0
     assert config.price_for("claude-fable-5-1") == (0.0, 0.0, 0.0)
 
 

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "revision": "2026-09-24.1",
-  "verified_at": "2026-09-24",
+  "revision": "2026-10-23.1",
+  "verified_at": "2026-10-23",
   "warn_after_days": 30,
   "fail_after_days": 60,
   "providers": {
@@ -20,10 +20,13 @@
         "Claude Opus 5.5",
         "$0.20 / MTok",
         "Claude Opus 5",
-        "Claude Sonnet 5"
+        "Claude Sonnet 5",
+        "Claude Sonnet 5.5",
+        "Claude Haiku 5.5",
+        "$0.10 / MTok"
       ],
       "litellm_provider": "anthropic",
-      "pricing_page_sha256": "eb4e72fa122fe5af25baf62e6e1c2c1f8383183ceadf97e44164205d3dc61e3a"
+      "pricing_page_sha256": "13ecaf1bd25ac673f16625afea7b44a342c21f645f4424625d248744090fea7e"
     },
     "google": {
       "discovery_prefixes": [
@@ -35,13 +38,14 @@
       "audit_start": "Gemini Developer API pricing",
       "audit_end": "Notes",
       "required_markers": [
+        "gemini-4-argon",
         "gemini-3.8-flash",
         "$0.75",
         "gemini-3.5-flash-lite",
         "gemini-2.5-pro"
       ],
       "litellm_provider": "gemini",
-      "pricing_page_sha256": "17eaed895004fb366b69953d17c2df4ce884f1abcd7bd30e76f436ececb8770f"
+      "pricing_page_sha256": "39267d9ba4ad0f4ce34ceee6a047ff0bea78083aa8831009a57eee8b8e82b621"
     },
     "local": {
       "official_pricing_url": null,
@@ -49,14 +53,14 @@
     },
     "cursor": {
       "discovery_prefixes": ["composer-"],
-      "official_pricing_url": "https://cursor.com/docs/models",
-      "audit_url": "https://cursor.com/docs/models",
+      "official_pricing_url": "https://cursor.com/docs/models-and-pricing",
+      "audit_url": "https://cursor.com/docs/models-and-pricing",
       "audit_format": "visible",
-      "audit_start": "The Cursor Models pool includes",
-      "audit_end": "Other Models",
+      "audit_start": "The pool covers",
+      "audit_end": "Third-party models",
       "required_markers": ["Grok 4.7", "Composer 2.5", "Cache Read", "$ 0.5", "$ 2.5"],
       "litellm_provider": "cursor",
-      "pricing_page_sha256": "7e6a6fddb4587c4115fd2d8350dc99724425920192e2be879cbd4ca1d1554284"
+      "pricing_page_sha256": "518a7df522b9a5dc3304347295299479a02af1b0e709174d64df8ec2c8695b77"
     },
     "openai": {
       "discovery_prefixes": [
@@ -76,6 +80,7 @@
       "audit_start": "Flagship models",
       "required_markers": [
         "gpt-6-astra",
+        "gpt-6.1-sol",
         "gpt-6-sol",
         "gpt-6-luna",
         "gpt-5.6-sol",
@@ -83,7 +88,7 @@
         "gpt-5.4-mini"
       ],
       "litellm_provider": "openai",
-      "pricing_page_sha256": "d11b31e190f7a155bac9cc7d48d0ff5611ef6655bcd2aaf7411e41c72021b56f"
+      "pricing_page_sha256": "89bf57a7777b683e94ee7fe10a229f2a7da3e830bdde4e337550d54627128bfb"
     },
     "xai": {
       "discovery_prefixes": [
@@ -103,7 +108,7 @@
         "completionTextTokenPrice"
       ],
       "litellm_provider": "xai",
-      "pricing_page_sha256": "5dbb8f97d10eb58bff7cc85a75e941e6bf68c5864071d6cba9ba92736ae8c9ea"
+      "pricing_page_sha256": "d666f9487a05cb4368cd27018b59d272d984969e3c83df260de12d44198d8218"
     }
   },
   "models": {
@@ -251,6 +256,19 @@
         "cache_write_1h": 30.0
       }
     },
+    "claude-sonnet-5-5": {
+      "provider": "anthropic",
+      "status": "active",
+      "effective_from": "2026-10-07",
+      "notes": "Released 2026-09-28; cache reads were reduced from 0.20 to 0.10 USD/MTok on 2026-10-07. Input, output, and cache-write rates are unchanged.",
+      "pricing": {
+        "input": 2.0,
+        "output": 10.0,
+        "cached_input": 0.1,
+        "cache_write_5m": 2.5,
+        "cache_write_1h": 4.0
+      }
+    },
     "claude-sonnet-5": {
       "provider": "anthropic",
       "status": "active",
@@ -276,7 +294,9 @@
     },
     "claude-sonnet-4-5": {
       "provider": "anthropic",
-      "status": "active",
+      "status": "deprecated",
+      "review_after": "2026-11-30",
+      "notes": "Deprecated on the direct Claude API on 2026-09-30; shutdown scheduled for 2026-11-30. Historical rates retained.",
       "pricing": {
         "input": 3.0,
         "output": 15.0,
@@ -309,6 +329,19 @@
         "cached_input": 0.3,
         "cache_write_5m": 3.75,
         "cache_write_1h": 6.0
+      }
+    },
+    "claude-haiku-5-5": {
+      "provider": "anthropic",
+      "status": "active",
+      "effective_from": "2026-10-07",
+      "notes": "Standard rates for prompts up to 100,000 tokens. Larger prompts cost input 0.50, output 2.50, cached input 0.05, 5m writes 0.625, and 1h writes 1.00 USD/MTok; request-level context tiers are not selected automatically.",
+      "pricing": {
+        "input": 0.1,
+        "output": 0.5,
+        "cached_input": 0.01,
+        "cache_write_5m": 0.125,
+        "cache_write_1h": 0.2
       }
     },
     "claude-haiku-4-5": {
@@ -413,6 +446,18 @@
         "output": 50.0,
         "cached_input": 1.0,
         "cache_write_5m": 12.5
+      }
+    },
+    "gpt-6-1-sol": {
+      "provider": "openai",
+      "status": "active",
+      "effective_from": "2026-09-29",
+      "notes": "Standard rates for prompts up to 272K input tokens; not Fast, Ultrafast, or long-context pricing. Cache-write TTL is 30 minutes.",
+      "pricing": {
+        "input": 2.0,
+        "output": 10.0,
+        "cached_input": 0.1,
+        "cache_write_5m": 2.5
       }
     },
     "gpt-6-sol": {
@@ -562,7 +607,9 @@
     },
     "gpt-5-4-nano": {
       "provider": "openai",
-      "status": "active",
+      "status": "deprecated",
+      "review_after": "2027-04-01",
+      "notes": "Deprecated 2026-10-01; direct API shutdown scheduled for 2027-04-01.",
       "pricing": {
         "input": 0.2,
         "output": 1.25,
@@ -582,7 +629,9 @@
     },
     "gpt-5-3-codex": {
       "provider": "openai",
-      "status": "active",
+      "status": "deprecated",
+      "review_after": "2027-04-01",
+      "notes": "Deprecated 2026-10-01; direct API shutdown scheduled for 2027-04-01.",
       "pricing": {
         "input": 1.75,
         "output": 14.0,
@@ -643,7 +692,9 @@
     },
     "gpt-5-1": {
       "provider": "openai",
-      "status": "active",
+      "status": "deprecated",
+      "review_after": "2027-04-01",
+      "notes": "Deprecated 2026-10-01; direct API shutdown scheduled for 2027-04-01.",
       "pricing": {
         "input": 1.25,
         "output": 10.0,
@@ -737,14 +788,15 @@
     },
     "gpt-4o-2024-05-13": {
       "provider": "openai",
-      "status": "deprecated",
-      "review_after": "2026-10-23",
-      "notes": "Specific snapshot scheduled for shutdown on 2026-10-23; not the general gpt-4o tariff. No cache discount published.",
+      "status": "retired",
+      "notes": "Specific snapshot retired on 2026-10-23; not the general gpt-4o tariff. Historical rates retained; no cache discount published.",
       "pricing": {"input": 5.0, "output": 15.0, "cached_input": 5.0, "cache_write_5m": 5.0}
     },
     "gpt-4-1-mini": {
       "provider": "openai",
-      "status": "active",
+      "status": "deprecated",
+      "review_after": "2027-01-14",
+      "notes": "Deprecated 2026-10-14; direct API shutdown scheduled for 2027-01-14.",
       "pricing": {
         "input": 0.4,
         "output": 1.6,
@@ -754,7 +806,8 @@
     },
     "gpt-4-1-nano": {
       "provider": "openai",
-      "status": "deprecated",
+      "status": "retired",
+      "notes": "Direct API shutdown on 2026-10-23; historical rates retained.",
       "pricing": {
         "input": 0.1,
         "output": 0.4,
@@ -764,7 +817,9 @@
     },
     "gpt-4o-mini": {
       "provider": "openai",
-      "status": "active",
+      "status": "deprecated",
+      "review_after": "2027-01-14",
+      "notes": "Deprecated 2026-10-14; direct API shutdown scheduled for 2027-01-14.",
       "pricing": {
         "input": 0.15,
         "output": 0.6,
@@ -774,7 +829,9 @@
     },
     "gpt-4o": {
       "provider": "openai",
-      "status": "active",
+      "status": "deprecated",
+      "review_after": "2027-01-14",
+      "notes": "The August and November 2024 snapshots were deprecated 2026-10-14; direct API shutdown scheduled for 2027-01-14. The May 2024 snapshot has a separate historical tariff.",
       "pricing": {
         "input": 2.5,
         "output": 10.0,
@@ -784,7 +841,9 @@
     },
     "gpt-4.1": {
       "provider": "openai",
-      "status": "active",
+      "status": "deprecated",
+      "review_after": "2027-01-14",
+      "notes": "Deprecated 2026-10-14; direct API shutdown scheduled for 2027-01-14.",
       "pricing": {
         "input": 2.0,
         "output": 8.0,
@@ -794,7 +853,8 @@
     },
     "o4-mini": {
       "provider": "openai",
-      "status": "deprecated",
+      "status": "retired",
+      "notes": "Direct API shutdown on 2026-10-23; historical rates retained.",
       "pricing": {
         "input": 1.1,
         "output": 4.4,
@@ -820,13 +880,14 @@
     },
     "o1-pro": {
       "provider": "openai",
-      "status": "deprecated",
-      "notes": "Direct API shutdown scheduled for 2026-10-23. No cache discount published.",
+      "status": "retired",
+      "notes": "Direct API shutdown on 2026-10-23; historical rates retained. No cache discount published.",
       "pricing": {"input": 150.0, "output": 600.0, "cached_input": 150.0, "cache_write_5m": 150.0}
     },
     "o3-mini": {
       "provider": "openai",
-      "status": "deprecated",
+      "status": "retired",
+      "notes": "Direct API shutdown on 2026-10-23; historical rates retained.",
       "pricing": {
         "input": 1.1,
         "output": 4.4,
@@ -856,12 +917,27 @@
     },
     "o1": {
       "provider": "openai",
-      "status": "deprecated",
+      "status": "retired",
+      "notes": "Direct API shutdown on 2026-10-23; historical rates retained.",
       "pricing": {
         "input": 15.0,
         "output": 60.0,
         "cached_input": 7.5,
         "cache_write_5m": 15.0
+      }
+    },
+    "gemini-4-argon": {
+      "provider": "google",
+      "status": "active",
+      "effective_from": "2026-10-13",
+      "effective_until": "2026-11-30",
+      "review_after": "2026-11-30",
+      "notes": "Promotional standard text rates through 2026-11-30; announced 2026-12-01 rates: input 4.00, output 20.00, cached input 0.20 USD/MTok. Implicit caching only; no separate cache-write tariff. No automatic date-based switching.",
+      "pricing": {
+        "input": 2.0,
+        "output": 10.0,
+        "cached_input": 0.1,
+        "cache_write_5m": 2.0
       }
     },
     "gemini-3-8-flash": {

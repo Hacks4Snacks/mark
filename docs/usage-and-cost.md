@@ -39,13 +39,13 @@ per token) and duration from the first/last turn timestamps. These sessions are
 
 Mark prices token counts against a built-in **public list-price table** (USD per
 1M tokens), matched by the most specific model-name substring. The table was
-last verified on **September 10, 2026** against the official
+last verified on **October 23, 2026** against the official
 [OpenAI](https://developers.openai.com/api/docs/pricing),
 [Anthropic](https://platform.claude.com/docs/en/about-claude/pricing),
 [Google](https://ai.google.dev/gemini-api/docs/pricing), and
 [xAI](https://docs.x.ai/developers/models) pricing pages, plus
-[Cursor](https://cursor.com/docs/models) for explicit Composer 2.5 variants.
-The registry has **102 canonical entries**, including historical models and
+[Cursor](https://cursor.com/docs/models-and-pricing) for explicit Composer 2.5 variants.
+The registry has **110 canonical entries**, including historical models and
 fallbacks; it is not a claim that every model is available to your account.
 The calculation is careful
 not to over-count long agent sessions:
@@ -66,15 +66,15 @@ not to over-count long agent sessions:
 
 The built-in values are standard text API rates. For models with request-level
 long-context pricing, Mark uses the base rate because imported session totals do
-not preserve each request's prompt size. Batch, flex, fast/priority processing,
+not preserve each request's prompt size. Batch, flex, fast/priority/ultrafast processing,
 regional/data residency, cache-storage, and tool-call charges are excluded unless
 an explicitly priced model variant identifies that tariff (Composer 2.5 Fast).
-Cursor-specific rates for third-party models, its per-token surcharge, and
+Cursor-specific third-party charges and
 subscription usage pools are not modeled; third-party names use direct-provider
 standard estimates. Copilot premium requests and AIU remain source-reported
 counters, not conversions from this price table.
 
-### September 2026 pricing highlights
+### October 2026 pricing highlights
 
 All figures are **USD per million tokens** at the standard, shortest-context
 text rate. For the full catalog and historical variants, see
@@ -83,19 +83,35 @@ text rate. For the full catalog and historical variants, see
 | Model | Input | Output | Cached input |
 | --- | ---: | ---: | ---: |
 | GPT-6 Astra | $10.00 | $50.00 | $1.00 |
+| GPT-6.1 Sol | $2.00 | $10.00 | $0.10 |
+| GPT-6 Sol | $2.00 | $10.00 | $0.20 |
+| GPT-6 Luna | $0.10 | $0.50 | $0.01 |
 | GPT-5.6 Sol | $4.00 | $20.00 | $0.40 |
 | GPT-5.6 Terra | $2.00 | $12.00 | $0.20 |
 | GPT-5.6 Luna | $0.20 | $1.20 | $0.02 |
 | Claude Fable 5.1 / Mythos 5.1 | $10.00 | $50.00 | $0.25 |
+| Claude Opus 5.5 | $4.00 | $20.00 | $0.20 |
 | Claude Opus 5 | $5.00 | $25.00 | $0.50 |
+| Claude Sonnet 5.5 | $2.00 | $10.00 | $0.10 |
 | Claude Sonnet 5 | $2.00 | $10.00 | $0.20 |
+| Claude Haiku 5.5 (up to 100k prompt tokens) | $0.10 | $0.50 | $0.01 |
+| Gemini 4 Argon | $2.00 | $10.00 | $0.10 |
 | Gemini 3.6 / 3.7 / 3.8 Flash | $0.75 | $3.75 | $0.075 |
 | Gemini 3.5 Flash-Lite | $0.30 | $2.50 | $0.03 |
-| Grok 4.6 | $2.00 | $6.00 | $0.50 |
+| Grok 4.6 / 4.7 | $2.00 | $6.00 | $0.50 |
 | Grok 4.5 | $2.00 | $6.00 | $0.30 |
 | Composer 2.5 | $0.50 | $2.50 | $0.20 |
 | Composer 2.5 Fast | $3.00 | $15.00 | $0.50 |
 
+- **Sonnet 5.5:** cache reads dropped from $0.20 to $0.10 on October 7;
+  input, output, and cache-write prices did not change. Sonnet 5 retains its
+  separate $0.20 cache-read rate.
+- **Haiku 5.5:** the table's rates apply to prompts up to 100,000 tokens.
+  Larger prompts cost $0.50 input, $2.50 output, and $0.05 cached input.
+  Mark cannot choose that tier from aggregated session token counts.
+- **Gemini 4 Argon:** promotional rates last through **November 30, 2026**;
+  announced December 1 rates are $4 input, $20 output, and $0.20 cached input.
+  A November 30 review gate records the required update. Caching is implicit only.
 - **Sonnet 5:** its $2/$10 launch price is now permanent. Anthropic canceled the
   previously scheduled September 1 increase; the old August 31 review gate is removed.
 - **GPT-5.6 Sol:** promotional prices are available **at least through November
