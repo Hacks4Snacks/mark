@@ -9,7 +9,7 @@ page explains what's supported, how to override paths, and how syncing works.
 | Source key       | What it indexes                                              | Where it lives (auto-detected)                               |
 |------------------|--------------------------------------------------------------|--------------------------------------------------------------|
 | `vscode`         | VS Code inline/agent chats                                   | `…/Code/User/workspaceStorage` (Stable, Insiders, VSCodium)  |
-| `copilot_cli`    | Copilot CLI / agent-store conversations + real token metrics | `~/.copilot/session-store.db` (+ `~/.copilot/session-state`) |
+| `copilot_cli`    | Copilot CLI / SDK conversations + real token metrics         | `~/.copilot/session-store.db` and `~/.copilot/session-state` |
 | `copilot_memory` | VS Code Copilot **memory-tool** notes (repo & session)       | `…/workspaceStorage/<id>/GitHub.copilot-chat/memory-tool`    |
 | `cline`          | Cline-family agent task histories                            | `…/Code/User/globalStorage`                                  |
 | `cursor`         | Cursor Composer / chat history                               | `…/Cursor/User/globalStorage/state.vscdb`                    |
@@ -22,6 +22,25 @@ Plus **import** sources (one-off uploads rather than watched paths):
   the *Enhanced Grok Export* userscript). See [The Grok family](#the-grok-family).
 - **Your own notes and files** — see
   [Managing your archive](managing-your-archive.md).
+
+### VS Code SDK-backed chats
+
+VS Code's newer Copilot SDK / agent-host chats write their transcripts to
+`~/.copilot/session-state/<sdk-session-id>/events.jsonl`, rather than the legacy
+`workspaceStorage` chat files. Mark discovers these logs independently of
+`session-store.db`: a chat does not need a row in that database to be collected,
+and the database itself may be absent. Repository and timestamps come from the
+event log when no store row exists.
+
+These conversations appear under **Copilot CLI** (`cli` in search filters), not
+the legacy **VS Code** source. The VS Code UI session ID may differ from the SDK
+ID used by Mark. VS Code records that mapping in
+`agentSessionData/<ui-session-id>/session.db`, in the `session_metadata` entry
+`defaultChatProviderData` (`sdkSessionId`). That metadata database is not the
+conversation transcript and does not need an additional Docker mount.
+
+For Docker, keep the **whole `~/.copilot` directory** mounted read-only, as in
+the shipped Compose file. Mounting only `session-store.db` misses SDK event logs.
 
 ### Copilot memory notes
 

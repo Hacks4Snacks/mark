@@ -568,6 +568,221 @@ def test_copilot_cli_indexes_store_sessions(tmp_path):
     assert "curl /refresh" in s["turns"][0]["assistant_response"]
 
 
+@pytest.mark.parametrize("store_exists", [True, False])
+def test_copilot_cli_indexes_event_only_sessions(tmp_path, monkeypatch, store_exists):
+    from mark import config, db, search
+    from mark.sources import copilot_cli
+
+    store = tmp_path / "session-store.db"
+    if store_exists:
+        with sqlite3.connect(store) as conn:
+            conn.execute(
+                "CREATE TABLE sessions (id TEXT, cwd TEXT, repository TEXT, summary TEXT, "
+                "created_at TEXT, updated_at TEXT)"
+            )
+    state_dir = tmp_path / "session-state"
+    events_path = state_dir / "sdk-session" / "events.jsonl"
+    _write_jsonl(
+        events_path,
+        [
+            {
+                "type": "session.start",
+                "timestamp": "2026-10-23T19:44:00Z",
+                "data": {
+                    "sessionId": "sdk-session",
+                    "startTime": "2026-10-23T19:43:58Z",
+                    "selectedModel": "gpt-5.5",
+                    "context": {
+                        "cwd": "/home/dev/projects/myrepo",
+                        "repository": "owner/myrepo",
+                    },
+                },
+            },
+            {
+                "type": "user.message",
+                "timestamp": "2026-10-23T19:44:01Z",
+                "data": {"content": "how do I fix the auth token timeout"},
+            },
+            {
+                "type": "assistant.message",
+                "timestamp": "2026-10-23T19:45:00Z",
+                "data": {"content": _ASSISTANT_REPLY, "outputTokens": 25},
+            },
+        ],
+    )
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(state_dir)},
+    )
+    source = copilot_cli.CopilotCliSource()
+    with db.connect() as conn:
+        first = source.ingest(conn.cursor(), {}, cfg, rebuild=False)
+        conn.commit()
+        existing = {
+            row["id"]: row["content_hash"]
+            for row in conn.execute("SELECT id, content_hash FROM sessions")
+        }
+
+    assert first == {"added": 1, "updated": 0, "skipped": 0}
+    session = search.get_session("sdk-session")
+    assert session is not None
+    assert session["source"] == "cli"
+    assert session["repository"] == "myrepo"
+    assert session["repo_path"] == "/home/dev/projects/myrepo"
+    assert session["created_at"] == "2026-10-23T19:43:58Z"
+    assert session["updated_at"] == "2026-10-23T19:45:00Z"
+    assert session["source_path"] == str(events_path)
+    assert session["model"] == "gpt-5.5"
+    assert session["output_tokens"] == 25
+    assert len(session["turns"]) == 1
+    assert session["turns"][0]["assistant_response"] == _ASSISTANT_REPLY
+    assert store.exists() is store_exists
+    assert "sdk-session" in copilot_cli._live_session_signatures(store, state_dir)
+
+    def unexpected_parse(*args, **kwargs):
+        pytest.fail("unchanged event-only sessions must not be parsed again")
+
+    monkeypatch.setattr(copilot_cli, "_events_to_turns", unexpected_parse)
+    monkeypatch.setattr(copilot_cli, "_snapshot_store", unexpected_parse)
+    with db.connect() as conn:
+        second = source.ingest(conn.cursor(), existing, cfg, rebuild=False)
+    assert second == {"added": 0, "updated": 0, "skipped": 1}
+
+
+def test_copilot_cli_event_only_session_updates_and_joins_store(tmp_path):
+    from mark import config, db, search
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    store = tmp_path / "session-store.db"
+    with sqlite3.connect(store) as conn:
+        conn.execute(
+            "CREATE TABLE sessions (id TEXT, cwd TEXT, repository TEXT, summary TEXT, "
+            "created_at TEXT, updated_at TEXT)"
+        )
+    state_dir = tmp_path / "session-state"
+    events_path = state_dir / "sdk-session" / "events.jsonl"
+    events = [
+        {
+            "type": "session.start",
+            "timestamp": "2026-10-23T19:00:00Z",
+            "data": {"context": {"cwd": "/repo"}},
+        },
+        {
+            "type": "user.message",
+            "timestamp": "2026-10-23T19:00:01Z",
+            "data": {"content": "first question"},
+        },
+        {
+            "type": "assistant.message",
+            "timestamp": "2026-10-23T19:01:00Z",
+            "data": {"content": "first answer"},
+        },
+    ]
+    _write_jsonl(events_path, events)
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[store],
+        options={"state_dir": str(state_dir)},
+    )
+    source = CopilotCliSource()
+
+    def ingest():
+        with db.connect() as conn:
+            existing = {
+                row["id"]: row["content_hash"]
+                for row in conn.execute("SELECT id, content_hash FROM sessions")
+            }
+            counts = source.ingest(conn.cursor(), existing, cfg, rebuild=False)
+            conn.commit()
+            return counts
+
+    assert ingest() == {"added": 1, "updated": 0, "skipped": 0}
+    before = source.fingerprint(cfg)
+    events.extend(
+        [
+            {
+                "type": "user.message",
+                "timestamp": "2026-10-23T20:00:00Z",
+                "data": {"content": "second question"},
+            },
+            {
+                "type": "assistant.message",
+                "timestamp": "2026-10-23T20:01:00Z",
+                "data": {"content": "second answer"},
+            },
+        ]
+    )
+    _write_jsonl(events_path, events)
+    with events_path.open("a") as f:
+        f.write('{"type":')  # A live writer may not have finished its last record.
+    assert source.fingerprint(cfg) != before
+    assert ingest() == {"added": 0, "updated": 1, "skipped": 0}
+    session = search.get_session("sdk-session")
+    assert session["updated_at"] == "2026-10-23T20:01:00Z"
+    assert len(session["turns"]) == 2
+    assert session["turns"][1]["assistant_response"] == "second answer"
+
+    with sqlite3.connect(store) as conn:
+        conn.execute(
+            "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+            (
+                "sdk-session",
+                "/repo",
+                "owner/repo",
+                None,
+                "2026-10-23T19:00:00Z",
+                "2026-10-23T20:02:00Z",
+            ),
+        )
+    assert ingest() == {"added": 0, "updated": 1, "skipped": 0}
+    session = search.get_session("sdk-session")
+    assert session["repository"] == "repo"
+    assert session["source_path"] == str(store)
+    assert len(session["turns"]) == 2
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
+    assert ingest() == {"added": 0, "updated": 0, "skipped": 1}
+
+
+def test_copilot_cli_backfills_event_only_sessions_after_upgrade(tmp_path, monkeypatch):
+    from mark import config, ingest
+    from mark.sources.copilot_cli import CopilotCliSource
+
+    state_dir = tmp_path / "session-state"
+    _write_jsonl(
+        state_dir / "sdk-session" / "events.jsonl",
+        [{"type": "user.message", "data": {"content": "recover this conversation"}}],
+    )
+    cfg = config.SourceConfig(
+        key="copilot_cli",
+        roots=[tmp_path / "session-store.db"],
+        options={"state_dir": str(state_dir)},
+    )
+
+    class LegacySource(CopilotCliSource):
+        def fingerprint(self, cfg):
+            return super().fingerprint(cfg).replace("|event-discovery:1", "")
+
+        def ingest(self, *args, **kwargs):
+            return {"added": 0, "updated": 0, "skipped": 0}
+
+    legacy = LegacySource()
+    source = CopilotCliSource()
+    monkeypatch.setattr(legacy, "default_config", lambda: cfg)
+    monkeypatch.setattr(source, "default_config", lambda: cfg)
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [legacy])
+    assert ingest.ingest_all(do_embed=False)["added"] == 0
+
+    monkeypatch.setattr(ingest, "WATCHED_SOURCES", [source])
+    result = ingest.ingest_all(do_embed=False)
+    assert result["added"] == 1
+    assert result["errors"] == {}
+    assert ingest.ingest_all(do_embed=False)["sources"]["copilot_cli"] == {
+        "status": "unchanged"
+    }
+
+
 def test_copilot_cli_events_inline_agentic_trace(tmp_path):
     """A mostly-autonomous run (one prompt, many tool turns) is reconstructed from
     events.jsonl as a full interleaved trace, not just its first and last prose."""
@@ -598,10 +813,7 @@ def test_copilot_cli_events_inline_agentic_trace(tmp_path):
         'curl -sS -H "Authorization: Bearer $TOKEN" https://example/api | jq .'
     )
     multiline_cmd = (
-        "python3 - <<'PY'\n"
-        "from pathlib import Path\n"
-        "print(Path('.').resolve())\n"
-        "PY"
+        "python3 - <<'PY'\nfrom pathlib import Path\nprint(Path('.').resolve())\nPY"
     )
     events = [
         {"type": "session.start", "data": {"selectedModel": "gpt-5.5"}},
@@ -2171,8 +2383,7 @@ def test_copilot_memory_backfills_attachment_from_legacy_fingerprint(
             "SELECT filename, capture_version FROM documents WHERE kind = 'attachment'"
         ).fetchone()
         source_fingerprint = conn.execute(
-            "SELECT signature FROM source_file_stat "
-            "WHERE path = 'srcfp:copilot_memory'"
+            "SELECT signature FROM source_file_stat WHERE path = 'srcfp:copilot_memory'"
         ).fetchone()[0]
     assert result["updated"] == 1
     assert attached is not None
@@ -2564,8 +2775,7 @@ def test_ingest_all_retries_source_after_recovery(monkeypatch):
     with db.cursor() as cur:
         assert (
             cur.execute(
-                "SELECT signature FROM source_file_stat "
-                "WHERE path = 'srcfp:recovering'"
+                "SELECT signature FROM source_file_stat WHERE path = 'srcfp:recovering'"
             ).fetchone()[0]
             == "recovering-fp"
         )
@@ -2597,7 +2807,7 @@ def test_ingest_all_invalidates_prior_fingerprint_after_failure(monkeypatch):
     with db.cursor() as cur:
         assert (
             cur.execute(
-                "SELECT 1 FROM source_file_stat " "WHERE path = 'srcfp:rebuild-failure'"
+                "SELECT 1 FROM source_file_stat WHERE path = 'srcfp:rebuild-failure'"
             ).fetchone()
             is None
         )
