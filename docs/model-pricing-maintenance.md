@@ -59,58 +59,75 @@ still supported for existing snapshots. Malformed or incomplete data fails close
 Cursor's audit covers its own **Cursor Models** pricing section, not subscription
 plans or a competing authority for third-party model rates.
 
-## Latest completed review: 2026-09-24
+## Latest completed review: 2026-10-23
 
-Revision **2026-09-24.1** contains **106 canonical entries** (previously 102),
-including historical releases and local fallback keys. Four models were added
-with their official direct Standard, short-context rates in USD per million tokens:
+Revision **2026-10-23.1** contains **110 canonical entries** (previously 106).
+Four missing models were added with their official direct Standard, short-context
+rates in USD per million tokens. All 106 existing entries retain their numeric
+prices, including historical releases and local fallback keys.
 
 | Model | Input | Output | Cached input | Cache write |
 | --- | --- | --- | --- | --- |
-| GPT-6 Sol | $2.00 | $10.00 | $0.20 | $2.50 |
-| GPT-6 Luna | $0.10 | $0.50 | $0.01 | $0.125 |
-| Claude Opus 5.5 | $4.00 | $20.00 | $0.20 | $5.00 (5m), $8.00 (1h) |
-| Grok 4.7 | $2.00 | $6.00 | $0.50 | No separate tariff; input rate |
+| GPT-6.1 Sol | $2.00 | $10.00 | $0.10 | $2.50 (30m) |
+| Claude Sonnet 5.5 | $2.00 | $10.00 | $0.10 | $2.50 (5m), $4.00 (1h) |
+| Claude Haiku 5.5 | $0.10 | $0.50 | $0.01 | $0.125 (5m), $0.20 (1h) |
+| Gemini 4 Argon | $2.00 | $10.00 | $0.10 | No separate tariff; input rate |
 
-GPT-6 Sol, GPT-6 Luna, and Claude Opus 5.5 were released September 22.
-OpenAI cache writes have a 30-minute TTL; `cache_write_5m` remains Mark's
-compatibility field name. Grok rates apply below 200k prompt tokens. Long-context,
-Fast, Batch, regional, and subscription charges are not selected automatically.
-Older model IDs retain their own prices rather than inheriting a successor's rate.
+Important boundaries and changes:
 
-The remaining provider review confirmed:
+- **GPT-6.1 Sol** was released September 29. Rates apply up to 272K input
+  tokens. OpenAI cache writes have a 30-minute TTL; `cache_write_5m` remains
+  Mark's compatibility field name.
+- **Sonnet 5.5** cache reads dropped from $0.20 to $0.10 on October 7.
+  Its `effective_from` records that tariff change, not its September 28 release.
+  The older Sonnet 5 entry retains its own $0.20 cache-read price.
+- **Haiku 5.5** was released October 7. The table applies to prompts up to
+  100,000 tokens; above that threshold, input/output/cache-read prices are
+  $0.50/$2.50/$0.05, and 5m/1h writes are $0.625/$1.00.
+- **Gemini 4 Argon** was released October 13. Its promotional prices expire
+  November 30; December 1 prices are $4 input, $20 output, and $0.20 cached input.
+  The registry requires review on November 30 and does not switch rates itself.
+  Only implicit caching is supported.
+- **Lifecycle metadata:** the six tracked OpenAI models scheduled for
+  October 23 shutdown are now retired, with historical prices preserved.
+  Newly announced GPT-4-family and GPT-5.1/5.3-Codex/5.4-Nano deprecations have
+  January 14 and April 1 review gates. Sonnet 4.5 is deprecated with a
+  November 30 retirement review.
+- **xAI and Cursor:** public standard Grok and Composer 2.5 prices are unchanged.
+  The xAI snapshot now includes additional regional tariff records; these do not
+  replace standard rates. Cursor moved its page to `models-and-pricing`; the
+  audit now bounds its own-model table between "The pool covers" and
+  "Third-party models" and still fails closed when those markers disappear.
 
-- Gemini 3.6, 3.7, and 3.8 Flash still cost $0.75 input, $3.75 output, and
-   $0.075 cached input through December 31. Gemini 2.5 Pro, Flash, and Flash-Lite
-   remain active but are now explicitly documented as limited to prior users.
-- Composer 2.5 and Fast prices are unchanged. Cursor-specific Grok prices do not
-   override direct xAI rates; `grok-build-latest` still maps to Grok 4.5.
-- Existing Anthropic/OpenAI prices, historical entries, and scheduled reviews
-   are unchanged. All five official-source snapshots were reviewed and refreshed,
-   with required markers added for the new models.
+All five official pricing snapshots were reviewed and refreshed. Existing Sol
+and Gemini Flash promotions remain unchanged. Long-context, Fast, Ultrafast,
+Batch, regional, and subscription charges are not selected automatically.
+Aggregated session totals do not identify request-level context tiers.
 
 Evidence for the manual review:
 
 | Provider | Pricing authority | Model identity / lifecycle evidence |
 | --- | --- | --- |
-| OpenAI | [Standard pricing](https://developers.openai.com/api/docs/pricing.md) | [September 22 release](https://developers.openai.com/api/docs/changelog.md), [deprecations](https://developers.openai.com/api/docs/deprecations.md) |
-| Anthropic | [Model pricing](https://platform.claude.com/docs/en/about-claude/pricing.md) | [Opus 5.5](https://platform.claude.com/docs/en/models/opus-5-5/overview.md), [model IDs](https://platform.claude.com/docs/en/about-claude/models/overview.md), [deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations.md) |
-| Google | [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) | [Models and access restrictions](https://ai.google.dev/gemini-api/docs/models), [deprecations](https://ai.google.dev/gemini-api/docs/deprecations) |
+| OpenAI | [Standard pricing](https://developers.openai.com/api/docs/pricing.md) | [September 29 release](https://developers.openai.com/api/docs/changelog.md), [deprecations](https://developers.openai.com/api/docs/deprecations.md) |
+| Anthropic | [Model pricing](https://platform.claude.com/docs/en/about-claude/pricing.md) | [Release notes and October 7 cache-price reduction](https://platform.claude.com/docs/en/release-notes/overview.md), [model IDs](https://platform.claude.com/docs/en/models/overview.md), [deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations.md) |
+| Google | [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) | [Gemini 4 Argon](https://ai.google.dev/gemini-api/docs/models/gemini-4-argon), [October 13 release](https://ai.google.dev/gemini-api/docs/changelog), [deprecations](https://ai.google.dev/gemini-api/docs/deprecations) |
 | xAI | [Models and pricing](https://docs.x.ai/developers/models) | [Grok 4.7](https://docs.x.ai/developers/models/grok-4.7), [Grok 4.5 aliases](https://docs.x.ai/developers/models/grok-4.5) |
-| Cursor | [Models and pricing](https://cursor.com/docs/models) | Composer 2.5 and explicit Fast rows rechecked; no third-party hosting-rate overrides |
+| Cursor | [Models and pricing](https://cursor.com/docs/models-and-pricing) | Composer 2.5 and explicit Fast rows rechecked; no third-party hosting-rate overrides |
 
-Upcoming mandatory reviews: **October 23** for scheduled OpenAI retirements,
-**November 21** for Sol's promotion, **December 11** for GPT-5/o3 retirements, and
-**December 31** for the Gemini Flash promotion. The normal 30/60-day freshness
-policy remains unchanged. "At least through" is recorded as a review date, not a
-guessed `effective_until`.
+Upcoming mandatory reviews: **November 21** for Sol's promotion, **November 30**
+for Argon's promotion and Sonnet 4.5 retirement, **December 11** for GPT-5/o3
+retirements, **December 31** for the Gemini Flash promotion, **January 14, 2027**
+for tracked GPT-4 retirements, and **April 1, 2027** for GPT-5.1, GPT-5.3-Codex,
+and GPT-5.4-Nano retirements. The normal 30/60-day freshness policy remains
+unchanged. "At least through" is recorded as a review date, not a guessed
+`effective_until`.
 
-Verification: **555 isolated tests passed**, including **91 focused pricing and
-configuration tests**; Ruff and editor checks passed. The live audit found no
-official-source drift or tracked price conflicts. Missing LiteLLM Composer
-entries, omitted cache fields, historical/experimental candidates, and unresolved
-rolling Gemini aliases remain informational, not guessed prices or suppressed
-errors. Specialized research and multimodal catalogs remain outside this refresh.
+Verification: **103 focused pricing and configuration tests passed**. The
+date-aware registry check and live audit passed with no official-source drift
+or tracked price conflicts. Missing LiteLLM Composer entries, omitted cache
+fields, historical/experimental candidates, and unresolved rolling Gemini
+aliases remain informational, not guessed prices or suppressed errors.
+Specialized research and multimodal catalogs remain outside this refresh.
 No stored sessions were repriced and no live deployment was rebuilt.
 
 ## Local commands

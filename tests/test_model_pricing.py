@@ -62,24 +62,37 @@ def test_registry_freshness_warns_then_fails():
 
 def test_refreshed_registry_is_valid_and_tracks_scheduled_reviews():
     registry = load_registry()
-    assert registry["revision"] == "2026-09-24.1"
-    assert registry["verified_at"] == "2026-09-24"
+    assert registry["revision"] == "2026-10-23.1"
+    assert registry["verified_at"] == "2026-10-23"
+    assert len(registry["models"]) == 110
     assert (
         validate_registry(
-            registry, today=date(2026, 9, 24), enforce_freshness=True
+            registry, today=date(2026, 10, 23), enforce_freshness=True
         ).errors
         == ()
     )
     models = registry["models"]
     for key in ("gpt-6-sol", "gpt-6-luna", "claude-opus-5-5"):
         assert models[key]["effective_from"] == "2026-09-22"
+    assert models["gpt-6-1-sol"]["effective_from"] == "2026-09-29"
+    assert models["claude-sonnet-5-5"]["effective_from"] == "2026-10-07"
+    assert models["claude-haiku-5-5"]["effective_from"] == "2026-10-07"
+    assert models["gemini-4-argon"]["effective_from"] == "2026-10-13"
+    assert models["gemini-4-argon"]["effective_until"] == "2026-11-30"
+    assert models["gemini-4-argon"]["review_after"] == "2026-11-30"
     assert "review_after" not in models["claude-sonnet-5"]
     assert "effective_until" not in models["claude-sonnet-5"]
     assert models["gpt-5-6-sol"]["review_after"] == "2026-11-21"
     assert "effective_until" not in models["gpt-5-6-sol"]
+    assert "review_after" not in models["gpt-4o-2024-05-13"]
     for key in ("gemini-3-6-flash", "gemini-3-7-flash", "gemini-3-8-flash"):
         assert models[key]["effective_until"] == "2026-12-31"
         assert models[key]["review_after"] == "2026-12-31"
+    registry["verified_at"] = "2026-11-30"
+    expired = validate_registry(
+        registry, today=date(2026, 11, 30), enforce_freshness=True
+    )
+    assert any("gemini-4-argon" in error for error in expired.errors)
     registry["verified_at"] = "2026-12-31"
     expired = validate_registry(
         registry, today=date(2026, 12, 31), enforce_freshness=True
@@ -90,11 +103,14 @@ def test_refreshed_registry_is_valid_and_tracks_scheduled_reviews():
 def test_lifecycle_distinguishes_retired_variants_from_active_models():
     models = load_registry()["models"]
     for key in (
+        "gpt-6-1-sol",
         "gpt-6-sol",
         "gpt-6-luna",
         "claude-opus-5-5",
+        "claude-sonnet-5-5",
+        "claude-haiku-5-5",
+        "gemini-4-argon",
         "grok-4-7",
-        "gpt-5-1",
         "gpt-5-2",
         "gpt-5-2-pro",
         "gemini-3-1-flash-lite",
@@ -112,11 +128,23 @@ def test_lifecycle_distinguishes_retired_variants_from_active_models():
         "gemini-3-pro",
         "gemini-3-1-flash-lite-preview",
         "grok-3",
+        "gpt-4o-2024-05-13",
+        "gpt-4-1-nano",
+        "o1",
+        "o1-pro",
+        "o3-mini",
+        "o4-mini",
     ):
         assert models[key]["status"] == "retired"
     assert models["gpt-5"]["status"] == "deprecated"
-    assert models["gpt-4o-2024-05-13"]["status"] == "deprecated"
-    assert models["gpt-4o"]["status"] == "active"
+    for key in ("gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4-1-mini"):
+        assert models[key]["status"] == "deprecated"
+        assert models[key]["review_after"] == "2027-01-14"
+    for key in ("gpt-5-1", "gpt-5-3-codex", "gpt-5-4-nano"):
+        assert models[key]["status"] == "deprecated"
+        assert models[key]["review_after"] == "2027-04-01"
+    assert models["claude-sonnet-4-5"]["status"] == "deprecated"
+    assert models["claude-sonnet-4-5"]["review_after"] == "2026-11-30"
     assert "Invite-only" in models["claude-mythos-5-1"]["notes"]
 
 
@@ -307,6 +335,31 @@ def test_source_hash_is_scoped_to_pricing_section():
     ) == update_model_pricing._source_hash(second, provider)
     with pytest.raises(RuntimeError, match="required marker"):
         update_model_pricing._source_hash(changed, provider)
+
+
+def test_cursor_source_hash_uses_current_pricing_section():
+    provider = load_registry()["providers"]["cursor"]
+    content = (
+        b"<p>Subscription plans</p><h2>Cursor models</h2>"
+        b"<p>The pool covers Grok 4.7 and Composer 2.5.</p>"
+        b"<table><tr><th>Cache Read</th><td>$ 0.5</td><td>$ 2.5</td></tr></table>"
+        b"<h2>Third-party models</h2><p>Other provider prices</p>"
+    )
+    section = update_model_pricing._source_section(content, provider)
+    assert section.startswith("The pool covers")
+    assert "Composer 2.5" in section
+    assert "Subscription plans" not in section
+    assert "Other provider prices" not in section
+    assert update_model_pricing._source_hash(
+        content, provider
+    ) == update_model_pricing._source_hash(
+        content.replace(b"Other provider prices", b"Unrelated pricing update"),
+        provider,
+    )
+    with pytest.raises(RuntimeError, match="start marker"):
+        update_model_pricing._source_hash(
+            content.replace(b"The pool covers", b"Pricing section moved"), provider
+        )
 
 
 def test_source_hash_fails_closed_on_missing_section_boundary():

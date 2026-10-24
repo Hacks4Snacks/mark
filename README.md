@@ -21,8 +21,8 @@ Mark turns the AI coding history already stored on your machine into a
 conversation again. It indexes several sources automatically:
 
 - **VS Code chat:** the inline/agent chats under `workspaceStorage`.
-- **Copilot CLI / agent store:** the richer agent conversations in
-  `~/.copilot/session-store.db`.
+- **Copilot CLI / SDK:** including SDK-backed VS Code chats, from
+  `~/.copilot/session-store.db` and `~/.copilot/session-state` event logs.
 - **Coding-agent extensions:** Cline, Zoo Code, Roo, Kilo, and other
   Cline-family task histories under `globalStorage` (auto-detected).
 

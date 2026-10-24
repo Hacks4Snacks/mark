@@ -166,34 +166,78 @@ def _live_session_signatures(
     state_dir: Path,
     artifact_states: dict[str, tuple[list[str], str, Path]] | None = None,
 ) -> dict[str, str] | None:
-    """Per-session signatures read straight from the (possibly live) store.
+    """Per-session signatures from the store and independently discovered logs.
 
     Reads only session ids + ``updated_at`` over a read-only connection (no
-    whole-store backup) and pairs each with its events.jsonl stat. Returns
-    ``None`` if the store can't be opened, so the caller falls back to a full pass.
+    whole-store backup) and pairs each with its events.jsonl stat. SDK sessions
+    may never enter the store. Returns ``None`` if an existing store can't be
+    read, so the caller falls back to a full pass.
     """
-    try:
-        ro = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
-        ro.row_factory = sqlite3.Row
-    except sqlite3.Error:
-        return None
-    try:
-        rows = ro.execute("SELECT id, updated_at FROM sessions").fetchall()
-    except sqlite3.Error:
-        return None
-    finally:
-        ro.close()
+    updated_by_id: dict[str, str | None] = {}
+    if src.exists():
+        try:
+            ro = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+        except sqlite3.Error:
+            return None
+        try:
+            updated_by_id.update(ro.execute("SELECT id, updated_at FROM sessions"))
+        except sqlite3.Error:
+            return None
+        finally:
+            ro.close()
+    for path in state_dir.glob("*/events.jsonl"):
+        if path.is_file():
+            updated_by_id.setdefault(path.parent.name, None)
     if artifact_states is None:
         artifact_states = _session_artifact_states(state_dir)
     return {
-        r["id"]: _cli_session_signature(
-            r["id"],
-            r["updated_at"],
+        sid: _cli_session_signature(
+            sid,
+            updated_at,
             state_dir,
-            artifact_states.get(r["id"], ([], "", None))[1],
+            artifact_states.get(sid, ([], "", None))[1],
         )
-        for r in rows
+        for sid, updated_at in updated_by_id.items()
     }
+
+
+def _event_session_metadata(session_id: str, state_dir: Path) -> dict[str, Any]:
+    """Recover store-equivalent metadata for an event-log-only SDK session."""
+    session: dict[str, Any] = {
+        "id": session_id,
+        "cwd": None,
+        "repository": None,
+        "created_at": None,
+        "updated_at": None,
+    }
+    path = state_dir / session_id / "events.jsonl"
+    with path.open(encoding="utf-8", errors="ignore") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            timestamp = event.get("timestamp")
+            if isinstance(timestamp, str) and timestamp:
+                session["created_at"] = session["created_at"] or timestamp
+                session["updated_at"] = timestamp
+            data = event.get("data")
+            if event.get("type") != "session.start" or not isinstance(data, dict):
+                continue
+            start_time = data.get("startTime")
+            if isinstance(start_time, str) and start_time:
+                session["created_at"] = start_time
+            context = data.get("context")
+            if isinstance(context, dict):
+                for key in ("cwd", "repository"):
+                    value = context.get(key)
+                    if isinstance(value, str) and value:
+                        session[key] = value
+    return session
 
 
 def _snapshot_store(src: Path) -> Path:
@@ -267,9 +311,7 @@ def _tool_file_path(name: str | None, args: Any) -> str | None:
     return unique[0] if len(unique) == 1 else None
 
 
-def _artifact_root_from_state_root(
-    session_id: str, state_root: Path
-) -> Path | None:
+def _artifact_root_from_state_root(session_id: str, state_root: Path) -> Path | None:
     sid = Path(session_id)
     if (
         not session_id
@@ -354,9 +396,7 @@ def _session_artifact_states(
     return states
 
 
-def _session_artifact_state(
-    session_id: str, state_dir: Path
-) -> tuple[list[str], str]:
+def _session_artifact_state(session_id: str, state_dir: Path) -> tuple[list[str], str]:
     root = _session_artifact_root(session_id, state_dir)
     return _scan_artifact_root(root) if root is not None else ([], "")
 
@@ -403,9 +443,7 @@ def _merge_retained_attachments(
     for att in current:
         source_path = att.get("source_path")
         prior_at_path = (
-            prior_by_path.get(source_path, [])
-            if isinstance(source_path, str)
-            else []
+            prior_by_path.get(source_path, []) if isinstance(source_path, str) else []
         )
         if att.get("storage_kind") == "metadata" and any(
             old.get("storage_kind") in captured_kinds for old in prior_at_path
@@ -428,9 +466,7 @@ def _merge_retained_attachments(
             merged.append(att)
             continue
         candidates = (
-            current_by_name.get(filename, [])
-            if isinstance(filename, str)
-            else []
+            current_by_name.get(filename, []) if isinstance(filename, str) else []
         )
         if any(
             candidate.get("sha256")
@@ -665,7 +701,8 @@ class CopilotCliSource(WatchedSource):
         if not cfg.roots:
             return ""
         store = cfg.roots[0]
-        parts = [f"version:{_INGEST_VERSION}"]
+        # Rescan for event-only sessions without invalidating cached store rows.
+        parts = [f"version:{_INGEST_VERSION}", "event-discovery:1"]
         for suffix in ("", "-wal", "-shm"):
             p = Path(f"{store}{suffix}")
             try:
@@ -691,9 +728,7 @@ class CopilotCliSource(WatchedSource):
         parts.append(f"events:{event_count}:{event_hash.hexdigest()}")
         artifact_states = _session_artifact_states(state_dir)
         artifact_hash = hashlib.sha256()
-        for session_id, (_files, signature, _root) in sorted(
-            artifact_states.items()
-        ):
+        for session_id, (_files, signature, _root) in sorted(artifact_states.items()):
             artifact_hash.update(session_id.encode("utf-8", "ignore"))
             artifact_hash.update(f":{signature}\0".encode())
         parts.append(f"artifacts:{len(artifact_states)}:{artifact_hash.hexdigest()}")
@@ -708,13 +743,11 @@ class CopilotCliSource(WatchedSource):
         rebuild: bool,
         progress: ProgressCb | None = None,
     ) -> dict[str, int]:
-        """Index sessions from the Copilot CLI / agent store."""
+        """Index the union of Copilot store sessions and SDK event logs."""
         counts = {"added": 0, "updated": 0, "skipped": 0}
         if not cfg.roots:
             return counts
         src = cfg.roots[0]
-        if not src.exists():
-            return counts
         state_dir = Path(
             cfg.options.get("state_dir") or config.SESSION_STATE_DIR
         ).expanduser()
@@ -733,32 +766,43 @@ class CopilotCliSource(WatchedSource):
             counts["skipped"] = len(live_sigs)
             return counts
 
-        snapshot = _snapshot_store(src)
-        ro = sqlite3.connect(snapshot)
-        ro.row_factory = sqlite3.Row
+        snapshot = _snapshot_store(src) if src.exists() else None
+        ro = sqlite3.connect(snapshot) if snapshot is not None else None
+        if ro is not None:
+            ro.row_factory = sqlite3.Row
         try:
             files_by: dict[str, list[tuple[str, str | None, int | None]]] = {}
-            try:
-                for fr in ro.execute(
-                    "SELECT session_id, file_path, tool_name, turn_index FROM session_files"
-                ):
-                    files_by.setdefault(fr["session_id"], []).append(
-                        (fr["file_path"], fr["tool_name"], fr["turn_index"])
-                    )
-            except sqlite3.Error:
-                pass
+            sessions: dict[str, dict[str, Any] | None] = {}
+            if ro is not None:
+                try:
+                    for fr in ro.execute(
+                        "SELECT session_id, file_path, tool_name, turn_index FROM session_files"
+                    ):
+                        files_by.setdefault(fr["session_id"], []).append(
+                            (fr["file_path"], fr["tool_name"], fr["turn_index"])
+                        )
+                except sqlite3.Error:
+                    pass
 
-            sessions = ro.execute(
-                "SELECT id, cwd, repository, summary, created_at, updated_at FROM sessions"
-            ).fetchall()
+                sessions.update(
+                    (row["id"], dict(row))
+                    for row in ro.execute(
+                        "SELECT id, cwd, repository, summary, created_at, updated_at FROM sessions"
+                    )
+                )
+            for path in state_dir.glob("*/events.jsonl"):
+                if path.is_file():
+                    sessions.setdefault(path.parent.name, None)
             seen = 0
-            for s in sessions:
-                sid = s["id"]
-                artifact_files, artifact_signature, artifact_root = (
-                    artifact_states.get(sid, ([], "", None))
+            for sid, stored in sessions.items():
+                artifact_files, artifact_signature, artifact_root = artifact_states.get(
+                    sid, ([], "", None)
                 )
                 sig = _cli_session_signature(
-                    sid, s["updated_at"], state_dir, artifact_signature
+                    sid,
+                    stored["updated_at"] if stored is not None else None,
+                    state_dir,
+                    artifact_signature,
                 )
                 # Skip the events.jsonl re-parse + re-hash for an already-indexed
                 # session whose cheap signature is unchanged.
@@ -769,12 +813,19 @@ class CopilotCliSource(WatchedSource):
                 ):
                     counts["skipped"] += 1
                     continue
+                s = (
+                    stored
+                    if stored is not None
+                    else _event_session_metadata(sid, state_dir)
+                )
                 events = _events_to_turns(sid, state_dir)
                 if events and events[0]:
                     turns, files_modified = events
-                else:
+                elif stored is not None and ro is not None:
                     turns = _cli_turns(ro, sid)
                     files_modified = []
+                else:
+                    continue
                 if not turns:
                     continue
                 files_modified.extend(artifact_files)
@@ -859,7 +910,11 @@ class CopilotCliSource(WatchedSource):
                     "responder": "GitHub Copilot",
                     "created_at": s["created_at"],
                     "updated_at": s["updated_at"] or s["created_at"],
-                    "source_path": str(src),
+                    "source_path": (
+                        str(src)
+                        if stored is not None
+                        else str(state_dir / sid / "events.jsonl")
+                    ),
                     "content_hash": content_hash,
                     "turns": turns,
                     "metrics": metrics,
@@ -873,6 +928,8 @@ class CopilotCliSource(WatchedSource):
                 if progress and seen % 100 == 0:
                     progress(f"Indexed {seen} Copilot CLI sessions...")
         finally:
-            ro.close()
-            cleanup_snapshot(snapshot)
+            if ro is not None:
+                ro.close()
+            if snapshot is not None:
+                cleanup_snapshot(snapshot)
         return counts
